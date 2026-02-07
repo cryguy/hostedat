@@ -13,6 +13,8 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	authHandler := &AuthHandler{DB: db, JWTSecret: cfg.JWTSecret}
 	siteHandler := &SiteHandler{DB: db, Storage: store}
 	deployHandler := &DeployHandler{DB: db, Storage: store}
+	apiKeyHandler := &APIKeyHandler{DB: db}
+	adminHandler := &AdminHandler{DB: db, Storage: store}
 
 	// Public auth routes
 	authGroup := api.Group("/auth")
@@ -34,4 +36,21 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	// Deployment routes
 	sites.POST("/:id/deploy", deployHandler.Deploy)
 	sites.GET("/:id/deployments", deployHandler.List)
+
+	// API key routes
+	keys := protected.Group("/keys")
+	keys.POST("", apiKeyHandler.Create)
+	keys.GET("", apiKeyHandler.List)
+	keys.DELETE("/:id", apiKeyHandler.Delete)
+
+	// Admin routes
+	admin := protected.Group("/admin", RequireAdmin())
+	admin.GET("/users", adminHandler.ListUsers)
+	admin.PATCH("/users/:id/role", adminHandler.UpdateUserRole)
+	admin.DELETE("/users/:id", adminHandler.DeleteUser)
+	admin.GET("/settings", adminHandler.GetSettings)
+	admin.PATCH("/settings", adminHandler.UpdateSettings)
+	admin.POST("/invites", adminHandler.CreateInvite)
+	admin.GET("/invites", adminHandler.ListInvites)
+	admin.DELETE("/invites/:id", adminHandler.RevokeInvite)
 }
