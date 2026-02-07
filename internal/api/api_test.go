@@ -1,0 +1,1215 @@
+package api
+
+import (
+	"archive/zip"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/cryguy/hostedat/internal/auth"
+	"github.com/cryguy/hostedat/internal/config"
+	"github.com/cryguy/hostedat/internal/models"
+	"github.com/cryguy/hostedat/internal/storage"
+	"github.com/labstack/echo/v4"
+	"gorm.io/gorm"
+)
+
+// ──────────────────────────────────────────────
+// Test helpers
+// ──────────────────────────────────────────────
+
+type testEnv struct {
+	e         *echo.Echo
+	db        *gorm.DB
+	store     *storage.Manager
+	cache     *storage.SiteRulesCache
+	jwtSecret string
+	domain    string
+}
+
+func setupTestEnv(t *testing.T) *testEnv {
+	t.Helper()
+
+	db, err := models.InitDB(config.DBConfig{Driver: "sqlite", DSN: ":memory:"})
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+
+	cfg := &config.Config{
+		Domain:    "test.local",
+		JWTSecret: "test-jwt-secret",
+		Registration: config.RegConfig{
+			Enabled: true,
+		},
+	}
+	models.SeedDefaults(db, cfg)
+
+	store := storage.NewManager(t.TempDir())
+	cache := storage.NewSiteRulesCache()
+
+	e := echo.New()
+	e.HTTPErrorHandler = CustomErrorHandler
+	e.Use(SubdomainRouter(db, store, cache, cfg.Domain))
+	RegisterRoutes(e, db, cfg, store)
+
+	return &testEnv{
+		e:         e,
+		db:        db,
+		store:     store,
+		cache:     cache,
+		jwtSecret: cfg.JWTSecret,
+		domain:    cfg.Domain,
+	}
+}
+
+func (env *testEnv) createTestUser(t *testing.T, email, password, role string) (models.User, string) {
+	t.Helper()
+	hash, _ := auth.HashPassword(password)
+	user := models.User{Email: email, PasswordHash: hash, Role: role}
+	if err := env.db.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	token, _ := auth.GenerateToken(user.ID, user.Email, user.Role, env.jwtSecret)
+	return user, token
+}
+
+func (env *testEnv) doRequest(req *http.Request) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	env.e.ServeHTTP(rec, req)
+	return rec
+}
+
+func createTestZip(t *testing.T, files map[string]string) *bytes.Buffer {
+	t.Helper()
+	buf := new(bytes.Buffer)
+	w := zip.NewWriter(buf)
+	for name, content := range files {
+		f, err := w.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Write([]byte(content))
+	}
+	w.Close()
+	return buf
+}
+
+func jsonBody(v interface{}) io.Reader {
+	b, _ := json.Marshal(v)
+	return bytes.NewReader(b)
+}
+
+func parseJSON(t *testing.T, rec *httptest.ResponseRecorder) map[string]interface{} {
+	t.Helper()
+	var m map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("parsing JSON response: %v\nbody: %s", err, rec.Body.String())
+	}
+	return m
+}
+
+// ──────────────────────────────────────────────
+// Auth tests
+// ──────────────────────────────────────────────
+
+func TestRegister_FirstUserIsSuperadmin(t *testing.T) {
+	env := setupTestEnv(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register",
+		jsonBody(map[string]string{"email": "first@test.com", "password": "password123"}))
+	req.Header.Set("Content-Type", "application/json")
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	user := body["user"].(map[string]interface{})
+	if user["role"] != "superadmin" {
+		t.Errorf("first user role = %q, want superadmin", user["role"])
+	}
+	if body["token"] == nil || body["token"] == "" {
+		t.Error("expected token in response")
+	}
+}
+
+func TestRegister_SecondUserIsUser(t *testing.T) {
+	env := setupTestEnv(t)
+	env.createTestUser(t, "first@test.com", "password123", "superadmin")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register",
+		jsonBody(map[string]string{"email": "second@test.com", "password": "password123"}))
+	req.Header.Set("Content-Type", "application/json")
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	user := body["user"].(map[string]interface{})
+	if user["role"] != "user" {
+		t.Errorf("second user role = %q, want user", user["role"])
+	}
+}
+
+func TestRegister_DuplicateEmail(t *testing.T) {
+	env := setupTestEnv(t)
+	env.createTestUser(t, "dup@test.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register",
+		jsonBody(map[string]string{"email": "dup@test.com", "password": "password123"}))
+	req.Header.Set("Content-Type", "application/json")
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409", rec.Code)
+	}
+}
+
+func TestRegister_ShortPassword(t *testing.T) {
+	env := setupTestEnv(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register",
+		jsonBody(map[string]string{"email": "a@b.com", "password": "short"}))
+	req.Header.Set("Content-Type", "application/json")
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestRegister_RegistrationDisabled(t *testing.T) {
+	env := setupTestEnv(t)
+	models.SetSetting(env.db, "registration_enabled", "false")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register",
+		jsonBody(map[string]string{"email": "a@b.com", "password": "password123"}))
+	req.Header.Set("Content-Type", "application/json")
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestRegister_InviteFlow(t *testing.T) {
+	env := setupTestEnv(t)
+	models.SetSetting(env.db, "invite_required", "true")
+
+	admin, _ := env.createTestUser(t, "admin@test.com", "password123", "superadmin")
+	invite := models.Invite{Code: "testcode", CreatedBy: admin.ID, Active: true}
+	env.db.Create(&invite)
+
+	// Without invite code → 400
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register",
+		jsonBody(map[string]string{"email": "new@test.com", "password": "password123"}))
+	req.Header.Set("Content-Type", "application/json")
+	rec := env.doRequest(req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("without code: status = %d, want 400", rec.Code)
+	}
+
+	// With valid invite code → 201
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/register",
+		jsonBody(map[string]string{"email": "new@test.com", "password": "password123", "invite_code": "testcode"}))
+	req.Header.Set("Content-Type", "application/json")
+	rec = env.doRequest(req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("with code: status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify invite use_count incremented
+	var updated models.Invite
+	env.db.First(&updated, "code = ?", "testcode")
+	if updated.UseCount != 1 {
+		t.Errorf("use_count = %d, want 1", updated.UseCount)
+	}
+}
+
+func TestLogin_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	env.createTestUser(t, "login@test.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		jsonBody(map[string]string{"email": "login@test.com", "password": "password123"}))
+	req.Header.Set("Content-Type", "application/json")
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	if body["token"] == nil || body["token"] == "" {
+		t.Error("expected token")
+	}
+}
+
+func TestLogin_WrongPassword(t *testing.T) {
+	env := setupTestEnv(t)
+	env.createTestUser(t, "login@test.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		jsonBody(map[string]string{"email": "login@test.com", "password": "wrongwrong"}))
+	req.Header.Set("Content-Type", "application/json")
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestLogin_UnknownEmail(t *testing.T) {
+	env := setupTestEnv(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		jsonBody(map[string]string{"email": "nobody@test.com", "password": "password123"}))
+	req.Header.Set("Content-Type", "application/json")
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+// ──────────────────────────────────────────────
+// Middleware tests
+// ──────────────────────────────────────────────
+
+func TestMiddleware_NoHeader(t *testing.T) {
+	env := setupTestEnv(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
+	rec := env.doRequest(req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestMiddleware_InvalidFormat(t *testing.T) {
+	env := setupTestEnv(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
+	req.Header.Set("Authorization", "Basic abc123")
+	rec := env.doRequest(req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestMiddleware_ValidJWT(t *testing.T) {
+	env := setupTestEnv(t)
+	_, token := env.createTestUser(t, "jwt@test.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMiddleware_InvalidJWT(t *testing.T) {
+	env := setupTestEnv(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
+	req.Header.Set("Authorization", "Bearer invalid.jwt.token")
+	rec := env.doRequest(req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestMiddleware_APIKeyAuth(t *testing.T) {
+	env := setupTestEnv(t)
+	user, _ := env.createTestUser(t, "key@test.com", "password123", "user")
+
+	rawKey, hash, _ := auth.GenerateAPIKey()
+	env.db.Create(&models.APIKey{UserID: user.ID, KeyHash: hash, Name: "test"})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	rec := env.doRequest(req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMiddleware_InvalidAPIKey(t *testing.T) {
+	env := setupTestEnv(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
+	req.Header.Set("Authorization", "Bearer hd_invalidkeythatdoesnotexistinthdb")
+	rec := env.doRequest(req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestMiddleware_RequireAdmin(t *testing.T) {
+	env := setupTestEnv(t)
+	_, adminToken := env.createTestUser(t, "admin@test.com", "password123", "admin")
+	_, userToken := env.createTestUser(t, "user@test.com", "password123", "user")
+
+	// Admin → 200
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/users", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := env.doRequest(req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("admin: status = %d, want 200", rec.Code)
+	}
+
+	// User → 403
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/users", nil)
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	rec = env.doRequest(req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("user: status = %d, want 403", rec.Code)
+	}
+}
+
+// ──────────────────────────────────────────────
+// Site tests
+// ──────────────────────────────────────────────
+
+func TestSite_Create(t *testing.T) {
+	env := setupTestEnv(t)
+	_, token := env.createTestUser(t, "u@t.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites",
+		jsonBody(map[string]string{"name": "My Site", "subdomain_slug": "mysite"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	if body["subdomain_slug"] != "mysite" {
+		t.Errorf("slug = %q", body["subdomain_slug"])
+	}
+}
+
+func TestSite_Create_AutoSlug(t *testing.T) {
+	env := setupTestEnv(t)
+	_, token := env.createTestUser(t, "u@t.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites",
+		jsonBody(map[string]string{"name": "My Cool Project"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	slug := body["subdomain_slug"].(string)
+	if !strings.HasPrefix(slug, "my-cool-project") {
+		t.Errorf("auto slug = %q, expected prefix my-cool-project", slug)
+	}
+}
+
+func TestSite_Create_ReservedSlug(t *testing.T) {
+	env := setupTestEnv(t)
+	_, token := env.createTestUser(t, "u@t.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites",
+		jsonBody(map[string]string{"name": "Test", "subdomain_slug": "www"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestSite_Create_DuplicateSlug(t *testing.T) {
+	env := setupTestEnv(t)
+	_, token := env.createTestUser(t, "u@t.com", "password123", "user")
+
+	for i, wantCode := range []int{http.StatusCreated, http.StatusConflict} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sites",
+			jsonBody(map[string]string{"name": "Test", "subdomain_slug": "dupe"}))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := env.doRequest(req)
+		if rec.Code != wantCode {
+			t.Errorf("attempt %d: status = %d, want %d", i, rec.Code, wantCode)
+		}
+	}
+}
+
+func TestSite_List_OwnSitesOnly(t *testing.T) {
+	env := setupTestEnv(t)
+	user1, token1 := env.createTestUser(t, "u1@t.com", "password123", "user")
+	user2, token2 := env.createTestUser(t, "u2@t.com", "password123", "user")
+
+	env.db.Create(&models.Site{UserID: user1.ID, SubdomainSlug: "user1site", Name: "U1"})
+	env.db.Create(&models.Site{UserID: user2.ID, SubdomainSlug: "user2site", Name: "U2"})
+
+	// User1 sees only their site
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
+	req.Header.Set("Authorization", "Bearer "+token1)
+	rec := env.doRequest(req)
+	var sites1 []map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &sites1)
+	if len(sites1) != 1 || sites1[0]["subdomain_slug"] != "user1site" {
+		t.Errorf("user1 sites: %v", sites1)
+	}
+
+	// User2 sees only their site
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
+	req.Header.Set("Authorization", "Bearer "+token2)
+	rec = env.doRequest(req)
+	var sites2 []map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &sites2)
+	if len(sites2) != 1 || sites2[0]["subdomain_slug"] != "user2site" {
+		t.Errorf("user2 sites: %v", sites2)
+	}
+}
+
+func TestSite_Get_OwnAndAdminBypass(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, ownerToken := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, adminToken := env.createTestUser(t, "admin@t.com", "password123", "admin")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "gettest", Name: "Test"}
+	env.db.Create(&site)
+
+	// Owner → 200
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+site.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+ownerToken)
+	rec := env.doRequest(req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("owner: status = %d", rec.Code)
+	}
+
+	// Admin → 200
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+site.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec = env.doRequest(req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("admin: status = %d", rec.Code)
+	}
+
+	// Other user → 403
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+site.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec = env.doRequest(req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("other: status = %d, want 403", rec.Code)
+	}
+}
+
+func TestSite_UpdateSPAMode(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "spa-test", Name: "SPA"}
+	env.db.Create(&site)
+
+	spa := true
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/sites/"+site.ID,
+		jsonBody(map[string]interface{}{"spa_mode": spa}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	if body["spa_mode"] != true {
+		t.Errorf("spa_mode = %v", body["spa_mode"])
+	}
+}
+
+func TestSite_Delete(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "del-test", Name: "Del"}
+	env.db.Create(&site)
+	env.db.Create(&models.Deployment{SiteID: site.ID, Version: 1, FileHash: "abc"})
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+site.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify cascade
+	var count int64
+	env.db.Model(&models.Site{}).Where("id = ?", site.ID).Count(&count)
+	if count != 0 {
+		t.Error("site not deleted")
+	}
+	env.db.Model(&models.Deployment{}).Where("site_id = ?", site.ID).Count(&count)
+	if count != 0 {
+		t.Error("deployments not cascaded")
+	}
+}
+
+// ──────────────────────────────────────────────
+// Deploy tests
+// ──────────────────────────────────────────────
+
+func multipartZip(t *testing.T, zipBuf *bytes.Buffer) (*bytes.Buffer, string) {
+	t.Helper()
+	body := new(bytes.Buffer)
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("file", "site.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(part, zipBuf)
+	writer.Close()
+	return body, writer.FormDataContentType()
+}
+
+func TestDeploy_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "deploy-test", Name: "Deploy"}
+	env.db.Create(&site)
+
+	zipBuf := createTestZip(t, map[string]string{"index.html": "<h1>hello</h1>"})
+	body, ct := multipartZip(t, zipBuf)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deploy", body)
+	req.Header.Set("Content-Type", ct)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := parseJSON(t, rec)
+	if resp["version"] != float64(1) {
+		t.Errorf("version = %v, want 1", resp["version"])
+	}
+
+	// Verify site active_version updated
+	var updated models.Site
+	env.db.First(&updated, "id = ?", site.ID)
+	if updated.ActiveVersion == nil || *updated.ActiveVersion != 1 {
+		t.Errorf("active_version = %v, want 1", updated.ActiveVersion)
+	}
+}
+
+func TestDeploy_VersionIncrement(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "ver-test", Name: "Ver"}
+	env.db.Create(&site)
+
+	for i := 1; i <= 2; i++ {
+		zipBuf := createTestZip(t, map[string]string{"index.html": fmt.Sprintf("v%d", i)})
+		body, ct := multipartZip(t, zipBuf)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deploy", body)
+		req.Header.Set("Content-Type", ct)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := env.doRequest(req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("deploy %d: status = %d", i, rec.Code)
+		}
+		resp := parseJSON(t, rec)
+		if resp["version"] != float64(i) {
+			t.Errorf("deploy %d: version = %v", i, resp["version"])
+		}
+	}
+}
+
+func TestDeploy_NoFile(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "nofile", Name: "No"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deploy", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestDeploy_Forbidden(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "forbid", Name: "Forbid"}
+	env.db.Create(&site)
+
+	zipBuf := createTestZip(t, map[string]string{"index.html": "hi"})
+	body, ct := multipartZip(t, zipBuf)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deploy", body)
+	req.Header.Set("Content-Type", ct)
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec := env.doRequest(req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestDeploy_ListDeployments(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "listdep", Name: "List"}
+	env.db.Create(&site)
+	env.db.Create(&models.Deployment{SiteID: site.ID, Version: 1, FileHash: "aaa"})
+	env.db.Create(&models.Deployment{SiteID: site.ID, Version: 2, FileHash: "bbb"})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+site.ID+"/deployments", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var deps []map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &deps)
+	if len(deps) != 2 {
+		t.Errorf("got %d deployments, want 2", len(deps))
+	}
+}
+
+// ──────────────────────────────────────────────
+// API key tests
+// ──────────────────────────────────────────────
+
+func TestAPIKey_Create(t *testing.T) {
+	env := setupTestEnv(t)
+	_, token := env.createTestUser(t, "u@t.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/keys",
+		jsonBody(map[string]string{"name": "CI Key"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	key, ok := body["key"].(string)
+	if !ok || !strings.HasPrefix(key, "hd_") {
+		t.Errorf("key = %q, want hd_ prefix", key)
+	}
+}
+
+func TestAPIKey_Create_MissingName(t *testing.T) {
+	env := setupTestEnv(t)
+	_, token := env.createTestUser(t, "u@t.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/keys",
+		jsonBody(map[string]string{}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestAPIKey_List(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	_, hash, _ := auth.GenerateAPIKey()
+	env.db.Create(&models.APIKey{UserID: user.ID, KeyHash: hash, Name: "key1"})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/keys", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var keys []map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &keys)
+	if len(keys) != 1 {
+		t.Errorf("got %d keys, want 1", len(keys))
+	}
+}
+
+func TestAPIKey_Delete(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	_, hash, _ := auth.GenerateAPIKey()
+	key := models.APIKey{UserID: user.ID, KeyHash: hash, Name: "to-delete"}
+	env.db.Create(&key)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/keys/"+key.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAPIKey_Delete_Forbidden(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+	_, hash, _ := auth.GenerateAPIKey()
+	key := models.APIKey{UserID: owner.ID, KeyHash: hash, Name: "not-yours"}
+	env.db.Create(&key)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/keys/"+key.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+// ──────────────────────────────────────────────
+// Admin tests
+// ──────────────────────────────────────────────
+
+func TestAdmin_ListUsers(t *testing.T) {
+	env := setupTestEnv(t)
+	_, token := env.createTestUser(t, "admin@t.com", "password123", "admin")
+	env.createTestUser(t, "user@t.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/users", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := parseJSON(t, rec)
+	if body["total"] != float64(2) {
+		t.Errorf("total = %v, want 2", body["total"])
+	}
+}
+
+func TestAdmin_UpdateRole(t *testing.T) {
+	env := setupTestEnv(t)
+	_, adminToken := env.createTestUser(t, "admin@t.com", "password123", "admin")
+	target, _ := env.createTestUser(t, "user@t.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/users/"+target.ID+"/role",
+		jsonBody(map[string]string{"role": "admin"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	if body["role"] != "admin" {
+		t.Errorf("role = %q, want admin", body["role"])
+	}
+}
+
+func TestAdmin_UpdateRole_SuperadminProtected(t *testing.T) {
+	env := setupTestEnv(t)
+	superadmin, _ := env.createTestUser(t, "super@t.com", "password123", "superadmin")
+	_, adminToken := env.createTestUser(t, "admin@t.com", "password123", "admin")
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/users/"+superadmin.ID+"/role",
+		jsonBody(map[string]string{"role": "user"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestAdmin_DeleteUser(t *testing.T) {
+	env := setupTestEnv(t)
+	_, adminToken := env.createTestUser(t, "admin@t.com", "password123", "admin")
+	target, _ := env.createTestUser(t, "victim@t.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/users/"+target.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var count int64
+	env.db.Model(&models.User{}).Where("id = ?", target.ID).Count(&count)
+	if count != 0 {
+		t.Error("user not deleted")
+	}
+}
+
+func TestAdmin_DeleteUser_SuperadminProtected(t *testing.T) {
+	env := setupTestEnv(t)
+	superadmin, _ := env.createTestUser(t, "super@t.com", "password123", "superadmin")
+	_, adminToken := env.createTestUser(t, "admin@t.com", "password123", "admin")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/users/"+superadmin.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestAdmin_GetUpdateSettings(t *testing.T) {
+	env := setupTestEnv(t)
+	_, token := env.createTestUser(t, "admin@t.com", "password123", "admin")
+
+	// Get defaults
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/settings", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d", rec.Code)
+	}
+
+	// Update
+	req = httptest.NewRequest(http.MethodPatch, "/api/v1/admin/settings",
+		jsonBody(map[string]interface{}{"registration_enabled": false, "invite_required": true}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = env.doRequest(req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	if body["registration_enabled"] != false {
+		t.Errorf("registration_enabled = %v", body["registration_enabled"])
+	}
+	if body["invite_required"] != true {
+		t.Errorf("invite_required = %v", body["invite_required"])
+	}
+}
+
+func TestAdmin_Invites(t *testing.T) {
+	env := setupTestEnv(t)
+	_, token := env.createTestUser(t, "admin@t.com", "password123", "admin")
+
+	// Create invite
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/invites",
+		jsonBody(map[string]interface{}{"max_uses": 5}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: status = %d: %s", rec.Code, rec.Body.String())
+	}
+	invite := parseJSON(t, rec)
+	inviteID := invite["id"].(string)
+
+	// List invites
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/invites", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = env.doRequest(req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: status = %d", rec.Code)
+	}
+	var invites []map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &invites)
+	if len(invites) != 1 {
+		t.Errorf("got %d invites, want 1", len(invites))
+	}
+
+	// Revoke
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/admin/invites/"+inviteID, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = env.doRequest(req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("revoke: status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify revoked
+	var revoked models.Invite
+	env.db.First(&revoked, "id = ?", inviteID)
+	if revoked.Active {
+		t.Error("invite should be inactive after revoke")
+	}
+}
+
+// ──────────────────────────────────────────────
+// Site serving tests
+// ──────────────────────────────────────────────
+
+func deploySite(t *testing.T, env *testEnv, siteID string, version int, files map[string]string) {
+	t.Helper()
+	zipBuf := createTestZip(t, files)
+	if err := env.store.ExtractZip(siteID, version, bytes.NewReader(zipBuf.Bytes()), int64(zipBuf.Len())); err != nil {
+		t.Fatalf("ExtractZip: %v", err)
+	}
+}
+
+func TestServing_BareDomainPassesThrough(t *testing.T) {
+	env := setupTestEnv(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		jsonBody(map[string]string{"email": "a@b.com", "password": "pass1234"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Host = "test.local"
+	rec := env.doRequest(req)
+	// Should reach the API handler (401 because invalid creds), not 404 from site serving
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 (API passthrough)", rec.Code)
+	}
+}
+
+func TestServing_SubdomainServesStaticFile(t *testing.T) {
+	env := setupTestEnv(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "mysite", Name: "My"}
+	env.db.Create(&site)
+	v := 1
+	site.ActiveVersion = &v
+	env.db.Save(&site)
+	deploySite(t, env, site.ID, 1, map[string]string{"index.html": "<h1>hi</h1>"})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "mysite.test.local"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "<h1>hi</h1>") {
+		t.Errorf("body = %q", rec.Body.String())
+	}
+}
+
+func TestServing_LocalhostSubdomain(t *testing.T) {
+	env := setupTestEnv(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "localsite", Name: "Local"}
+	env.db.Create(&site)
+	v := 1
+	site.ActiveVersion = &v
+	env.db.Save(&site)
+	deploySite(t, env, site.ID, 1, map[string]string{"index.html": "local!"})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "localsite.localhost"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestServing_UnknownSubdomain(t *testing.T) {
+	env := setupTestEnv(t)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "nonexistent.test.local"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestServing_RedirectRules(t *testing.T) {
+	env := setupTestEnv(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "redir", Name: "Redir"}
+	env.db.Create(&site)
+	v := 1
+	site.ActiveVersion = &v
+	env.db.Save(&site)
+	deploySite(t, env, site.ID, 1, map[string]string{
+		"index.html": "home",
+		"_redirects": "/old /new 301",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/old", nil)
+	req.Host = "redir.test.local"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusMovedPermanently {
+		t.Errorf("status = %d, want 301", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/new" {
+		t.Errorf("Location = %q, want /new", loc)
+	}
+}
+
+func TestServing_RewriteRules(t *testing.T) {
+	env := setupTestEnv(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "rewrite", Name: "Rew"}
+	env.db.Create(&site)
+	v := 1
+	site.ActiveVersion = &v
+	env.db.Save(&site)
+	deploySite(t, env, site.ID, 1, map[string]string{
+		"index.html": "<spa>app</spa>",
+		"_redirects": "/* /index.html 200",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/some/deep/path", nil)
+	req.Host = "rewrite.test.local"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "<spa>app</spa>") {
+		t.Errorf("expected rewritten content, got: %s", rec.Body.String())
+	}
+}
+
+func TestServing_StaticFilesPrecedeOverRewrites(t *testing.T) {
+	env := setupTestEnv(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "precedence", Name: "Prec"}
+	env.db.Create(&site)
+	v := 1
+	site.ActiveVersion = &v
+	env.db.Save(&site)
+	deploySite(t, env, site.ID, 1, map[string]string{
+		"index.html": "home",
+		"about.html": "about page",
+		"_redirects": "/* /index.html 200",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/about.html", nil)
+	req.Host = "precedence.test.local"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "about page") {
+		t.Errorf("expected static file content, got rewrite: %s", rec.Body.String())
+	}
+}
+
+func TestServing_CustomHeaders(t *testing.T) {
+	env := setupTestEnv(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "headers", Name: "Hdr"}
+	env.db.Create(&site)
+	v := 1
+	site.ActiveVersion = &v
+	env.db.Save(&site)
+	deploySite(t, env, site.ID, 1, map[string]string{
+		"index.html": "hi",
+		"_headers":   "/*\n  X-Custom: hello",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "headers.test.local"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if rec.Header().Get("X-Custom") != "hello" {
+		t.Errorf("X-Custom = %q, want hello", rec.Header().Get("X-Custom"))
+	}
+}
+
+func TestServing_Custom404(t *testing.T) {
+	env := setupTestEnv(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "custom404", Name: "404"}
+	env.db.Create(&site)
+	v := 1
+	site.ActiveVersion = &v
+	env.db.Save(&site)
+	deploySite(t, env, site.ID, 1, map[string]string{
+		"index.html": "home",
+		"404.html":   "<h1>Custom Not Found</h1>",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/nonexistent", nil)
+	req.Host = "custom404.test.local"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Custom Not Found") {
+		t.Errorf("expected custom 404 content, got: %s", rec.Body.String())
+	}
+}
+
+func TestServing_SPAMode(t *testing.T) {
+	env := setupTestEnv(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "spa", Name: "SPA", SPAMode: true}
+	env.db.Create(&site)
+	v := 1
+	site.ActiveVersion = &v
+	env.db.Save(&site)
+	deploySite(t, env, site.ID, 1, map[string]string{
+		"index.html": "<spa>app</spa>",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/app/dashboard", nil)
+	req.Host = "spa.test.local"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "<spa>app</spa>") {
+		t.Errorf("expected SPA fallback, got: %s", rec.Body.String())
+	}
+}
+
+func TestServing_NoDeployment(t *testing.T) {
+	env := setupTestEnv(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "empty", Name: "Empty"}
+	env.db.Create(&site) // no active_version set
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "empty.test.local"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+	body := parseJSON(t, rec)
+	if !strings.Contains(body["error"].(string), "no deployment") {
+		t.Errorf("error = %q", body["error"])
+	}
+}
+
+// ──────────────────────────────────────────────
+// Serve file content type test
+// ──────────────────────────────────────────────
+
+func TestServing_ContentType(t *testing.T) {
+	env := setupTestEnv(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "ct-test", Name: "CT"}
+	env.db.Create(&site)
+	v := 1
+	site.ActiveVersion = &v
+	env.db.Save(&site)
+
+	deployPath := env.store.GetDeploymentPath(site.ID, 1)
+	os.MkdirAll(deployPath, 0755)
+	os.WriteFile(filepath.Join(deployPath, "style.css"), []byte("body{}"), 0644)
+
+	req := httptest.NewRequest(http.MethodGet, "/style.css", nil)
+	req.Host = "ct-test.test.local"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	ct := rec.Header().Get("Content-Type")
+	if !strings.Contains(ct, "css") {
+		t.Errorf("Content-Type = %q, want css", ct)
+	}
+}
