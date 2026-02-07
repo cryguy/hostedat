@@ -6,8 +6,11 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/cryguy/hostedat/internal/api"
 	"github.com/cryguy/hostedat/internal/config"
 	"github.com/cryguy/hostedat/internal/models"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 )
 
 func main() {
@@ -41,6 +44,22 @@ func main() {
 		log.Fatalf("Failed to seed defaults: %v", err)
 	}
 
-	_ = db
-	log.Printf("Server ready — domain=%s listen=%s", cfg.Domain, cfg.Listen)
+	e := echo.New()
+	e.HideBanner = true
+	e.HTTPErrorHandler = api.CustomErrorHandler
+
+	e.Use(middleware.Logger())
+	e.Use(middleware.Recover())
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders: []string{"Authorization", "Content-Type"},
+	}))
+
+	api.RegisterRoutes(e, db, cfg)
+
+	log.Printf("Starting server on %s for domain %s", cfg.Listen, cfg.Domain)
+	if err := e.Start(cfg.Listen); err != nil {
+		log.Fatalf("Server failed: %v", err)
+	}
 }
