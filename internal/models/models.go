@@ -1,0 +1,121 @@
+package models
+
+import (
+	"time"
+
+	gonanoid "github.com/matoous/go-nanoid/v2"
+	"gorm.io/gorm"
+)
+
+const nanoidAlphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+const nanoidLength = 12
+
+func generateID() string {
+	id, err := gonanoid.Generate(nanoidAlphabet, nanoidLength)
+	if err != nil {
+		panic("nanoid generation failed: " + err.Error())
+	}
+	return id
+}
+
+type User struct {
+	ID           string    `gorm:"primaryKey;size:20" json:"id"`
+	Email        string    `gorm:"uniqueIndex;not null" json:"email"`
+	PasswordHash string    `gorm:"not null" json:"-"`
+	Role         string    `gorm:"not null;default:user" json:"role"` // superadmin | admin | user
+	InvitedBy    *string   `gorm:"size:20" json:"invited_by,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+func (u *User) BeforeCreate(tx *gorm.DB) error {
+	if u.ID == "" {
+		u.ID = generateID()
+	}
+	if u.Role == "" {
+		u.Role = "user"
+	}
+	return nil
+}
+
+type Site struct {
+	ID            string    `gorm:"primaryKey;size:20" json:"id"`
+	UserID        string    `gorm:"index;not null" json:"user_id"`
+	SubdomainSlug string    `gorm:"uniqueIndex;not null" json:"subdomain_slug"`
+	Name          string    `gorm:"not null" json:"name"`
+	SPAMode       bool      `gorm:"default:false" json:"spa_mode"`
+	ActiveVersion *int      `json:"active_version"`
+	CreatedAt     time.Time `json:"created_at"`
+
+	User        User         `gorm:"foreignKey:UserID" json:"-"`
+	Deployments []Deployment `gorm:"foreignKey:SiteID" json:"deployments,omitempty"`
+}
+
+func (s *Site) BeforeCreate(tx *gorm.DB) error {
+	if s.ID == "" {
+		s.ID = generateID()
+	}
+	return nil
+}
+
+type Deployment struct {
+	ID         string    `gorm:"primaryKey;size:20" json:"id"`
+	SiteID     string    `gorm:"index;not null" json:"site_id"`
+	Version    int       `gorm:"not null" json:"version"`
+	FileHash   string    `gorm:"not null" json:"file_hash"`
+	UploadedAt time.Time `json:"uploaded_at"`
+
+	Site Site `gorm:"foreignKey:SiteID" json:"-"`
+}
+
+func (d *Deployment) BeforeCreate(tx *gorm.DB) error {
+	if d.ID == "" {
+		d.ID = generateID()
+	}
+	if d.UploadedAt.IsZero() {
+		d.UploadedAt = time.Now()
+	}
+	return nil
+}
+
+type APIKey struct {
+	ID         string     `gorm:"primaryKey;size:20" json:"id"`
+	UserID     string     `gorm:"index;not null" json:"user_id"`
+	KeyHash    string     `gorm:"uniqueIndex;not null" json:"-"`
+	Name       string     `gorm:"not null" json:"name"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+
+	User User `gorm:"foreignKey:UserID" json:"-"`
+}
+
+func (k *APIKey) BeforeCreate(tx *gorm.DB) error {
+	if k.ID == "" {
+		k.ID = generateID()
+	}
+	return nil
+}
+
+type Invite struct {
+	ID        string     `gorm:"primaryKey;size:20" json:"id"`
+	Code      string     `gorm:"uniqueIndex;not null" json:"code"`
+	CreatedBy string     `gorm:"not null" json:"created_by"`
+	MaxUses   *int       `json:"max_uses,omitempty"`
+	UseCount  int        `gorm:"default:0" json:"use_count"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	Active    bool       `gorm:"default:true" json:"active"`
+	CreatedAt time.Time  `json:"created_at"`
+
+	Creator User `gorm:"foreignKey:CreatedBy" json:"-"`
+}
+
+func (i *Invite) BeforeCreate(tx *gorm.DB) error {
+	if i.ID == "" {
+		i.ID = generateID()
+	}
+	return nil
+}
+
+type Setting struct {
+	Key   string `gorm:"primaryKey" json:"key"`
+	Value string `gorm:"not null" json:"value"`
+}
