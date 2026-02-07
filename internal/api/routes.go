@@ -21,6 +21,8 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	authGroup.POST("/register", authHandler.Register)
 	authGroup.POST("/login", authHandler.Login)
 	authGroup.POST("/logout", authHandler.Logout)
+	authGroup.GET("/cli", authHandler.CLILogin)
+	authGroup.POST("/cli", authHandler.CLILoginSubmit)
 
 	// Protected routes
 	protected := api.Group("", AuthMiddleware(db, cfg.JWTSecret))

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -149,4 +150,104 @@ func (h *AuthHandler) Login(c echo.Context) error {
 
 func (h *AuthHandler) Logout(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{"message": "logged out"})
+}
+
+// CLILogin serves a self-contained HTML login form for CLI authentication.
+// GET /api/v1/auth/cli?port=PORT&state=STATE
+func (h *AuthHandler) CLILogin(c echo.Context) error {
+	port := c.QueryParam("port")
+	state := c.QueryParam("state")
+	if port == "" || state == "" {
+		return errorJSON(c, http.StatusBadRequest, "port and state are required")
+	}
+
+	html := fmt.Sprintf(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>hostedat — CLI Login</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0a0a0a;color:#e5e5e5;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.card{background:#171717;border:1px solid #262626;border-radius:12px;padding:2rem;width:100%%;max-width:380px}
+h1{font-size:1.25rem;margin-bottom:1.5rem;text-align:center}
+label{display:block;font-size:.875rem;margin-bottom:.25rem;color:#a3a3a3}
+input{width:100%%;padding:.625rem .75rem;background:#0a0a0a;border:1px solid #404040;border-radius:6px;color:#e5e5e5;font-size:.875rem;margin-bottom:1rem}
+input:focus{outline:none;border-color:#3b82f6}
+button{width:100%%;padding:.625rem;background:#3b82f6;color:#fff;border:none;border-radius:6px;font-size:.875rem;cursor:pointer;font-weight:500}
+button:hover{background:#2563eb}
+.error{color:#ef4444;font-size:.8rem;margin-bottom:.75rem;display:none}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>Sign in to hostedat</h1>
+<div class="error" id="err"></div>
+<form id="f">
+<label for="email">Email</label>
+<input type="email" id="email" name="email" required autofocus>
+<label for="password">Password</label>
+<input type="password" id="password" name="password" required>
+<button type="submit">Sign in</button>
+</form>
+</div>
+<script>
+document.getElementById('f').addEventListener('submit',async function(e){
+e.preventDefault();
+const errEl=document.getElementById('err');
+errEl.style.display='none';
+try{
+const r=await fetch('/api/v1/auth/cli',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('password').value,port:%q,state:%q})});
+const d=await r.json();
+if(!r.ok){errEl.textContent=d.error||'Login failed';errEl.style.display='block';return}
+window.location.href=d.redirect;
+}catch(ex){errEl.textContent='Network error';errEl.style.display='block'}
+});
+</script>
+</body>
+</html>`, port, state)
+
+	return c.HTML(http.StatusOK, html)
+}
+
+type cliLoginSubmitRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Port     string `json:"port"`
+	State    string `json:"state"`
+}
+
+// CLILoginSubmit validates credentials and returns a redirect URL with a JWT.
+// POST /api/v1/auth/cli
+func (h *AuthHandler) CLILoginSubmit(c echo.Context) error {
+	var req cliLoginSubmitRequest
+	if err := c.Bind(&req); err != nil {
+		return errorJSON(c, http.StatusBadRequest, "invalid request body")
+	}
+
+	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+	if req.Email == "" || req.Password == "" {
+		return errorJSON(c, http.StatusBadRequest, "email and password are required")
+	}
+	if req.Port == "" || req.State == "" {
+		return errorJSON(c, http.StatusBadRequest, "port and state are required")
+	}
+
+	var user models.User
+	if err := h.DB.Where("email = ?", req.Email).First(&user).Error; err != nil {
+		return errorJSON(c, http.StatusUnauthorized, "invalid credentials")
+	}
+
+	if err := auth.CheckPassword(req.Password, user.PasswordHash); err != nil {
+		return errorJSON(c, http.StatusUnauthorized, "invalid credentials")
+	}
+
+	token, err := auth.GenerateToken(user.ID, user.Email, user.Role, h.JWTSecret)
+	if err != nil {
+		return errorJSON(c, http.StatusInternalServerError, "failed to generate token")
+	}
+
+	redirectURL := fmt.Sprintf("http://localhost:%s/callback?token=%s&state=%s", req.Port, token, req.State)
+
+	return c.JSON(http.StatusOK, map[string]string{"redirect": redirectURL})
 }
