@@ -9,6 +9,7 @@ import (
 	"github.com/cryguy/hostedat/internal/api"
 	"github.com/cryguy/hostedat/internal/config"
 	"github.com/cryguy/hostedat/internal/models"
+	"github.com/cryguy/hostedat/internal/storage"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
@@ -56,7 +57,9 @@ func main() {
 		AllowHeaders: []string{"Authorization", "Content-Type"},
 	}))
 
-	api.RegisterRoutes(e, db, cfg)
+	store := storage.NewManager(cfg.StoragePath)
+
+	api.RegisterRoutes(e, db, cfg, store)
 
 	log.Printf("Starting server on %s for domain %s", cfg.Listen, cfg.Domain)
 	if err := e.Start(cfg.Listen); err != nil {
