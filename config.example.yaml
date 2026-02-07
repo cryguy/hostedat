@@ -1,0 +1,30 @@
+# hostedat.ditto.moe — Server Configuration
+# Copy this file to config.yaml and adjust values.
+
+# The base domain. Sites are served at <slug>.domain
+domain: hostedat.ditto.moe
+
+# Address to listen on. Use :443 for production with TLS, :8080 for dev.
+listen: ":8080"
+
+# Directory where uploaded site files are stored.
+storage_path: ./data/sites
+
+# Secret used to sign JWT tokens. Generate a random string:
+#   openssl rand -hex 32
+jwt_secret: "change-me-to-a-random-secret"
+
+# Database configuration
+database:
+  driver: sqlite        # sqlite | postgres | mysql
+  dsn: ./data/hostedat.db
+
+# Registration settings (initial seed — managed at runtime via admin API)
+registration:
+  enabled: true          # Allow new user signups
+  invite_required: false # Require invite code to register
+
+# Cloudflare API token for DNS-01 challenge (Let's Encrypt wildcard cert).
+# Leave empty to run without TLS (dev mode).
+cloudflare:
+  api_token: ""
