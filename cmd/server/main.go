@@ -58,6 +58,10 @@ func main() {
 	}))
 
 	store := storage.NewManager(cfg.StoragePath)
+	rulesCache := storage.NewSiteRulesCache()
+
+	// Subdomain router must come before API routes
+	e.Use(api.SubdomainRouter(db, store, rulesCache, cfg.Domain))
 
 	api.RegisterRoutes(e, db, cfg, store)
 
