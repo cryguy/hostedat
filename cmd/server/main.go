@@ -3,10 +3,12 @@ package main
 import (
 	"flag"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 
 	"github.com/cryguy/hostedat/internal/api"
+	"github.com/cryguy/hostedat/internal/certs"
 	"github.com/cryguy/hostedat/internal/config"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
@@ -65,8 +67,33 @@ func main() {
 
 	api.RegisterRoutes(e, db, cfg, store)
 
-	log.Printf("Starting server on %s for domain %s", cfg.Listen, cfg.Domain)
-	if err := e.Start(cfg.Listen); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	// Start with TLS if Cloudflare token is configured, otherwise plain HTTP
+	if cfg.Cloudflare.APIToken != "" {
+		log.Printf("Starting server with TLS on %s for domain %s", cfg.Listen, cfg.Domain)
+
+		certsDir := filepath.Join(filepath.Dir(cfg.Database.DSN), "certs")
+		tlsCfg, err := certs.SetupTLS(certs.Config{
+			Domain:   cfg.Domain,
+			APIToken: cfg.Cloudflare.APIToken,
+			DataDir:  certsDir,
+		})
+		if err != nil {
+			log.Fatalf("Failed to setup TLS: %v", err)
+		}
+
+		server := &http.Server{
+			Addr:      cfg.Listen,
+			Handler:   e,
+			TLSConfig: tlsCfg,
+		}
+
+		if err := server.ListenAndServeTLS("", ""); err != nil {
+			log.Fatalf("Server failed: %v", err)
+		}
+	} else {
+		log.Printf("Starting server (no TLS) on %s for domain %s", cfg.Listen, cfg.Domain)
+		if err := e.Start(cfg.Listen); err != nil {
+			log.Fatalf("Server failed: %v", err)
+		}
 	}
 }
