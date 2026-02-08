@@ -1,0 +1,119 @@
+---
+import DocsLayout from '../../layouts/DocsLayout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+---
+
+<DocsLayout title="Getting Started">
+  <h1>Getting Started</h1>
+  <p>
+    hostedat is a self-hosted static site hosting platform. Upload a zip of your built frontend and it's live
+    at a subdomain — like Cloudflare Pages, but on your own server.
+  </p>
+
+  <h2>How it works</h2>
+  <p>The platform has two binaries:</p>
+  <ul>
+    <li><strong>hostedat-server</strong> — the hosting server that serves sites, manages users, and handles HTTPS</li>
+    <li><strong>hostedat</strong> — the CLI client for deploying sites from your terminal or CI/CD</li>
+  </ul>
+
+  <h2>Install the CLI</h2>
+  <p>Download the latest binary for your platform from the <a href="/downloads">downloads page</a>, or use curl:</p>
+
+  <CodeBlock
+    code={`# Linux (amd64)
+curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-linux-amd64 -o hostedat
+chmod +x hostedat
+sudo mv hostedat /usr/local/bin/
+
+# macOS (Apple Silicon)
+curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-darwin-arm64 -o hostedat
+chmod +x hostedat
+sudo mv hostedat /usr/local/bin/`}
+    lang="bash"
+  />
+
+  <p>Verify the installation:</p>
+  <CodeBlock code="hostedat version" lang="bash" />
+
+  <h2>Authenticate</h2>
+  <p>
+    The CLI authenticates via your browser. Run <code>login</code> and a browser window will open for you to sign in.
+    An API key is generated and saved to <code>~/.hostedat/config.json</code>.
+  </p>
+
+  <CodeBlock code="hostedat login" lang="bash" />
+
+  <p>You can also pass credentials directly:</p>
+  <CodeBlock
+    code={`# Via flags
+hostedat --server https://hostedat.ditto.moe --api-key sk_... sites list
+
+# Via environment variables
+export HOSTEDAT_SERVER=https://hostedat.ditto.moe
+export HOSTEDAT_API_KEY=sk_...`}
+    lang="bash"
+  />
+
+  <h2>Create a site</h2>
+  <p>Create a new site to get a subdomain:</p>
+  <CodeBlock
+    code={`hostedat sites create my-portfolio
+
+# Site created!
+#   ID:        abc123
+#   Name:      my-portfolio
+#   Subdomain: my-portfolio`}
+    lang="bash"
+  />
+
+  <p>Want a custom subdomain? Use the <code>--subdomain</code> flag:</p>
+  <CodeBlock code='hostedat sites create "My Portfolio" --subdomain portfolio' lang="bash" />
+
+  <h2>Deploy</h2>
+  <p>Build your frontend, then deploy the output directory:</p>
+  <CodeBlock
+    code={`# Build your project
+npm run build
+
+# Deploy
+hostedat deploy my-portfolio ./dist
+
+# Deployed! Version: v1
+# Live at https://my-portfolio.hostedat.ditto.moe`}
+    lang="bash"
+  />
+
+  <p>Each deploy creates a new version. The latest version is served immediately.</p>
+
+  <h2>CI/CD Integration</h2>
+  <p>Add deploy to your CI pipeline. Set <code>HOSTEDAT_API_KEY</code> as a secret:</p>
+  <CodeBlock
+    title=".github/workflows/deploy.yml"
+    code={`name: Deploy
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci && npm run build
+      - run: |
+          curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-linux-amd64 -o hostedat
+          chmod +x hostedat
+          ./hostedat deploy my-portfolio ./dist
+        env:
+          HOSTEDAT_API_KEY: \${{ secrets.HOSTEDAT_API_KEY }}
+          HOSTEDAT_SERVER: https://hostedat.ditto.moe`}
+    lang="yaml"
+  />
+
+  <hr />
+  <p>Next: <a href="/docs/cli">CLI Reference</a> for all available commands.</p>
+</DocsLayout>

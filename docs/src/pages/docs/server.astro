@@ -1,0 +1,198 @@
+---
+import DocsLayout from '../../layouts/DocsLayout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+---
+
+<DocsLayout title="Server Guide">
+  <h1>Server Guide</h1>
+  <p>
+    The hostedat server is a single binary that handles everything: serving static sites, managing users,
+    handling HTTPS, and exposing the API. No reverse proxy, no Docker, no external dependencies.
+  </p>
+
+  <h2>Quick start</h2>
+  <p>Download the server binary for your platform from the <a href="/downloads">downloads page</a>, create a config file, and run it:</p>
+
+  <CodeBlock
+    code={`# Download the server binary
+curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-server-linux-amd64 -o hostedat-server
+chmod +x hostedat-server
+
+# Create config
+cp config.example.yaml config.yaml
+# Edit config.yaml with your settings
+
+# Run
+./hostedat-server`}
+    lang="bash"
+  />
+
+  <h2>First-run setup</h2>
+  <p>
+    On first launch with an empty database, the <strong>first user to register</strong> becomes the
+    <strong>superadmin</strong>. This account has full control and cannot be demoted.
+  </p>
+  <ol>
+    <li>Start the server</li>
+    <li>Open the web UI at your configured domain</li>
+    <li>Register the first account — this is your superadmin</li>
+    <li>Configure registration settings (open, invite-only, or closed)</li>
+  </ol>
+
+  <h2>HTTPS & certificates</h2>
+  <p>
+    hostedat uses <strong>CertMagic</strong> (the ACME library from Caddy) to automatically obtain and renew
+    wildcard TLS certificates from Let's Encrypt. This requires DNS-01 validation via Cloudflare.
+  </p>
+
+  <CodeBlock
+    title="config.yaml"
+    code={`# Listen on :443 for production HTTPS
+listen: ":443"
+
+# Cloudflare API token with Zone:DNS:Edit permission
+cloudflare:
+  api_token: "your-cloudflare-api-token"`}
+    lang="yaml"
+  />
+
+  <p>
+    The server will automatically obtain a wildcard cert for <code>*.yourdomain.com</code> and renew it
+    before expiration. No cron jobs, no manual renewal.
+  </p>
+
+  <h3>Development mode (no TLS)</h3>
+  <p>For local development, listen on a non-443 port and leave the Cloudflare token empty:</p>
+  <CodeBlock
+    title="config.yaml"
+    code={`listen: ":8080"
+cloudflare:
+  api_token: ""`}
+    lang="yaml"
+  />
+
+  <h2>Database</h2>
+  <p>
+    hostedat uses <strong>GORM</strong> with SQLite by default. The database file is created automatically.
+    For production, you can switch to PostgreSQL or MySQL by changing the driver and DSN:
+  </p>
+  <CodeBlock
+    title="config.yaml"
+    code={`# SQLite (default)
+database:
+  driver: sqlite
+  dsn: ./data/hostedat.db
+
+# PostgreSQL
+database:
+  driver: postgres
+  dsn: "host=localhost port=5432 user=hostedat dbname=hostedat sslmode=disable"
+
+# MySQL
+database:
+  driver: mysql
+  dsn: "hostedat:password@tcp(localhost:3306)/hostedat?parseTime=true"`}
+    lang="yaml"
+  />
+
+  <h2>Static site features</h2>
+  <p>hostedat supports several features that make it compatible with sites built for Netlify or Cloudflare Pages.</p>
+
+  <h3>_redirects file</h3>
+  <p>Place a <code>_redirects</code> file in the root of your uploaded site to define redirect and rewrite rules:</p>
+  <CodeBlock
+    title="_redirects"
+    code={`# Redirects (browser URL changes)
+/old-path    /new-path    301
+/blog/*      /new-blog/:splat 302
+
+# Rewrites (transparent, URL stays the same)
+/api/*       https://api.example.com/:splat 200
+
+# SPA fallback (must be last)
+/*           /index.html  200`}
+    lang="text"
+  />
+
+  <ul>
+    <li><code>301</code> / <code>302</code> — redirect (browser URL changes)</li>
+    <li><code>200</code> — rewrite (serve target content at original URL)</li>
+    <li><code>*</code> wildcard is captured and available as <code>:splat</code></li>
+    <li>First match wins, evaluated top-to-bottom</li>
+    <li>Static files always take precedence over rules</li>
+  </ul>
+
+  <h3>_headers file</h3>
+  <p>Custom response headers for matching paths:</p>
+  <CodeBlock
+    title="_headers"
+    code={`/*
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+
+/*.js
+  Cache-Control: public, max-age=31536000, immutable`}
+    lang="text"
+  />
+
+  <h3>Custom 404</h3>
+  <p>Include a <code>404.html</code> file in your upload to show a custom 404 page when no file matches.</p>
+
+  <h3>SPA mode</h3>
+  <p>
+    Toggle SPA mode per-site via the dashboard or API. When enabled, all unmatched routes
+    serve <code>index.html</code> — equivalent to having <code>/* /index.html 200</code> as the last
+    <code>_redirects</code> rule.
+  </p>
+
+  <h2>User roles</h2>
+  <table>
+    <thead>
+      <tr><th>Role</th><th>Capabilities</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>superadmin</strong></td>
+        <td>Full control. First registered user. Cannot be demoted.</td>
+      </tr>
+      <tr>
+        <td><strong>admin</strong></td>
+        <td>Manage users, sites, invites. Can be promoted/demoted by superadmin.</td>
+      </tr>
+      <tr>
+        <td><strong>user</strong></td>
+        <td>Create sites, deploy, manage own API keys.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Running as a service</h2>
+  <p>For production, run hostedat as a systemd service:</p>
+  <CodeBlock
+    title="/etc/systemd/system/hostedat.service"
+    code={`[Unit]
+Description=hostedat static site hosting
+After=network.target
+
+[Service]
+Type=simple
+User=hostedat
+WorkingDirectory=/opt/hostedat
+ExecStart=/opt/hostedat/hostedat-server
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target`}
+    lang="ini"
+  />
+
+  <CodeBlock
+    code={`sudo systemctl enable hostedat
+sudo systemctl start hostedat`}
+    lang="bash"
+  />
+
+  <hr />
+  <p>Next: <a href="/docs/configuration">Configuration Reference</a> for all config options.</p>
+</DocsLayout>

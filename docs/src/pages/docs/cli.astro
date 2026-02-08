@@ -1,0 +1,139 @@
+---
+import DocsLayout from '../../layouts/DocsLayout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+---
+
+<DocsLayout title="CLI Reference">
+  <h1>CLI Reference</h1>
+  <p>
+    The <code>hostedat</code> CLI is the primary way to deploy sites. It authenticates via API keys and
+    communicates with the hostedat server over HTTPS.
+  </p>
+
+  <h2>Global flags</h2>
+  <table>
+    <thead>
+      <tr><th>Flag</th><th>Env var</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>--server</code></td><td><code>HOSTEDAT_SERVER</code></td><td>Server URL</td></tr>
+      <tr><td><code>--api-key</code></td><td><code>HOSTEDAT_API_KEY</code></td><td>API key for authentication</td></tr>
+    </tbody>
+  </table>
+
+  <p>Resolution order for the server URL: <code>--server</code> flag &rarr; <code>HOSTEDAT_SERVER</code> env &rarr; config file &rarr; compiled default.</p>
+  <p>Resolution order for the API key: <code>HOSTEDAT_API_KEY</code> env &rarr; <code>--api-key</code> flag &rarr; config file.</p>
+
+  <h2>Config file</h2>
+  <p>The CLI stores its config at <code>~/.hostedat/config.json</code>:</p>
+  <CodeBlock
+    title="~/.hostedat/config.json"
+    code={`{
+  "server": "https://hostedat.ditto.moe",
+  "api_key": "sk_..."
+}`}
+    lang="json"
+  />
+  <p>This file is created automatically by <code>hostedat login</code>.</p>
+
+  <hr />
+
+  <h2>hostedat login</h2>
+  <p>Authenticate with the server via browser-based OAuth flow.</p>
+  <CodeBlock code="hostedat login" lang="bash" />
+  <p>Opens your browser to the server's login page. After authenticating, an API key is generated and saved to the config file.</p>
+
+  <hr />
+
+  <h2>hostedat sites list</h2>
+  <p>List all your sites. Alias: <code>hostedat sites ls</code></p>
+  <CodeBlock
+    code={`hostedat sites list
+
+# ID          NAME            SUBDOMAIN       VERSION  CREATED
+# abc123      my-portfolio    my-portfolio    v3       2026-01-15
+# def456      blog            blog            v1       2026-02-01`}
+    lang="bash"
+  />
+
+  <hr />
+
+  <h2>hostedat sites create</h2>
+  <p>Create a new site.</p>
+  <CodeBlock code='hostedat sites create <name> [--subdomain <slug>]' lang="bash" />
+
+  <table>
+    <thead>
+      <tr><th>Argument / Flag</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>&lt;name&gt;</code></td><td>Display name for the site (required)</td></tr>
+      <tr><td><code>--subdomain</code></td><td>Custom subdomain slug. Defaults to a URL-safe version of the name.</td></tr>
+    </tbody>
+  </table>
+
+  <CodeBlock
+    code={`hostedat sites create "My Blog" --subdomain blog
+
+# Site created!
+#   ID:        def456
+#   Name:      My Blog
+#   Subdomain: blog`}
+    lang="bash"
+  />
+
+  <hr />
+
+  <h2>hostedat sites delete</h2>
+  <p>Delete a site and all its deployments. Prompts for confirmation unless <code>--yes</code> is passed.</p>
+  <CodeBlock code='hostedat sites delete <site-id> [--yes]' lang="bash" />
+
+  <table>
+    <thead>
+      <tr><th>Argument / Flag</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>&lt;site-id&gt;</code></td><td>The site ID to delete (required)</td></tr>
+      <tr><td><code>--yes</code></td><td>Skip confirmation prompt</td></tr>
+    </tbody>
+  </table>
+
+  <hr />
+
+  <h2>hostedat deploy</h2>
+  <p>Deploy a directory to a site. The directory is zipped and uploaded as a new version.</p>
+  <CodeBlock code='hostedat deploy <site-id> <directory>' lang="bash" />
+
+  <table>
+    <thead>
+      <tr><th>Argument</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>&lt;site-id&gt;</code></td><td>The site ID or subdomain slug to deploy to</td></tr>
+      <tr><td><code>&lt;directory&gt;</code></td><td>Path to the directory to upload (e.g., <code>./dist</code>)</td></tr>
+    </tbody>
+  </table>
+
+  <CodeBlock
+    code={`hostedat deploy my-portfolio ./dist
+
+# Deploying ./dist to site my-portfolio...
+# Deployed! Version: v4`}
+    lang="bash"
+  />
+
+  <hr />
+
+  <h2>hostedat version</h2>
+  <p>Print the CLI version and default server URL.</p>
+  <CodeBlock
+    code={`hostedat version
+
+# hostedat v0.1.0
+# server:  https://hostedat.ditto.moe`}
+    lang="bash"
+  />
+
+  <hr />
+  <p>Next: <a href="/docs/server">Server Guide</a> for running your own instance.</p>
+</DocsLayout>

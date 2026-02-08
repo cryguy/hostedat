@@ -1,0 +1,143 @@
+---
+import DocsLayout from '../../layouts/DocsLayout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+---
+
+<DocsLayout title="Configuration">
+  <h1>Configuration Reference</h1>
+  <p>
+    The server reads its configuration from <code>config.yaml</code> in the working directory.
+    Override the path with <code>--config /path/to/config.yaml</code>.
+  </p>
+
+  <h2>Full example</h2>
+  <CodeBlock
+    title="config.yaml"
+    code={`# The base domain. Sites are served at <slug>.domain
+domain: hostedat.ditto.moe
+
+# Address to listen on
+# :443 for production (HTTPS via CertMagic)
+# :8080 for development (no TLS)
+listen: ":443"
+
+# Directory where uploaded site files are stored
+storage_path: ./data/sites
+
+# Secret used to sign JWT tokens
+# Generate with: openssl rand -hex 32
+jwt_secret: "change-me-to-a-random-secret"
+
+# Database configuration
+database:
+  driver: sqlite        # sqlite | postgres | mysql
+  dsn: ./data/hostedat.db
+
+# Registration settings
+registration:
+  enabled: true          # Allow new user signups
+  invite_required: false # Require invite code to register
+
+# Cloudflare DNS for Let's Encrypt wildcard cert
+# Leave api_token empty to disable TLS (dev mode)
+cloudflare:
+  api_token: ""`}
+    lang="yaml"
+  />
+
+  <h2>Options</h2>
+
+  <h3>domain</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
+    <tbody><tr><td><code>string</code></td><td>—</td><td>Yes</td></tr></tbody>
+  </table>
+  <p>The base domain for the instance. Sites are served at <code>&lt;slug&gt;.&lt;domain&gt;</code>. The main application (dashboard, API) is served at the bare domain.</p>
+
+  <h3>listen</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
+    <tbody><tr><td><code>string</code></td><td><code>:8080</code></td><td>No</td></tr></tbody>
+  </table>
+  <p>The address and port to listen on. Use <code>:443</code> for production with TLS.</p>
+
+  <h3>storage_path</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
+    <tbody><tr><td><code>string</code></td><td><code>./data/sites</code></td><td>No</td></tr></tbody>
+  </table>
+  <p>Directory where uploaded site files are extracted and served from. Created automatically if it doesn't exist.</p>
+
+  <h3>jwt_secret</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
+    <tbody><tr><td><code>string</code></td><td>—</td><td>Yes</td></tr></tbody>
+  </table>
+  <p>Secret key for signing JWT authentication tokens. Should be a long random string. Generate one with:</p>
+  <CodeBlock code="openssl rand -hex 32" lang="bash" />
+
+  <h3>database.driver</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Values</th></tr></thead>
+    <tbody><tr><td><code>string</code></td><td><code>sqlite</code></td><td><code>sqlite</code>, <code>postgres</code>, <code>mysql</code></td></tr></tbody>
+  </table>
+  <p>The database driver. SQLite requires no external setup. Postgres and MySQL require a running database server.</p>
+
+  <h3>database.dsn</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
+    <tbody><tr><td><code>string</code></td><td><code>./data/hostedat.db</code></td><td>Yes</td></tr></tbody>
+  </table>
+  <p>Data source name. Format depends on the driver:</p>
+  <ul>
+    <li><strong>SQLite:</strong> file path (e.g., <code>./data/hostedat.db</code>)</li>
+    <li><strong>Postgres:</strong> <code>host=localhost port=5432 user=hostedat dbname=hostedat sslmode=disable</code></li>
+    <li><strong>MySQL:</strong> <code>user:password@tcp(localhost:3306)/hostedat?parseTime=true</code></li>
+  </ul>
+
+  <h3>registration.enabled</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th></tr></thead>
+    <tbody><tr><td><code>bool</code></td><td><code>true</code></td></tr></tbody>
+  </table>
+  <p>Whether new user registration is allowed. When <code>false</code>, only admins can create new users.</p>
+
+  <h3>registration.invite_required</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th></tr></thead>
+    <tbody><tr><td><code>bool</code></td><td><code>false</code></td></tr></tbody>
+  </table>
+  <p>Whether a valid invite code is required to register. Only applies when <code>registration.enabled</code> is <code>true</code>.</p>
+
+  <h3>Registration behavior matrix</h3>
+  <table>
+    <thead>
+      <tr><th>enabled</th><th>invite_required</th><th>Behavior</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>true</code></td><td><code>false</code></td><td>Open registration — anyone can sign up</td></tr>
+      <tr><td><code>true</code></td><td><code>true</code></td><td>Invite-only — registration requires a valid invite code</td></tr>
+      <tr><td><code>false</code></td><td><em>any</em></td><td>Closed — no new registrations (admins can still create users)</td></tr>
+    </tbody>
+  </table>
+
+  <h3>cloudflare.api_token</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
+    <tbody><tr><td><code>string</code></td><td><code>""</code></td><td>Only for HTTPS</td></tr></tbody>
+  </table>
+  <p>
+    Cloudflare API token with <strong>Zone:DNS:Edit</strong> permission. Used for DNS-01 challenge
+    to obtain wildcard TLS certificates from Let's Encrypt. Leave empty to run without TLS (development mode).
+  </p>
+
+  <h2>Environment variables</h2>
+  <p>The server does not read environment variables directly — all configuration is via the YAML file. However, the CLI supports these environment variables:</p>
+  <table>
+    <thead><tr><th>Variable</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>HOSTEDAT_SERVER</code></td><td>Server URL for the CLI</td></tr>
+      <tr><td><code>HOSTEDAT_API_KEY</code></td><td>API key for the CLI</td></tr>
+    </tbody>
+  </table>
+</DocsLayout>

@@ -1,0 +1,70 @@
+---
+import Layout from './Layout.astro';
+
+interface Props {
+  title: string;
+}
+
+const { title } = Astro.props;
+const currentPath = Astro.url.pathname;
+
+const sections = [
+  {
+    title: 'Getting Started',
+    links: [
+      { href: '/docs/getting-started', label: 'Introduction' },
+      { href: '/docs/configuration', label: 'Configuration' },
+    ],
+  },
+  {
+    title: 'Usage',
+    links: [
+      { href: '/docs/cli', label: 'CLI Reference' },
+      { href: '/docs/server', label: 'Server Guide' },
+    ],
+  },
+];
+
+function isActive(href: string): boolean {
+  return currentPath === href || currentPath === href + '/';
+}
+---
+
+<Layout title={title}>
+  <div class="max-w-6xl mx-auto px-6 py-12 md:py-20">
+    <div class="flex flex-col md:flex-row gap-12">
+      <!-- Sidebar -->
+      <aside class="md:w-56 shrink-0">
+        <nav class="md:sticky md:top-24 space-y-8">
+          {sections.map(section => (
+            <div>
+              <h4 class="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">{section.title}</h4>
+              <ul class="space-y-0.5">
+                {section.links.map(link => (
+                  <li>
+                    <a
+                      href={link.href}
+                      class:list={[
+                        'block px-3 py-1.5 rounded-md text-sm transition-colors duration-150',
+                        isActive(link.href)
+                          ? 'text-emerald-400 bg-emerald-500/10 font-medium'
+                          : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/40'
+                      ]}
+                    >
+                      {link.label}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </nav>
+      </aside>
+
+      <!-- Content -->
+      <article class="prose min-w-0 flex-1 max-w-3xl">
+        <slot />
+      </article>
+    </div>
+  </div>
+</Layout>
