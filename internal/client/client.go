@@ -97,6 +97,10 @@ func (c *Client) post(path string, reqBody, result interface{}) error {
 	return c.doJSON(http.MethodPost, path, reqBody, result)
 }
 
+func (c *Client) patch(path string, reqBody, result interface{}) error {
+	return c.doJSON(http.MethodPatch, path, reqBody, result)
+}
+
 func (c *Client) delete(path string, result interface{}) error {
 	return c.doJSON(http.MethodDelete, path, nil, result)
 }

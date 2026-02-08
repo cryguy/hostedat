@@ -13,7 +13,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "dev"
+var (
+	version       = "dev"
+	defaultServer = "" // set via -ldflags at build time
+)
 
 type cliConfig struct {
 	Server string `json:"server"`
@@ -150,10 +153,20 @@ func sitesCmd() *cobra.Command {
 	// delete
 	var yes bool
 	del := &cobra.Command{
-		Use:   "delete <site-id>",
-		Short: "Delete a site",
+		Use:   "delete <site>",
+		Short: "Delete a site (by name, subdomain, or ID)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := newClient()
+			if err != nil {
+				return err
+			}
+
+			siteID, err := c.ResolveSiteID(args[0])
+			if err != nil {
+				return err
+			}
+
 			if !yes {
 				fmt.Printf("Delete site %s? This cannot be undone. [y/N] ", args[0])
 				reader := bufio.NewReader(os.Stdin)
@@ -164,12 +177,7 @@ func sitesCmd() *cobra.Command {
 				}
 			}
 
-			c, err := newClient()
-			if err != nil {
-				return err
-			}
-
-			if err := c.DeleteSite(args[0]); err != nil {
+			if err := c.DeleteSite(siteID); err != nil {
 				return err
 			}
 
@@ -184,12 +192,12 @@ func sitesCmd() *cobra.Command {
 }
 
 func deployCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "deploy <site-id> <directory>",
-		Short: "Deploy a directory to a site",
+	var spaFlag bool
+	cmd := &cobra.Command{
+		Use:   "deploy <site> <directory>",
+		Short: "Deploy a directory to a site (by name, subdomain, or ID)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			siteID := args[0]
 			dir := args[1]
 
 			c, err := newClient()
@@ -197,16 +205,82 @@ func deployCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Printf("Deploying %s to site %s...\n", dir, siteID)
-			deployment, err := c.Deploy(siteID, dir)
+			site, err := c.ResolveSite(args[0])
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("Deploying %s to site %s...\n", dir, args[0])
+			deployment, err := c.Deploy(site.ID, dir)
 			if err != nil {
 				return err
 			}
 
 			fmt.Printf("Deployed! Version: v%d\n", deployment.Version)
+
+			if spaFlag && !site.SPAMode {
+				spaOn := true
+				if _, err := c.UpdateSite(site.ID, nil, &spaOn); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: deployed OK but failed to enable SPA mode: %s\n", err)
+				} else {
+					fmt.Println("SPA mode enabled.")
+				}
+			} else if !spaFlag && !site.SPAMode && detectSPA(dir) {
+				fmt.Println("\nThis looks like a single-page app (SPA).")
+				fmt.Println("Client-side routing won't work without SPA mode or a _redirects file.")
+				fmt.Println("To enable SPA mode, re-deploy with --spa or toggle it in the dashboard.")
+			}
+
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&spaFlag, "spa", false, "enable SPA mode for this site")
+	return cmd
+}
+
+// detectSPA checks if a directory looks like a single-page application.
+// Heuristic: has index.html with <script> tags, few other .html files,
+// and no _redirects file with a catch-all rewrite.
+func detectSPA(dir string) bool {
+	// Must have index.html
+	indexPath := filepath.Join(dir, "index.html")
+	indexData, err := os.ReadFile(indexPath)
+	if err != nil {
+		return false
+	}
+
+	// index.html should reference JS bundles
+	content := strings.ToLower(string(indexData))
+	if !strings.Contains(content, "<script") {
+		return false
+	}
+
+	// Check for _redirects with SPA fallback — if present, no need to warn
+	if redirectsData, err := os.ReadFile(filepath.Join(dir, "_redirects")); err == nil {
+		for _, line := range strings.Split(string(redirectsData), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "/*") && strings.Contains(line, "200") {
+				return false
+			}
+		}
+	}
+
+	// Count .html files — SPAs typically have very few (index.html + maybe 404.html)
+	htmlCount := 0
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".html") {
+			htmlCount++
+			if htmlCount > 2 {
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+
+	return htmlCount <= 2
 }
 
 func versionCmd() *cobra.Command {
@@ -215,6 +289,9 @@ func versionCmd() *cobra.Command {
 		Short: "Print the CLI version",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("hostedat %s\n", version)
+			if defaultServer != "" {
+				fmt.Printf("server:  %s\n", defaultServer)
+			}
 		},
 	}
 }
@@ -258,6 +335,9 @@ func resolveServer() string {
 	cfg, err := loadConfig()
 	if err == nil && cfg.Server != "" {
 		return cfg.Server
+	}
+	if defaultServer != "" {
+		return defaultServer
 	}
 	return ""
 }
