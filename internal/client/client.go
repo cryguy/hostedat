@@ -12,6 +12,7 @@ import (
 type Client struct {
 	BaseURL    string
 	Token      string
+	Version    string
 	HTTPClient *http.Client
 }
 
@@ -43,6 +44,9 @@ func (c *Client) do(method, path string, body io.Reader, contentType string) (*h
 
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	if c.Version != "" {
+		req.Header.Set("X-Hostedat-Version", c.Version)
 	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)

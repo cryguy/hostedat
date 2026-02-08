@@ -3,6 +3,7 @@ package api
 import (
 	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 
@@ -11,6 +12,53 @@ import (
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
+
+// deniedHeaders are headers that user _headers files must not be able to set.
+var deniedHeaders = map[string]bool{
+	"content-length":            true,
+	"transfer-encoding":         true,
+	"set-cookie":                true,
+	"host":                      true,
+	"content-security-policy":   true,
+	"strict-transport-security": true,
+	"x-frame-options":           true,
+	"x-content-type-options":    true,
+}
+
+func isAllowedRedirectTarget(target, domain string) bool {
+	// Block empty
+	if target == "" {
+		return false
+	}
+
+	// Block protocol-relative URLs (//evil.com)
+	if strings.HasPrefix(target, "//") {
+		return false
+	}
+
+	// Allow relative paths starting with /
+	if strings.HasPrefix(target, "/") {
+		return true
+	}
+
+	// Block dangerous schemes
+	lower := strings.ToLower(target)
+	if strings.HasPrefix(lower, "javascript:") || strings.HasPrefix(lower, "data:") {
+		return false
+	}
+
+	// For absolute URLs, only allow same domain and subdomains
+	parsed, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	host := parsed.Hostname()
+	if host == domain || strings.HasSuffix(host, "."+domain) {
+		return true
+	}
+
+	return false
+}
 
 // SubdomainRouter inspects the Host header and routes subdomain requests
 // to the static site handler. Bare-domain requests pass through to the API.
@@ -78,10 +126,15 @@ func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteR
 		// Load/cache rules
 		rules := loadRules(store, cache, site.ID, version, deployPath)
 
-		// 1. Apply matching headers
+		// 1. Apply matching headers (with denylist)
 		if rules != nil {
 			headers := storage.MatchHeaders(rules.Headers, reqPath)
 			for k, v := range headers {
+				if deniedHeaders[strings.ToLower(k)] {
+					continue
+				}
+				// Strip CRLF as defense-in-depth
+				v = strings.NewReplacer("\r", "", "\n", "").Replace(v)
 				c.Response().Header().Set(k, v)
 			}
 		}
@@ -90,7 +143,9 @@ func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteR
 		if rules != nil {
 			if rule, target, matched := storage.MatchRedirect(rules.Redirects, reqPath); matched {
 				if rule.StatusCode == 301 || rule.StatusCode == 302 {
-					return c.Redirect(rule.StatusCode, target)
+					if isAllowedRedirectTarget(target, domain) {
+						return c.Redirect(rule.StatusCode, target)
+					}
 				}
 			}
 		}

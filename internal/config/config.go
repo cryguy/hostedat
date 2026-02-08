@@ -8,13 +8,14 @@ import (
 )
 
 type Config struct {
-	Domain      string     `yaml:"domain"`
-	Listen      string     `yaml:"listen"`
-	StoragePath string     `yaml:"storage_path"`
-	JWTSecret   string     `yaml:"jwt_secret"`
-	Database    DBConfig   `yaml:"database"`
-	Registration RegConfig `yaml:"registration"`
-	Cloudflare  CFConfig   `yaml:"cloudflare"`
+	Domain        string     `yaml:"domain"`
+	Listen        string     `yaml:"listen"`
+	StoragePath   string     `yaml:"storage_path"`
+	JWTSecret     string     `yaml:"jwt_secret"`
+	MinCLIVersion string     `yaml:"min_cli_version"`
+	Database      DBConfig   `yaml:"database"`
+	Registration  RegConfig  `yaml:"registration"`
+	Cloudflare    CFConfig   `yaml:"cloudflare"`
 }
 
 type DBConfig struct {
@@ -60,8 +61,13 @@ func Load(path string) (*Config, error) {
 	if cfg.Database.DSN == "" {
 		return nil, fmt.Errorf("config: database.dsn is required")
 	}
-	if cfg.JWTSecret == "" {
-		return nil, fmt.Errorf("config: jwt_secret is required")
+	if len(cfg.JWTSecret) < 32 {
+		return nil, fmt.Errorf("config: jwt_secret must be at least 32 characters")
+	}
+	if cfg.MinCLIVersion != "" {
+		if _, err := ParseSemver(cfg.MinCLIVersion); err != nil {
+			return nil, fmt.Errorf("config: invalid min_cli_version: %w", err)
+		}
 	}
 
 	return cfg, nil

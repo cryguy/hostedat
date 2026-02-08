@@ -63,7 +63,7 @@ func loginCmd() *cobra.Command {
 				return fmt.Errorf("server URL is required (use --server or HOSTEDAT_SERVER)")
 			}
 
-			apiKey, err := client.BrowserLogin(serverURL)
+			apiKey, err := client.BrowserLogin(serverURL, version)
 			if err != nil {
 				return err
 			}
@@ -306,7 +306,9 @@ func newClient() (*client.Client, error) {
 	if serverURL == "" {
 		return nil, fmt.Errorf("server URL is required (use --server or HOSTEDAT_SERVER)")
 	}
-	return client.New(serverURL, apiKey), nil
+	c := client.New(serverURL, apiKey)
+	c.Version = version
+	return c, nil
 }
 
 // resolveAPIKey: env > flag > config file

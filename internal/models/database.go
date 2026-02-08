@@ -34,6 +34,7 @@ func InitDB(cfg config.DBConfig) (*gorm.DB, error) {
 		&Deployment{},
 		&APIKey{},
 		&Invite{},
+		&AuthCode{},
 		&Setting{},
 	); err != nil {
 		return nil, fmt.Errorf("auto-migrating: %w", err)

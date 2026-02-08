@@ -14,7 +14,7 @@ DOCS_DL_DIR="$ROOT_DIR/docs/public/downloads"
 MANIFEST="$ROOT_DIR/docs/public/downloads.json"
 
 # Get version from git
-VERSION=$(cd "$ROOT_DIR" && git describe --tags --always --dirty 2>/dev/null || echo "dev")
+VERSION=$(cat "$ROOT_DIR/VERSION" 2>/dev/null | tr -d '[:space:]' || echo "dev")
 DATE=$(date -u +%Y-%m-%d)
 
 SKIP_BUILD=false

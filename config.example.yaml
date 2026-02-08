@@ -14,6 +14,11 @@ storage_path: ./data/sites
 #   openssl rand -hex 32
 jwt_secret: "change-me-to-a-random-secret"
 
+# Minimum CLI version required to use the API.
+# Clients with older versions receive HTTP 426 Upgrade Required.
+# Leave empty to allow all versions.
+min_cli_version: ""
+
 # Database configuration
 database:
   driver: sqlite        # sqlite | postgres | mysql

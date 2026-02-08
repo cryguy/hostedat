@@ -21,7 +21,7 @@ func TestLoad_FullConfig(t *testing.T) {
 domain: example.com
 listen: ":9090"
 storage_path: /data/custom
-jwt_secret: supersecret
+jwt_secret: this-is-a-test-secret-that-is-at-least-32-chars-long
 database:
   driver: sqlite
   dsn: /data/test.db
@@ -43,7 +43,7 @@ cloudflare:
 	if cfg.StoragePath != "/data/custom" {
 		t.Errorf("StoragePath = %q", cfg.StoragePath)
 	}
-	if cfg.JWTSecret != "supersecret" {
+	if cfg.JWTSecret != "this-is-a-test-secret-that-is-at-least-32-chars-long" {
 		t.Errorf("JWTSecret = %q", cfg.JWTSecret)
 	}
 	if cfg.Database.Driver != "sqlite" {
@@ -66,7 +66,7 @@ cloudflare:
 func TestLoad_Defaults(t *testing.T) {
 	cfg, err := Load(writeTemp(t, `
 domain: example.com
-jwt_secret: secret
+jwt_secret: this-is-a-test-secret-that-is-at-least-32-chars-long
 database:
   dsn: test.db
 `))
@@ -86,7 +86,7 @@ database:
 
 func TestLoad_MissingDomain(t *testing.T) {
 	_, err := Load(writeTemp(t, `
-jwt_secret: s
+jwt_secret: this-is-a-test-secret-that-is-at-least-32-chars-long
 database:
   dsn: test.db
 `))
@@ -98,7 +98,7 @@ database:
 func TestLoad_MissingDSN(t *testing.T) {
 	_, err := Load(writeTemp(t, `
 domain: example.com
-jwt_secret: s
+jwt_secret: this-is-a-test-secret-that-is-at-least-32-chars-long
 `))
 	if err == nil || !strings.Contains(err.Error(), "dsn") {
 		t.Fatalf("expected dsn error, got %v", err)
@@ -113,6 +113,18 @@ database:
 `))
 	if err == nil || !strings.Contains(err.Error(), "jwt_secret") {
 		t.Fatalf("expected jwt_secret error, got %v", err)
+	}
+}
+
+func TestLoad_ShortJWTSecret(t *testing.T) {
+	_, err := Load(writeTemp(t, `
+domain: example.com
+jwt_secret: tooshort
+database:
+  dsn: test.db
+`))
+	if err == nil || !strings.Contains(err.Error(), "jwt_secret") {
+		t.Fatalf("expected jwt_secret length error, got %v", err)
 	}
 }
 
@@ -133,7 +145,7 @@ func TestLoad_InvalidYAML(t *testing.T) {
 func TestLoad_RegistrationDefaults(t *testing.T) {
 	cfg, err := Load(writeTemp(t, `
 domain: example.com
-jwt_secret: s
+jwt_secret: this-is-a-test-secret-that-is-at-least-32-chars-long
 database:
   dsn: test.db
 `))

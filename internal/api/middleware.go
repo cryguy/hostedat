@@ -1,11 +1,13 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/cryguy/hostedat/internal/auth"
+	"github.com/cryguy/hostedat/internal/config"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
@@ -90,4 +92,26 @@ func RequireRole(roles ...string) echo.MiddlewareFunc {
 
 func RequireAdmin() echo.MiddlewareFunc {
 	return RequireRole("superadmin", "admin")
+}
+
+// VersionCheckMiddleware rejects requests from CLI clients whose version
+// is below the configured minimum. Skips if no minimum is set, if the
+// header is absent (browser/curl), or if the version is unparseable (dev builds).
+func VersionCheckMiddleware(minVersion string) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if minVersion == "" {
+				return next(c)
+			}
+			clientVersion := c.Request().Header.Get("X-Hostedat-Version")
+			if clientVersion == "" {
+				return next(c)
+			}
+			if !config.SemverAtLeast(clientVersion, minVersion) {
+				return errorJSON(c, http.StatusUpgradeRequired,
+					fmt.Sprintf("CLI version %s is too old, minimum required: %s", clientVersion, minVersion))
+			}
+			return next(c)
+		}
+	}
 }

@@ -49,7 +49,11 @@ func ParseHeaders(filePath string) ([]HeaderRule, error) {
 		if current != nil {
 			parts := strings.SplitN(trimmed, ":", 2)
 			if len(parts) == 2 {
-				current.Headers[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+				key := strings.TrimSpace(parts[0])
+				value := strings.TrimSpace(parts[1])
+				// Strip CRLF to prevent HTTP response splitting
+				value = strings.NewReplacer("\r", "", "\n", "").Replace(value)
+				current.Headers[key] = value
 			}
 		}
 	}

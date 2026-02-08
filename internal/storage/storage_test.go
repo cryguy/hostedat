@@ -188,6 +188,62 @@ func TestResolveFile_NotFound(t *testing.T) {
 	}
 }
 
+func TestResolveFile_PathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	// Create a file outside the deployment dir
+	os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("secret"), 0644)
+
+	deployDir := filepath.Join(dir, "deploy")
+	os.MkdirAll(deployDir, 0755)
+	os.WriteFile(filepath.Join(deployDir, "index.html"), []byte("home"), 0644)
+
+	m := NewManager("")
+	// Attempt path traversal
+	_, ok := m.ResolveFile(deployDir, "/../secret.txt")
+	if ok {
+		t.Error("path traversal should be blocked")
+	}
+
+	_, ok = m.ResolveFile(deployDir, "/../../../etc/passwd")
+	if ok {
+		t.Error("path traversal to /etc/passwd should be blocked")
+	}
+
+	// Normal file should still work
+	_, ok = m.ResolveFile(deployDir, "/index.html")
+	if !ok {
+		t.Error("normal file should resolve")
+	}
+}
+
+func TestExtractZip_RejectsSymlinks(t *testing.T) {
+	// zip.File entries with mode ModeSymlink are rejected.
+	// Create a zip manually with a symlink entry.
+	buf := new(bytes.Buffer)
+	w := zip.NewWriter(buf)
+
+	// Create a symlink entry by setting the external attrs
+	header := &zip.FileHeader{
+		Name: "link.txt",
+	}
+	header.SetMode(os.ModeSymlink | 0777)
+	fw, err := w.CreateHeader(header)
+	if err != nil {
+		t.Fatalf("creating symlink entry: %v", err)
+	}
+	fw.Write([]byte("../etc/passwd"))
+	w.Close()
+
+	m := NewManager(t.TempDir())
+	err = m.ExtractZip("s1", 1, bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err == nil {
+		t.Fatal("expected error for symlink in zip")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("error = %q, want symlink message", err.Error())
+	}
+}
+
 func TestDeleteSite(t *testing.T) {
 	base := t.TempDir()
 	m := NewManager(base)

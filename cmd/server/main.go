@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cryguy/hostedat/internal/api"
 	"github.com/cryguy/hostedat/internal/certs"
@@ -16,7 +17,10 @@ import (
 	"github.com/cryguy/hostedat/web"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"golang.org/x/time/rate"
 )
+
+var version = "dev"
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
@@ -55,11 +59,38 @@ func main() {
 
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
-	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
-		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders: []string{"Authorization", "Content-Type"},
+
+	// Security headers
+	e.Use(middleware.SecureWithConfig(middleware.SecureConfig{
+		XSSProtection:         "1; mode=block",
+		ContentTypeNosniff:    "nosniff",
+		XFrameOptions:         "DENY",
+		HSTSMaxAge:            31536000,
+		ContentSecurityPolicy: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+		ReferrerPolicy:        "strict-origin-when-cross-origin",
 	}))
+
+	// CORS — only allow configured domain, its subdomains, and localhost for dev
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOriginFunc: func(origin string) (bool, error) {
+			origin = strings.ToLower(origin)
+			// Allow localhost for development
+			if strings.HasPrefix(origin, "http://localhost") || strings.HasPrefix(origin, "http://127.0.0.1") {
+				return true, nil
+			}
+			// Allow the configured domain and its subdomains
+			allowed := strings.ToLower(cfg.Domain)
+			if strings.HasSuffix(origin, "://"+allowed) || strings.HasSuffix(origin, "."+allowed) {
+				return true, nil
+			}
+			return false, nil
+		},
+		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders: []string{"Authorization", "Content-Type", "X-Hostedat-Version"},
+	}))
+
+	// Global rate limiter: 20 req/s per IP
+	e.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(20))))
 
 	store := storage.NewManager(cfg.StoragePath)
 	rulesCache := storage.NewSiteRulesCache()
@@ -67,7 +98,7 @@ func main() {
 	// Subdomain router must come before API routes
 	e.Use(api.SubdomainRouter(db, store, rulesCache, cfg.Domain))
 
-	api.RegisterRoutes(e, db, cfg, store)
+	api.RegisterRoutes(e, db, cfg, store, version)
 
 	// Serve embedded frontend (SPA fallback)
 	distFS, err := fs.Sub(web.DistFS, "dist")
@@ -91,7 +122,7 @@ func main() {
 
 	// Start with TLS if Cloudflare token is configured, otherwise plain HTTP
 	if cfg.Cloudflare.APIToken != "" {
-		log.Printf("Starting server with TLS on %s for domain %s", cfg.Listen, cfg.Domain)
+		log.Printf("Starting hostedat %s with TLS on %s for domain %s", version, cfg.Listen, cfg.Domain)
 
 		certsDir := filepath.Join(filepath.Dir(cfg.Database.DSN), "certs")
 		tlsCfg, err := certs.SetupTLS(certs.Config{
@@ -113,7 +144,7 @@ func main() {
 			log.Fatalf("Server failed: %v", err)
 		}
 	} else {
-		log.Printf("Starting server (no TLS) on %s for domain %s", cfg.Listen, cfg.Domain)
+		log.Printf("Starting hostedat %s (no TLS) on %s for domain %s", version, cfg.Listen, cfg.Domain)
 		if err := e.Start(cfg.Listen); err != nil {
 			log.Fatalf("Server failed: %v", err)
 		}

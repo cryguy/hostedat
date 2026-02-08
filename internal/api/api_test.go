@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,6 +37,10 @@ type testEnv struct {
 }
 
 func setupTestEnv(t *testing.T) *testEnv {
+	return setupTestEnvWithMinVersion(t, "")
+}
+
+func setupTestEnvWithMinVersion(t *testing.T, minVersion string) *testEnv {
 	t.Helper()
 
 	db, err := models.InitDB(config.DBConfig{Driver: "sqlite", DSN: ":memory:"})
@@ -44,8 +49,9 @@ func setupTestEnv(t *testing.T) *testEnv {
 	}
 
 	cfg := &config.Config{
-		Domain:    "test.local",
-		JWTSecret: "test-jwt-secret",
+		Domain:        "test.local",
+		JWTSecret:     "test-jwt-secret-that-is-at-least-32-characters-long",
+		MinCLIVersion: minVersion,
 		Registration: config.RegConfig{
 			Enabled: true,
 		},
@@ -58,7 +64,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	e := echo.New()
 	e.HTTPErrorHandler = CustomErrorHandler
 	e.Use(SubdomainRouter(db, store, cache, cfg.Domain))
-	RegisterRoutes(e, db, cfg, store)
+	RegisterRoutes(e, db, cfg, store, "0.1.0")
 
 	return &testEnv{
 		e:         e,
@@ -1188,6 +1194,124 @@ func TestServing_NoDeployment(t *testing.T) {
 // Serve file content type test
 // ──────────────────────────────────────────────
 
+// ──────────────────────────────────────────────
+// Security tests
+// ──────────────────────────────────────────────
+
+func TestCLILogin_InvalidPort(t *testing.T) {
+	env := setupTestEnv(t)
+
+	tests := []struct {
+		name string
+		port string
+	}{
+		{"non-numeric", "abc"},
+		{"negative", "-1"},
+		{"zero", "0"},
+		{"too-large", "70000"},
+		{"injection", "80@evil.com/"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/cli?port="+tt.port+"&state=test&code_challenge=abc&code_challenge_method=S256", nil)
+			rec := env.doRequest(req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("GET port=%s: status = %d, want 400", tt.port, rec.Code)
+			}
+		})
+	}
+}
+
+func TestCLILoginSubmit_InvalidPort(t *testing.T) {
+	env := setupTestEnv(t)
+	env.createTestUser(t, "cli@test.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/cli",
+		jsonBody(map[string]string{"email": "cli@test.com", "password": "password123", "port": "80@evil.com/", "state": "test", "code_challenge": "abc"}))
+	req.Header.Set("Content-Type", "application/json")
+	rec := env.doRequest(req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestRegister_InvalidEmail(t *testing.T) {
+	env := setupTestEnv(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register",
+		jsonBody(map[string]string{"email": "notanemail", "password": "password123"}))
+	req.Header.Set("Content-Type", "application/json")
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	body := parseJSON(t, rec)
+	if !strings.Contains(body["error"].(string), "email") {
+		t.Errorf("error = %q, want email-related message", body["error"])
+	}
+}
+
+func TestServing_HeaderInjectionBlocked(t *testing.T) {
+	env := setupTestEnv(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "hdr-inject", Name: "HdrInj"}
+	env.db.Create(&site)
+	v := 1
+	site.ActiveVersion = &v
+	env.db.Save(&site)
+	deploySite(t, env, site.ID, 1, map[string]string{
+		"index.html": "hi",
+		"_headers":   "/*\n  Set-Cookie: evil=true\n  X-Custom: safe",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "hdr-inject.test.local"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	// Set-Cookie should be blocked
+	if rec.Header().Get("Set-Cookie") != "" {
+		t.Error("Set-Cookie header should be blocked from _headers")
+	}
+	// X-Custom should pass through
+	if rec.Header().Get("X-Custom") != "safe" {
+		t.Errorf("X-Custom = %q, want safe", rec.Header().Get("X-Custom"))
+	}
+}
+
+func TestDeploy_ErrorMessageNonLeakage(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "errleak", Name: "ErrLeak"}
+	env.db.Create(&site)
+
+	// Send invalid (non-zip) data
+	body := new(bytes.Buffer)
+	writer := multipart.NewWriter(body)
+	part, _ := writer.CreateFormFile("file", "bad.zip")
+	part.Write([]byte("this is not a zip file"))
+	writer.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deploy", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	respBody := parseJSON(t, rec)
+	errMsg := respBody["error"].(string)
+	// Should be generic message, not leaking internal details
+	if errMsg != "invalid zip file" {
+		t.Errorf("error = %q, want 'invalid zip file'", errMsg)
+	}
+}
+
 func TestServing_ContentType(t *testing.T) {
 	env := setupTestEnv(t)
 	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
@@ -1211,5 +1335,267 @@ func TestServing_ContentType(t *testing.T) {
 	ct := rec.Header().Get("Content-Type")
 	if !strings.Contains(ct, "css") {
 		t.Errorf("Content-Type = %q, want css", ct)
+	}
+}
+
+// ──────────────────────────────────────────────
+// Version endpoint + check tests
+// ──────────────────────────────────────────────
+
+func TestVersionEndpoint(t *testing.T) {
+	env := setupTestEnvWithMinVersion(t, "0.1.0")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/version", nil)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	if body["version"] != "0.1.0" {
+		t.Errorf("version = %q, want 0.1.0", body["version"])
+	}
+	if body["min_cli_version"] != "0.1.0" {
+		t.Errorf("min_cli_version = %q, want 0.1.0", body["min_cli_version"])
+	}
+}
+
+func TestVersionCheck_TooOld(t *testing.T) {
+	env := setupTestEnvWithMinVersion(t, "1.0.0")
+	_, token := env.createTestUser(t, "u@t.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Hostedat-Version", "0.1.0")
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusUpgradeRequired {
+		t.Errorf("status = %d, want 426", rec.Code)
+	}
+}
+
+func TestVersionCheck_OK(t *testing.T) {
+	env := setupTestEnvWithMinVersion(t, "0.1.0")
+	_, token := env.createTestUser(t, "u@t.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Hostedat-Version", "0.2.0")
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestVersionCheck_NoHeader(t *testing.T) {
+	env := setupTestEnvWithMinVersion(t, "1.0.0")
+	_, token := env.createTestUser(t, "u@t.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	// No X-Hostedat-Version header — should pass (browser/curl)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (no version header should pass): %s", rec.Code, rec.Body.String())
+	}
+}
+
+// ──────────────────────────────────────────────
+// PKCE tests
+// ──────────────────────────────────────────────
+
+func TestCLILogin_RequiresCodeChallenge(t *testing.T) {
+	env := setupTestEnv(t)
+
+	// No code_challenge → 400
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/cli?port=9999&state=test", nil)
+	rec := env.doRequest(req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	body := parseJSON(t, rec)
+	if !strings.Contains(body["error"].(string), "code_challenge") {
+		t.Errorf("error = %q, want code_challenge-related", body["error"])
+	}
+}
+
+func TestCLILogin_InvalidChallengeMethod(t *testing.T) {
+	env := setupTestEnv(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/cli?port=9999&state=test&code_challenge=abc&code_challenge_method=plain", nil)
+	rec := env.doRequest(req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	body := parseJSON(t, rec)
+	if !strings.Contains(body["error"].(string), "S256") {
+		t.Errorf("error = %q, want S256-related", body["error"])
+	}
+}
+
+func TestPKCE_FullFlow(t *testing.T) {
+	env := setupTestEnv(t)
+	env.createTestUser(t, "cli@test.com", "password123", "user")
+
+	// Generate PKCE pair
+	verifier, _ := auth.GenerateCodeVerifier()
+	challenge := auth.ComputeCodeChallenge(verifier)
+
+	// Step 1: Submit login with code_challenge
+	submitReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/cli",
+		jsonBody(map[string]string{
+			"email":          "cli@test.com",
+			"password":       "password123",
+			"port":           "9999",
+			"state":          "teststate",
+			"code_challenge": challenge,
+		}))
+	submitReq.Header.Set("Content-Type", "application/json")
+	submitRec := env.doRequest(submitReq)
+
+	if submitRec.Code != http.StatusOK {
+		t.Fatalf("submit: status = %d: %s", submitRec.Code, submitRec.Body.String())
+	}
+	submitBody := parseJSON(t, submitRec)
+	redirectURL := submitBody["redirect"].(string)
+
+	// Parse code from redirect URL
+	parsed, err := url.Parse(redirectURL)
+	if err != nil {
+		t.Fatalf("parse redirect URL: %v", err)
+	}
+	code := parsed.Query().Get("code")
+	if code == "" {
+		t.Fatal("no code in redirect URL")
+	}
+	if parsed.Query().Get("state") != "teststate" {
+		t.Errorf("state = %q, want teststate", parsed.Query().Get("state"))
+	}
+
+	// Step 2: Exchange code + verifier for JWT
+	tokenReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token",
+		jsonBody(map[string]string{
+			"code":          code,
+			"code_verifier": verifier,
+		}))
+	tokenReq.Header.Set("Content-Type", "application/json")
+	tokenRec := env.doRequest(tokenReq)
+
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token exchange: status = %d: %s", tokenRec.Code, tokenRec.Body.String())
+	}
+	tokenBody := parseJSON(t, tokenRec)
+	token := tokenBody["token"].(string)
+	if token == "" {
+		t.Fatal("no token in response")
+	}
+
+	// Step 3: Verify the JWT works
+	sitesReq := httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
+	sitesReq.Header.Set("Authorization", "Bearer "+token)
+	sitesRec := env.doRequest(sitesReq)
+	if sitesRec.Code != http.StatusOK {
+		t.Errorf("JWT should work: status = %d", sitesRec.Code)
+	}
+}
+
+func TestPKCE_WrongVerifier(t *testing.T) {
+	env := setupTestEnv(t)
+	env.createTestUser(t, "cli@test.com", "password123", "user")
+
+	verifier, _ := auth.GenerateCodeVerifier()
+	challenge := auth.ComputeCodeChallenge(verifier)
+
+	// Submit login
+	submitReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/cli",
+		jsonBody(map[string]string{
+			"email":          "cli@test.com",
+			"password":       "password123",
+			"port":           "9999",
+			"state":          "test",
+			"code_challenge": challenge,
+		}))
+	submitReq.Header.Set("Content-Type", "application/json")
+	submitRec := env.doRequest(submitReq)
+	submitBody := parseJSON(t, submitRec)
+	parsed, _ := url.Parse(submitBody["redirect"].(string))
+	code := parsed.Query().Get("code")
+
+	// Exchange with wrong verifier
+	tokenReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token",
+		jsonBody(map[string]string{
+			"code":          code,
+			"code_verifier": "wrong-verifier-that-does-not-match",
+		}))
+	tokenReq.Header.Set("Content-Type", "application/json")
+	tokenRec := env.doRequest(tokenReq)
+
+	if tokenRec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", tokenRec.Code)
+	}
+}
+
+func TestPKCE_CodeReuse(t *testing.T) {
+	env := setupTestEnv(t)
+	env.createTestUser(t, "cli@test.com", "password123", "user")
+
+	verifier, _ := auth.GenerateCodeVerifier()
+	challenge := auth.ComputeCodeChallenge(verifier)
+
+	// Submit login
+	submitReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/cli",
+		jsonBody(map[string]string{
+			"email":          "cli@test.com",
+			"password":       "password123",
+			"port":           "9999",
+			"state":          "test",
+			"code_challenge": challenge,
+		}))
+	submitReq.Header.Set("Content-Type", "application/json")
+	submitRec := env.doRequest(submitReq)
+	submitBody := parseJSON(t, submitRec)
+	parsed, _ := url.Parse(submitBody["redirect"].(string))
+	code := parsed.Query().Get("code")
+
+	// First exchange — should succeed
+	tokenReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token",
+		jsonBody(map[string]string{
+			"code":          code,
+			"code_verifier": verifier,
+		}))
+	tokenReq.Header.Set("Content-Type", "application/json")
+	tokenRec := env.doRequest(tokenReq)
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("first exchange: status = %d: %s", tokenRec.Code, tokenRec.Body.String())
+	}
+
+	// Second exchange — should fail (code already used)
+	tokenReq2 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token",
+		jsonBody(map[string]string{
+			"code":          code,
+			"code_verifier": verifier,
+		}))
+	tokenReq2.Header.Set("Content-Type", "application/json")
+	tokenRec2 := env.doRequest(tokenReq2)
+	if tokenRec2.Code != http.StatusUnauthorized {
+		t.Errorf("second exchange: status = %d, want 401", tokenRec2.Code)
+	}
+}
+
+func TestPKCE_InvalidCode(t *testing.T) {
+	env := setupTestEnv(t)
+
+	tokenReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/token",
+		jsonBody(map[string]string{
+			"code":          "nonexistent-code-that-was-never-issued",
+			"code_verifier": "some-verifier",
+		}))
+	tokenReq.Header.Set("Content-Type", "application/json")
+	tokenRec := env.doRequest(tokenReq)
+
+	if tokenRec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", tokenRec.Code)
 	}
 }

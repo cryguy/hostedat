@@ -1,15 +1,19 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"os/exec"
 	"runtime"
 	"time"
+
+	"github.com/cryguy/hostedat/internal/auth"
 )
 
 type APIKeyResponse struct {
@@ -19,13 +23,22 @@ type APIKeyResponse struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// BrowserLogin performs the full CLI login flow:
-// 1. Start a local HTTP server on a random port
-// 2. Open the browser to the server's CLI login page
-// 3. Wait for the callback with a JWT
-// 4. Use the JWT to create an API key
-// 5. Return the API key
-func BrowserLogin(serverURL string) (apiKey string, err error) {
+// BrowserLogin performs the full CLI login flow using OAuth 2.0 PKCE:
+// 1. Generate PKCE code verifier + challenge
+// 2. Start a local HTTP server on a random port
+// 3. Open the browser to the server's CLI login page with the code challenge
+// 4. Wait for the callback with an authorization code
+// 5. Exchange the code + verifier for a JWT
+// 6. Use the JWT to create an API key
+// 7. Return the API key
+func BrowserLogin(serverURL, cliVersion string) (apiKey string, err error) {
+	// Generate PKCE verifier and challenge
+	codeVerifier, err := auth.GenerateCodeVerifier()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate code verifier: %w", err)
+	}
+	codeChallenge := auth.ComputeCodeChallenge(codeVerifier)
+
 	// Generate random state for CSRF protection
 	stateBytes := make([]byte, 16)
 	if _, err := rand.Read(stateBytes); err != nil {
@@ -40,7 +53,7 @@ func BrowserLogin(serverURL string) (apiKey string, err error) {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 
-	var token string
+	var code string
 	var callbackErr error
 	done := make(chan struct{})
 
@@ -52,10 +65,10 @@ func BrowserLogin(serverURL string) (apiKey string, err error) {
 			close(done)
 			return
 		}
-		token = r.URL.Query().Get("token")
-		if token == "" {
-			callbackErr = fmt.Errorf("no token in callback")
-			http.Error(w, "Missing token", http.StatusBadRequest)
+		code = r.URL.Query().Get("code")
+		if code == "" {
+			callbackErr = fmt.Errorf("no authorization code in callback")
+			http.Error(w, "Missing code", http.StatusBadRequest)
 			close(done)
 			return
 		}
@@ -73,7 +86,8 @@ body{font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;align-i
 	go srv.Serve(listener)
 
 	// Open browser
-	loginURL := fmt.Sprintf("%s/api/v1/auth/cli?port=%d&state=%s", serverURL, port, state)
+	loginURL := fmt.Sprintf("%s/api/v1/auth/cli?port=%d&state=%s&code_challenge=%s&code_challenge_method=S256",
+		serverURL, port, state, codeChallenge)
 	fmt.Printf("Opening browser to %s\n", loginURL)
 	fmt.Println("If the browser doesn't open, visit the URL manually.")
 	openBrowser(loginURL)
@@ -92,8 +106,31 @@ body{font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;align-i
 		return "", callbackErr
 	}
 
+	// Exchange authorization code + verifier for JWT
+	tokenReqBody, _ := json.Marshal(map[string]string{
+		"code":          code,
+		"code_verifier": codeVerifier,
+	})
+	tokenResp, err := http.Post(serverURL+"/api/v1/auth/token", "application/json", bytes.NewReader(tokenReqBody))
+	if err != nil {
+		return "", fmt.Errorf("failed to exchange code for token: %w", err)
+	}
+	defer tokenResp.Body.Close()
+
+	var tokenResult struct {
+		Token string `json:"token"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(tokenResp.Body).Decode(&tokenResult); err != nil {
+		return "", fmt.Errorf("failed to decode token response: %w", err)
+	}
+	if tokenResp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("token exchange failed: %s", tokenResult.Error)
+	}
+
 	// Use JWT to create an API key
-	c := New(serverURL, token)
+	c := New(serverURL, tokenResult.Token)
+	c.Version = cliVersion
 	var keyResp APIKeyResponse
 	if err := c.post("/api/v1/keys", map[string]string{"name": "hostedat-cli"}, &keyResp); err != nil {
 		return "", fmt.Errorf("failed to create API key: %w", err)

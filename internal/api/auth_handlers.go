@@ -3,6 +3,8 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"net/mail"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,6 +47,9 @@ func (h *AuthHandler) Register(c echo.Context) error {
 	}
 	if len(req.Password) < 8 {
 		return errorJSON(c, http.StatusBadRequest, "password must be at least 8 characters")
+	}
+	if _, err := mail.ParseAddress(req.Email); err != nil {
+		return errorJSON(c, http.StatusBadRequest, "invalid email format")
 	}
 
 	// Check registration settings
@@ -152,13 +157,34 @@ func (h *AuthHandler) Logout(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{"message": "logged out"})
 }
 
+func validatePort(port string) (int, error) {
+	p, err := strconv.Atoi(port)
+	if err != nil || p < 1 || p > 65535 {
+		return 0, fmt.Errorf("invalid port")
+	}
+	return p, nil
+}
+
 // CLILogin serves a self-contained HTML login form for CLI authentication.
-// GET /api/v1/auth/cli?port=PORT&state=STATE
+// GET /api/v1/auth/cli?port=PORT&state=STATE&code_challenge=CHALLENGE&code_challenge_method=S256
 func (h *AuthHandler) CLILogin(c echo.Context) error {
 	port := c.QueryParam("port")
 	state := c.QueryParam("state")
 	if port == "" || state == "" {
 		return errorJSON(c, http.StatusBadRequest, "port and state are required")
+	}
+	portNum, err := validatePort(port)
+	if err != nil {
+		return errorJSON(c, http.StatusBadRequest, "port must be a number between 1 and 65535")
+	}
+
+	codeChallenge := c.QueryParam("code_challenge")
+	codeChallengeMethod := c.QueryParam("code_challenge_method")
+	if codeChallenge == "" {
+		return errorJSON(c, http.StatusBadRequest, "code_challenge is required")
+	}
+	if codeChallengeMethod != "S256" {
+		return errorJSON(c, http.StatusBadRequest, "code_challenge_method must be S256")
 	}
 
 	html := fmt.Sprintf(`<!DOCTYPE html>
@@ -197,7 +223,7 @@ e.preventDefault();
 const errEl=document.getElementById('err');
 errEl.style.display='none';
 try{
-const r=await fetch('/api/v1/auth/cli',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('password').value,port:%q,state:%q})});
+const r=await fetch('/api/v1/auth/cli',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('password').value,port:"%d",state:%q,code_challenge:%q})});
 const d=await r.json();
 if(!r.ok){errEl.textContent=d.error||'Login failed';errEl.style.display='block';return}
 window.location.href=d.redirect;
@@ -205,19 +231,20 @@ window.location.href=d.redirect;
 });
 </script>
 </body>
-</html>`, port, state)
+</html>`, portNum, state, codeChallenge)
 
 	return c.HTML(http.StatusOK, html)
 }
 
 type cliLoginSubmitRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Port     string `json:"port"`
-	State    string `json:"state"`
+	Email         string `json:"email"`
+	Password      string `json:"password"`
+	Port          string `json:"port"`
+	State         string `json:"state"`
+	CodeChallenge string `json:"code_challenge"`
 }
 
-// CLILoginSubmit validates credentials and returns a redirect URL with a JWT.
+// CLILoginSubmit validates credentials and returns a redirect URL with an auth code.
 // POST /api/v1/auth/cli
 func (h *AuthHandler) CLILoginSubmit(c echo.Context) error {
 	var req cliLoginSubmitRequest
@@ -232,6 +259,13 @@ func (h *AuthHandler) CLILoginSubmit(c echo.Context) error {
 	if req.Port == "" || req.State == "" {
 		return errorJSON(c, http.StatusBadRequest, "port and state are required")
 	}
+	if req.CodeChallenge == "" {
+		return errorJSON(c, http.StatusBadRequest, "code_challenge is required")
+	}
+	portNum, err := validatePort(req.Port)
+	if err != nil {
+		return errorJSON(c, http.StatusBadRequest, "port must be a number between 1 and 65535")
+	}
 
 	var user models.User
 	if err := h.DB.Where("email = ?", req.Email).First(&user).Error; err != nil {
@@ -242,12 +276,77 @@ func (h *AuthHandler) CLILoginSubmit(c echo.Context) error {
 		return errorJSON(c, http.StatusUnauthorized, "invalid credentials")
 	}
 
+	code, err := auth.GenerateAuthCode()
+	if err != nil {
+		return errorJSON(c, http.StatusInternalServerError, "failed to generate auth code")
+	}
+
+	authCode := models.AuthCode{
+		Code:          code,
+		UserID:        user.ID,
+		CodeChallenge: req.CodeChallenge,
+		ExpiresAt:     time.Now().Add(60 * time.Second),
+	}
+	if err := h.DB.Create(&authCode).Error; err != nil {
+		return errorJSON(c, http.StatusInternalServerError, "failed to store auth code")
+	}
+
+	redirectURL := fmt.Sprintf("http://localhost:%d/callback?code=%s&state=%s", portNum, code, req.State)
+
+	return c.JSON(http.StatusOK, map[string]string{"redirect": redirectURL})
+}
+
+type tokenExchangeRequest struct {
+	Code         string `json:"code"`
+	CodeVerifier string `json:"code_verifier"`
+}
+
+// TokenExchange exchanges an authorization code + PKCE code verifier for a JWT.
+// POST /api/v1/auth/token
+func (h *AuthHandler) TokenExchange(c echo.Context) error {
+	var req tokenExchangeRequest
+	if err := c.Bind(&req); err != nil {
+		return errorJSON(c, http.StatusBadRequest, "invalid request body")
+	}
+
+	if req.Code == "" || req.CodeVerifier == "" {
+		return errorJSON(c, http.StatusBadRequest, "code and code_verifier are required")
+	}
+
+	var authCode models.AuthCode
+	if err := h.DB.Where("code = ?", req.Code).First(&authCode).Error; err != nil {
+		return errorJSON(c, http.StatusUnauthorized, "invalid authorization code")
+	}
+
+	if authCode.Used {
+		return errorJSON(c, http.StatusUnauthorized, "authorization code already used")
+	}
+
+	if time.Now().After(authCode.ExpiresAt) {
+		return errorJSON(c, http.StatusUnauthorized, "authorization code expired")
+	}
+
+	if !auth.VerifyCodeChallenge(req.CodeVerifier, authCode.CodeChallenge) {
+		return errorJSON(c, http.StatusUnauthorized, "code verifier mismatch")
+	}
+
+	// Atomically mark as used — check RowsAffected for race safety
+	result := h.DB.Model(&models.AuthCode{}).
+		Where("id = ? AND used = ?", authCode.ID, false).
+		Update("used", true)
+	if result.RowsAffected == 0 {
+		return errorJSON(c, http.StatusUnauthorized, "authorization code already used")
+	}
+
+	var user models.User
+	if err := h.DB.First(&user, "id = ?", authCode.UserID).Error; err != nil {
+		return errorJSON(c, http.StatusInternalServerError, "user not found")
+	}
+
 	token, err := auth.GenerateToken(user.ID, user.Email, user.Role, h.JWTSecret)
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to generate token")
 	}
 
-	redirectURL := fmt.Sprintf("http://localhost:%s/callback?token=%s&state=%s", req.Port, token, req.State)
-
-	return c.JSON(http.StatusOK, map[string]string{"redirect": redirectURL})
+	return c.JSON(http.StatusOK, map[string]string{"token": token})
 }

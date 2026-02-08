@@ -1,14 +1,26 @@
 package api
 
 import (
+	"net/http"
+
 	"github.com/cryguy/hostedat/internal/config"
 	"github.com/cryguy/hostedat/internal/storage"
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
+	"golang.org/x/time/rate"
 	"gorm.io/gorm"
 )
 
-func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storage.Manager) {
+func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storage.Manager, serverVersion string) {
 	api := e.Group("/api/v1")
+
+	// Public version endpoint
+	api.GET("/version", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{
+			"version":         serverVersion,
+			"min_cli_version": cfg.MinCLIVersion,
+		})
+	})
 
 	authHandler := &AuthHandler{DB: db, JWTSecret: cfg.JWTSecret}
 	siteHandler := &SiteHandler{DB: db, Storage: store}
@@ -16,16 +28,21 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	apiKeyHandler := &APIKeyHandler{DB: db}
 	adminHandler := &AdminHandler{DB: db, Storage: store}
 
-	// Public auth routes
-	authGroup := api.Group("/auth")
+	// Public auth routes — stricter rate limit (5 req/s per IP)
+	// Auth is Bearer-token only (JWT/API key), never cookies, so CSRF is not applicable.
+	authGroup := api.Group("/auth", middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(5))))
 	authGroup.POST("/register", authHandler.Register)
 	authGroup.POST("/login", authHandler.Login)
 	authGroup.POST("/logout", authHandler.Logout)
 	authGroup.GET("/cli", authHandler.CLILogin)
 	authGroup.POST("/cli", authHandler.CLILoginSubmit)
+	authGroup.POST("/token", authHandler.TokenExchange)
+
+	// Version check middleware for authenticated routes
+	versionCheck := VersionCheckMiddleware(cfg.MinCLIVersion)
 
 	// Protected routes
-	protected := api.Group("", AuthMiddleware(db, cfg.JWTSecret))
+	protected := api.Group("", AuthMiddleware(db, cfg.JWTSecret), versionCheck)
 
 	// Site routes
 	sites := protected.Group("/sites")

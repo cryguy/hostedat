@@ -115,6 +115,23 @@ func (i *Invite) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+type AuthCode struct {
+	ID            string    `gorm:"primaryKey;size:20" json:"id"`
+	Code          string    `gorm:"uniqueIndex;not null" json:"-"`
+	UserID        string    `gorm:"not null" json:"user_id"`
+	CodeChallenge string    `gorm:"not null" json:"-"`
+	Used          bool      `gorm:"default:false" json:"-"`
+	ExpiresAt     time.Time `gorm:"not null" json:"-"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+func (a *AuthCode) BeforeCreate(tx *gorm.DB) error {
+	if a.ID == "" {
+		a.ID = generateID()
+	}
+	return nil
+}
+
 type Setting struct {
 	Key   string `gorm:"primaryKey" json:"key"`
 	Value string `gorm:"not null" json:"value"`

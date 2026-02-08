@@ -12,7 +12,7 @@ import (
 const (
 	maxFileSize  = 100 << 20 // 100 MB per file
 	maxFileCount = 10000
-	maxZipSize   = 500 << 20 // 500 MB total
+	MaxZipSize   = 500 << 20 // 500 MB total
 )
 
 type Manager struct {
@@ -24,8 +24,8 @@ func NewManager(basePath string) *Manager {
 }
 
 func (m *Manager) ExtractZip(siteID string, version int, reader io.ReaderAt, size int64) error {
-	if size > maxZipSize {
-		return fmt.Errorf("zip file too large (max %d bytes)", maxZipSize)
+	if size > MaxZipSize {
+		return fmt.Errorf("zip file too large (max %d bytes)", MaxZipSize)
 	}
 
 	zr, err := zip.NewReader(reader, size)
@@ -60,7 +60,15 @@ func (m *Manager) ExtractZip(siteID string, version int, reader io.ReaderAt, siz
 			return fmt.Errorf("zip slip detected: %s", name)
 		}
 
-		if f.FileInfo().IsDir() {
+		mode := f.FileInfo().Mode()
+		if mode&os.ModeSymlink != 0 {
+			return fmt.Errorf("zip contains symlink: %s", name)
+		}
+		if !mode.IsDir() && !mode.IsRegular() {
+			return fmt.Errorf("zip contains unsupported file type: %s", name)
+		}
+
+		if mode.IsDir() {
 			if err := os.MkdirAll(destPath, 0755); err != nil {
 				return fmt.Errorf("creating dir %s: %w", name, err)
 			}
@@ -141,6 +149,20 @@ func (m *Manager) ResolveFile(deploymentPath, requestPath string) (string, bool)
 
 	// Try exact path
 	fullPath := filepath.Join(deploymentPath, filepath.FromSlash(requestPath))
+
+	// Path traversal protection
+	absDeployment, err := filepath.Abs(deploymentPath)
+	if err != nil {
+		return "", false
+	}
+	absFullPath, err := filepath.Abs(fullPath)
+	if err != nil {
+		return "", false
+	}
+	if !strings.HasPrefix(absFullPath, absDeployment+string(os.PathSeparator)) && absFullPath != absDeployment {
+		return "", false
+	}
+
 	if isFile(fullPath) {
 		return fullPath, true
 	}

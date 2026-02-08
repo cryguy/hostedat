@@ -5,7 +5,7 @@ CLI_PKG := ./cmd/hostedat
 DIST_DIR := dist
 
 # Build version from git
-VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION := $(shell cat VERSION 2>/dev/null | tr -d '[:space:]' || echo dev)
 
 # Read build-time config from build.env
 -include build.env
