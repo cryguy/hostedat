@@ -160,11 +160,32 @@ import CodeBlock from '../components/CodeBlock.astro';
           <span class="text-xs font-bold text-emerald-400 font-mono">1</span>
         </div>
         <h3 class="text-lg font-semibold text-zinc-100 mb-1">Download the CLI</h3>
-        <p class="text-sm text-zinc-500 mb-4">Grab the binary for your platform from the <a href="/downloads" class="text-emerald-400 hover:text-emerald-300 underline underline-offset-2 decoration-emerald-400/30">downloads page</a>.</p>
-        <CodeBlock
-          code="# macOS / Linux\ncurl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-linux-amd64 -o hostedat\nchmod +x hostedat\nsudo mv hostedat /usr/local/bin/"
-          lang="bash"
-        />
+        <p class="text-sm text-zinc-500 mb-4">Grab the binary for your platform from the <a href="/downloads" class="text-emerald-400 hover:text-emerald-300 underline underline-offset-2 decoration-emerald-400/30">downloads page</a>, or use the commands below.</p>
+        <div class="platform-tabs">
+          <div class="flex gap-px bg-zinc-800/40 rounded-t-lg border border-b-0 border-zinc-800 overflow-hidden">
+            <button class="platform-tab active" data-platform="linux">Linux</button>
+            <button class="platform-tab" data-platform="macos">macOS</button>
+            <button class="platform-tab" data-platform="windows">Windows</button>
+          </div>
+          <div class="platform-panel active" data-platform="linux">
+            <CodeBlock
+              code={`# amd64\ncurl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-linux-amd64 -o hostedat\n\n# or arm64\ncurl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-linux-arm64 -o hostedat\n\nchmod +x hostedat\nsudo mv hostedat /usr/local/bin/`}
+              lang="bash"
+            />
+          </div>
+          <div class="platform-panel" data-platform="macos">
+            <CodeBlock
+              code={`# Apple Silicon (M1+)\ncurl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-darwin-arm64 -o hostedat\n\n# or Intel\ncurl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-darwin-amd64 -o hostedat\n\nchmod +x hostedat\nsudo mv hostedat /usr/local/bin/`}
+              lang="bash"
+            />
+          </div>
+          <div class="platform-panel" data-platform="windows">
+            <CodeBlock
+              code={`# amd64\ncurl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-windows-amd64.exe -o hostedat.exe\n\n# or arm64\ncurl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-windows-arm64.exe -o hostedat.exe\n\n# Then add hostedat.exe to your PATH`}
+              lang="bash"
+            />
+          </div>
+        </div>
       </div>
 
       <!-- Step 2 -->
@@ -279,6 +300,23 @@ import CodeBlock from '../components/CodeBlock.astro';
     }
   }
 
+  /* Platform tabs */
+  .platform-tabs .platform-tab {
+    @apply px-4 py-2 text-xs font-medium text-zinc-500 bg-zinc-900/40 hover:text-zinc-300 transition-colors cursor-pointer flex-1 text-center;
+  }
+  .platform-tabs .platform-tab.active {
+    @apply text-emerald-400 bg-zinc-900/80;
+  }
+  .platform-tabs .platform-panel {
+    @apply hidden;
+  }
+  .platform-tabs .platform-panel.active {
+    @apply block;
+  }
+  .platform-tabs .platform-panel :global(.code-block) {
+    @apply rounded-t-none border-t-0 my-0;
+  }
+
   /* Terminal line typing reveal */
   .terminal-line {
     opacity: 0;
@@ -294,3 +332,17 @@ import CodeBlock from '../components/CodeBlock.astro';
     }
   }
 </style>
+
+<script>
+  document.querySelectorAll('.platform-tabs').forEach(tabGroup => {
+    tabGroup.querySelectorAll('.platform-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const platform = tab.getAttribute('data-platform');
+        tabGroup.querySelectorAll('.platform-tab').forEach(t => t.classList.remove('active'));
+        tabGroup.querySelectorAll('.platform-panel').forEach(p => p.classList.remove('active'));
+        tab.classList.add('active');
+        tabGroup.querySelector(`.platform-panel[data-platform="${platform}"]`)?.classList.add('active');
+      });
+    });
+  });
+</script>

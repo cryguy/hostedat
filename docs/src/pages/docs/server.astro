@@ -11,18 +11,55 @@ import CodeBlock from '../../components/CodeBlock.astro';
   </p>
 
   <h2>Quick start</h2>
-  <p>Download the server binary for your platform from the <a href="/downloads">downloads page</a>, create a config file, and run it:</p>
+  <p>Download the server binary for your platform from the <a href="/downloads">downloads page</a>, create a config file, and run it.</p>
 
-  <CodeBlock
-    code={`# Download the server binary
+  <div class="platform-tabs">
+    <div class="flex gap-px bg-zinc-800/40 rounded-t-lg border border-b-0 border-zinc-800 overflow-hidden">
+      <button class="platform-tab active" data-platform="linux">Linux</button>
+      <button class="platform-tab" data-platform="macos">macOS</button>
+      <button class="platform-tab" data-platform="windows">Windows</button>
+    </div>
+    <div class="platform-panel active" data-platform="linux">
+      <CodeBlock
+        code={`# amd64
 curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-server-linux-amd64 -o hostedat-server
-chmod +x hostedat-server
 
-# Create config
-cp config.example.yaml config.yaml
+# or arm64
+curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-server-linux-arm64 -o hostedat-server
+
+chmod +x hostedat-server`}
+        lang="bash"
+      />
+    </div>
+    <div class="platform-panel" data-platform="macos">
+      <CodeBlock
+        code={`# Apple Silicon (M1+)
+curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-server-darwin-arm64 -o hostedat-server
+
+# or Intel
+curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-server-darwin-amd64 -o hostedat-server
+
+chmod +x hostedat-server`}
+        lang="bash"
+      />
+    </div>
+    <div class="platform-panel" data-platform="windows">
+      <CodeBlock
+        code={`# amd64
+Invoke-WebRequest -Uri https://docs.hostedat.ditto.moe/downloads/hostedat-server-windows-amd64.exe -OutFile hostedat-server.exe
+
+# or arm64
+Invoke-WebRequest -Uri https://docs.hostedat.ditto.moe/downloads/hostedat-server-windows-arm64.exe -OutFile hostedat-server.exe`}
+        lang="powershell"
+      />
+    </div>
+  </div>
+
+  <p>Then create a config and start the server:</p>
+  <CodeBlock
+    code={`cp config.example.yaml config.yaml
 # Edit config.yaml with your settings
 
-# Run
 ./hostedat-server`}
     lang="bash"
   />
@@ -196,3 +233,35 @@ sudo systemctl start hostedat`}
   <hr />
   <p>Next: <a href="/docs/configuration">Configuration Reference</a> for all config options.</p>
 </DocsLayout>
+
+<style>
+  .platform-tab {
+    @apply px-4 py-2 text-xs font-medium text-zinc-500 bg-zinc-900/40 hover:text-zinc-300 transition-colors cursor-pointer flex-1 text-center;
+  }
+  .platform-tab.active {
+    @apply text-emerald-400 bg-zinc-900/80;
+  }
+  .platform-panel {
+    @apply hidden;
+  }
+  .platform-panel.active {
+    @apply block;
+  }
+  .platform-panel :global(.code-block) {
+    @apply rounded-t-none border-t-0 my-0;
+  }
+</style>
+
+<script>
+  document.querySelectorAll('.platform-tabs').forEach(tabGroup => {
+    tabGroup.querySelectorAll('.platform-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const platform = tab.getAttribute('data-platform');
+        tabGroup.querySelectorAll('.platform-tab').forEach(t => t.classList.remove('active'));
+        tabGroup.querySelectorAll('.platform-panel').forEach(p => p.classList.remove('active'));
+        tab.classList.add('active');
+        tabGroup.querySelector(`.platform-panel[data-platform="${platform}"]`)?.classList.add('active');
+      });
+    });
+  });
+</script>

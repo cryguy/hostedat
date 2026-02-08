@@ -232,35 +232,54 @@ const sortFiles = (files: DownloadFile[]) =>
         <!-- Installation -->
         <section class="mb-16">
           <h2 class="text-xl font-semibold text-zinc-100 mb-6">Quick install</h2>
-          <div class="space-y-6">
-            <!-- Linux / macOS -->
-            <div class="rounded-xl border border-zinc-800/60 bg-zinc-900/30 overflow-hidden">
-              <div class="flex items-center gap-2 px-5 py-3 border-b border-zinc-800/40">
+          <div class="platform-tabs">
+            <div class="flex gap-px bg-zinc-800/40 rounded-t-xl border border-b-0 border-zinc-800/60 overflow-hidden">
+              <button class="platform-tab active" data-platform="linux">
                 <Fragment set:html={osIcon('linux')} />
-                <span class="text-xs text-zinc-500">/</span>
+                Linux
+              </button>
+              <button class="platform-tab" data-platform="macos">
                 <Fragment set:html={osIcon('darwin')} />
-                <span class="text-sm text-zinc-400 ml-1">Linux & macOS</span>
-              </div>
+                macOS
+              </button>
+              <button class="platform-tab" data-platform="windows">
+                <Fragment set:html={osIcon('windows')} />
+                Windows
+              </button>
+            </div>
+            <div class="platform-panel active rounded-b-xl border border-t-0 border-zinc-800/60 bg-zinc-900/30" data-platform="linux">
               <div class="p-5">
-                <pre class="text-sm font-mono text-zinc-400 leading-relaxed overflow-x-auto"><code><span class="text-zinc-600"># Download (replace OS and ARCH as needed)</span>
+                <pre class="text-sm font-mono text-zinc-400 leading-relaxed overflow-x-auto"><code><span class="text-zinc-600"># amd64</span>
 <span class="text-emerald-400">curl</span> -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-linux-amd64 -o hostedat
+
+<span class="text-zinc-600"># or arm64</span>
+<span class="text-emerald-400">curl</span> -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-linux-arm64 -o hostedat
+
 <span class="text-emerald-400">chmod</span> +x hostedat
 <span class="text-emerald-400">sudo</span> mv hostedat /usr/local/bin/
-
-<span class="text-zinc-600"># Verify</span>
 <span class="text-emerald-400">hostedat</span> version</code></pre>
               </div>
             </div>
-
-            <!-- Windows -->
-            <div class="rounded-xl border border-zinc-800/60 bg-zinc-900/30 overflow-hidden">
-              <div class="flex items-center gap-2 px-5 py-3 border-b border-zinc-800/40">
-                <Fragment set:html={osIcon('windows')} />
-                <span class="text-sm text-zinc-400 ml-1">Windows</span>
-              </div>
+            <div class="platform-panel rounded-b-xl border border-t-0 border-zinc-800/60 bg-zinc-900/30" data-platform="macos">
               <div class="p-5">
-                <pre class="text-sm font-mono text-zinc-400 leading-relaxed overflow-x-auto"><code><span class="text-zinc-600"># PowerShell</span>
+                <pre class="text-sm font-mono text-zinc-400 leading-relaxed overflow-x-auto"><code><span class="text-zinc-600"># Apple Silicon (M1+)</span>
+<span class="text-emerald-400">curl</span> -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-darwin-arm64 -o hostedat
+
+<span class="text-zinc-600"># or Intel</span>
+<span class="text-emerald-400">curl</span> -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-darwin-amd64 -o hostedat
+
+<span class="text-emerald-400">chmod</span> +x hostedat
+<span class="text-emerald-400">sudo</span> mv hostedat /usr/local/bin/
+<span class="text-emerald-400">hostedat</span> version</code></pre>
+              </div>
+            </div>
+            <div class="platform-panel rounded-b-xl border border-t-0 border-zinc-800/60 bg-zinc-900/30" data-platform="windows">
+              <div class="p-5">
+                <pre class="text-sm font-mono text-zinc-400 leading-relaxed overflow-x-auto"><code><span class="text-zinc-600"># amd64</span>
 <span class="text-emerald-400">Invoke-WebRequest</span> -Uri https://docs.hostedat.ditto.moe/downloads/hostedat-windows-amd64.exe -OutFile hostedat.exe
+
+<span class="text-zinc-600"># or arm64</span>
+<span class="text-emerald-400">Invoke-WebRequest</span> -Uri https://docs.hostedat.ditto.moe/downloads/hostedat-windows-arm64.exe -OutFile hostedat.exe
 
 <span class="text-zinc-600"># Add to PATH or move to a directory in PATH</span>
 <span class="text-emerald-400">.\hostedat.exe</span> version</code></pre>
@@ -323,5 +342,32 @@ const sortFiles = (files: DownloadFile[]) =>
       }, 2000);
     });
   });
+
+  document.querySelectorAll('.platform-tabs').forEach(tabGroup => {
+    tabGroup.querySelectorAll('.platform-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const platform = tab.getAttribute('data-platform');
+        tabGroup.querySelectorAll('.platform-tab').forEach(t => t.classList.remove('active'));
+        tabGroup.querySelectorAll('.platform-panel').forEach(p => p.classList.remove('active'));
+        tab.classList.add('active');
+        tabGroup.querySelector(`.platform-panel[data-platform="${platform}"]`)?.classList.add('active');
+      });
+    });
+  });
 </script>
+
+<style>
+  .platform-tab {
+    @apply px-4 py-2.5 text-xs font-medium text-zinc-500 bg-zinc-900/40 hover:text-zinc-300 transition-colors cursor-pointer flex-1 text-center inline-flex items-center justify-center gap-2;
+  }
+  .platform-tab.active {
+    @apply text-emerald-400 bg-zinc-900/80;
+  }
+  .platform-panel {
+    @apply hidden;
+  }
+  .platform-panel.active {
+    @apply block;
+  }
+</style>
 
