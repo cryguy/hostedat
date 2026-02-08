@@ -10,6 +10,8 @@ bin/
 data/
 config.yaml
 
+dist/
+
 # IDE
 .idea/
 .vscode/
