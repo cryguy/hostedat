@@ -1,0 +1,36 @@
+---
+const year = new Date().getFullYear();
+---
+
+<footer class="border-t border-zinc-800/60 mt-24">
+  <div class="max-w-6xl mx-auto px-6 py-12">
+    <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+      <!-- Brand -->
+      <div class="space-y-2">
+        <a href="/" class="text-zinc-100 font-semibold tracking-tight hover:text-emerald-400 transition-colors">
+          hostedat<span class="text-zinc-600 font-light">.ditto.moe</span>
+        </a>
+        <p class="text-sm text-zinc-600">Self-hosted static site hosting.</p>
+      </div>
+
+      <!-- Links -->
+      <div class="flex items-center gap-6 text-sm">
+        <a href="/docs/getting-started" class="text-zinc-500 hover:text-zinc-300 transition-colors">Docs</a>
+        <a href="/downloads" class="text-zinc-500 hover:text-zinc-300 transition-colors">Downloads</a>
+        <a href="https://hostedat.ditto.moe" target="_blank" rel="noopener noreferrer" class="text-zinc-500 hover:text-zinc-300 transition-colors">App</a>
+        <a
+          href="https://github.com/cryguy/hostedat"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="text-zinc-500 hover:text-zinc-300 transition-colors"
+        >
+          GitHub
+        </a>
+      </div>
+    </div>
+
+    <div class="mt-8 pt-6 border-t border-zinc-800/40 text-xs text-zinc-700">
+      &copy; {year} hostedat. MIT License.
+    </div>
+  </div>
+</footer>
