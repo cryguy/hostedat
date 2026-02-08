@@ -1,0 +1,327 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+interface DownloadFile {
+  name: string;
+  os: string;
+  arch: string;
+  type: 'cli' | 'server';
+  size: number;
+  sha256: string;
+}
+
+interface DownloadManifest {
+  version: string;
+  date: string;
+  files: DownloadFile[];
+}
+
+let manifest: DownloadManifest | null = null;
+try {
+  const res = await fetch(new URL('/downloads.json', Astro.url.origin));
+  if (res.ok) manifest = await res.json();
+} catch {
+  // Try reading from filesystem during build
+  try {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const filePath = path.join(process.cwd(), 'public', 'downloads.json');
+    const data = fs.readFileSync(filePath, 'utf-8');
+    manifest = JSON.parse(data);
+  } catch {
+    manifest = null;
+  }
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function osLabel(os: string): string {
+  const labels: Record<string, string> = { linux: 'Linux', darwin: 'macOS', windows: 'Windows' };
+  return labels[os] || os;
+}
+
+function archLabel(arch: string): string {
+  const labels: Record<string, string> = { amd64: 'x86_64', arm64: 'ARM64' };
+  return labels[arch] || arch;
+}
+
+function osIcon(os: string): string {
+  const icons: Record<string, string> = {
+    linux: `<svg class="w-4 h-4 text-zinc-400" viewBox="0 0 24 24" fill="currentColor"><path d="M12.504 0c-.155 0-.311.002-.465.006C7.55.162 4.122 4.756 4.122 9.78c0 1.263.275 2.46.756 3.546-.367.79-.61 1.644-.722 2.54-.137 1.093-.07 2.243.224 3.36.392 1.498 1.258 2.718 2.477 3.548.234.158.478.3.728.424-.165-.626-.248-1.278-.248-1.94 0-.766.122-1.5.346-2.183-.637-.61-1.074-1.416-1.263-2.313-.166-.79-.168-1.628.023-2.39.202-.81.57-1.518 1.07-2.09a6.83 6.83 0 0 1-.17-1.502c0-3.915 2.79-7.676 6.861-7.79a6.21 6.21 0 0 1 .387-.006c4.12 0 7.248 3.862 7.248 7.796a6.83 6.83 0 0 1-.17 1.502c.5.572.868 1.28 1.07 2.09.191.762.19 1.6.023 2.39-.189.897-.626 1.702-1.263 2.313.224.684.346 1.417.346 2.183 0 .662-.083 1.314-.248 1.94.25-.125.494-.266.728-.424 1.22-.83 2.085-2.05 2.477-3.548.294-1.117.361-2.267.224-3.36a7.37 7.37 0 0 0-.722-2.54c.481-1.087.756-2.283.756-3.546 0-5.024-3.428-9.618-7.917-9.774A8.63 8.63 0 0 0 12.504 0z"/></svg>`,
+    darwin: `<svg class="w-4 h-4 text-zinc-400" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>`,
+    windows: `<svg class="w-4 h-4 text-zinc-400" viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>`,
+  };
+  return icons[os] || '';
+}
+
+const cliFiles = manifest?.files.filter(f => f.type === 'cli') || [];
+const serverFiles = manifest?.files.filter(f => f.type === 'server') || [];
+
+// Sort: linux first, then darwin, then windows; amd64 before arm64
+const osOrder = ['linux', 'darwin', 'windows'];
+const sortFiles = (files: DownloadFile[]) =>
+  [...files].sort((a, b) => {
+    const osDiff = osOrder.indexOf(a.os) - osOrder.indexOf(b.os);
+    if (osDiff !== 0) return osDiff;
+    return a.arch === 'amd64' ? -1 : 1;
+  });
+---
+
+<Layout title="Downloads">
+  <div class="max-w-5xl mx-auto px-6 py-16 md:py-24">
+
+    <!-- Header -->
+    <div class="mb-16">
+      <h1 class="text-3xl md:text-4xl font-bold text-zinc-100 tracking-tight">Downloads</h1>
+      {manifest ? (
+        <div class="mt-4 flex flex-wrap items-center gap-3">
+          <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-sm font-mono text-emerald-400">
+            {manifest.version}
+          </span>
+          <span class="text-sm text-zinc-600">
+            Released {new Date(manifest.date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+          </span>
+        </div>
+      ) : (
+        <p class="mt-3 text-zinc-500">Pre-built binaries for Linux, macOS, and Windows.</p>
+      )}
+    </div>
+
+    {manifest ? (
+      <>
+        <!-- CLI Downloads -->
+        <section class="mb-20">
+          <div class="flex items-center gap-3 mb-6">
+            <div class="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center">
+              <svg class="w-4 h-4 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            </div>
+            <div>
+              <h2 class="text-xl font-semibold text-zinc-100">CLI</h2>
+              <p class="text-xs text-zinc-600">The <code class="text-emerald-400/70 bg-emerald-500/5 px-1 rounded">hostedat</code> command-line tool for deploying sites</p>
+            </div>
+          </div>
+
+          <div class="rounded-xl border border-zinc-800/60 overflow-hidden">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-zinc-800/60 bg-zinc-900/30">
+                    <th class="text-left font-medium text-zinc-500 px-5 py-3">Platform</th>
+                    <th class="text-left font-medium text-zinc-500 px-5 py-3">Arch</th>
+                    <th class="text-left font-medium text-zinc-500 px-5 py-3">Size</th>
+                    <th class="text-left font-medium text-zinc-500 px-5 py-3">SHA-256</th>
+                    <th class="text-right font-medium text-zinc-500 px-5 py-3"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortFiles(cliFiles).map((file, i) => (
+                    <tr class:list={["group hover:bg-zinc-900/40 transition-colors", i < cliFiles.length - 1 && "border-b border-zinc-800/30"]}>
+                      <td class="px-5 py-3.5">
+                        <div class="flex items-center gap-2.5">
+                          <Fragment set:html={osIcon(file.os)} />
+                          <span class="text-zinc-300">{osLabel(file.os)}</span>
+                        </div>
+                      </td>
+                      <td class="px-5 py-3.5">
+                        <span class="font-mono text-xs text-zinc-500 bg-zinc-800/50 px-2 py-0.5 rounded">{archLabel(file.arch)}</span>
+                      </td>
+                      <td class="px-5 py-3.5 text-zinc-500">{formatSize(file.size)}</td>
+                      <td class="px-5 py-3.5">
+                        <div class="flex items-center gap-2">
+                          <code class="text-[11px] text-zinc-600 font-mono truncate max-w-[120px] md:max-w-[200px]">{file.sha256}</code>
+                          <button
+                            class="checksum-copy shrink-0 p-1 rounded text-zinc-700 hover:text-zinc-400 hover:bg-zinc-800 transition-colors"
+                            data-checksum={file.sha256}
+                            aria-label="Copy checksum"
+                          >
+                            <svg class="copy-icon w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                            <svg class="check-icon w-3.5 h-3.5 hidden text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                          </button>
+                        </div>
+                      </td>
+                      <td class="px-5 py-3.5 text-right">
+                        <a
+                          href={`/downloads/${file.name}`}
+                          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-800/60 text-zinc-300 hover:bg-zinc-700/60 hover:text-zinc-100 border border-zinc-700/40 transition-all duration-150"
+                          download
+                        >
+                          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                          Download
+                        </a>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Server Downloads -->
+        <section class="mb-20">
+          <div class="flex items-center gap-3 mb-6">
+            <div class="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center">
+              <svg class="w-4 h-4 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+            </div>
+            <div>
+              <h2 class="text-xl font-semibold text-zinc-100">Server</h2>
+              <p class="text-xs text-zinc-600">The <code class="text-emerald-400/70 bg-emerald-500/5 px-1 rounded">hostedat-server</code> hosting platform binary</p>
+            </div>
+          </div>
+
+          <div class="rounded-xl border border-zinc-800/60 overflow-hidden">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-zinc-800/60 bg-zinc-900/30">
+                    <th class="text-left font-medium text-zinc-500 px-5 py-3">Platform</th>
+                    <th class="text-left font-medium text-zinc-500 px-5 py-3">Arch</th>
+                    <th class="text-left font-medium text-zinc-500 px-5 py-3">Size</th>
+                    <th class="text-left font-medium text-zinc-500 px-5 py-3">SHA-256</th>
+                    <th class="text-right font-medium text-zinc-500 px-5 py-3"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortFiles(serverFiles).map((file, i) => (
+                    <tr class:list={["group hover:bg-zinc-900/40 transition-colors", i < serverFiles.length - 1 && "border-b border-zinc-800/30"]}>
+                      <td class="px-5 py-3.5">
+                        <div class="flex items-center gap-2.5">
+                          <Fragment set:html={osIcon(file.os)} />
+                          <span class="text-zinc-300">{osLabel(file.os)}</span>
+                        </div>
+                      </td>
+                      <td class="px-5 py-3.5">
+                        <span class="font-mono text-xs text-zinc-500 bg-zinc-800/50 px-2 py-0.5 rounded">{archLabel(file.arch)}</span>
+                      </td>
+                      <td class="px-5 py-3.5 text-zinc-500">{formatSize(file.size)}</td>
+                      <td class="px-5 py-3.5">
+                        <div class="flex items-center gap-2">
+                          <code class="text-[11px] text-zinc-600 font-mono truncate max-w-[120px] md:max-w-[200px]">{file.sha256}</code>
+                          <button
+                            class="checksum-copy shrink-0 p-1 rounded text-zinc-700 hover:text-zinc-400 hover:bg-zinc-800 transition-colors"
+                            data-checksum={file.sha256}
+                            aria-label="Copy checksum"
+                          >
+                            <svg class="copy-icon w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                            <svg class="check-icon w-3.5 h-3.5 hidden text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                          </button>
+                        </div>
+                      </td>
+                      <td class="px-5 py-3.5 text-right">
+                        <a
+                          href={`/downloads/${file.name}`}
+                          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-800/60 text-zinc-300 hover:bg-zinc-700/60 hover:text-zinc-100 border border-zinc-700/40 transition-all duration-150"
+                          download
+                        >
+                          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                          Download
+                        </a>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Installation -->
+        <section class="mb-16">
+          <h2 class="text-xl font-semibold text-zinc-100 mb-6">Quick install</h2>
+          <div class="space-y-6">
+            <!-- Linux / macOS -->
+            <div class="rounded-xl border border-zinc-800/60 bg-zinc-900/30 overflow-hidden">
+              <div class="flex items-center gap-2 px-5 py-3 border-b border-zinc-800/40">
+                <Fragment set:html={osIcon('linux')} />
+                <span class="text-xs text-zinc-500">/</span>
+                <Fragment set:html={osIcon('darwin')} />
+                <span class="text-sm text-zinc-400 ml-1">Linux & macOS</span>
+              </div>
+              <div class="p-5">
+                <pre class="text-sm font-mono text-zinc-400 leading-relaxed overflow-x-auto"><code><span class="text-zinc-600"># Download (replace OS and ARCH as needed)</span>
+<span class="text-emerald-400">curl</span> -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-linux-amd64 -o hostedat
+<span class="text-emerald-400">chmod</span> +x hostedat
+<span class="text-emerald-400">sudo</span> mv hostedat /usr/local/bin/
+
+<span class="text-zinc-600"># Verify</span>
+<span class="text-emerald-400">hostedat</span> version</code></pre>
+              </div>
+            </div>
+
+            <!-- Windows -->
+            <div class="rounded-xl border border-zinc-800/60 bg-zinc-900/30 overflow-hidden">
+              <div class="flex items-center gap-2 px-5 py-3 border-b border-zinc-800/40">
+                <Fragment set:html={osIcon('windows')} />
+                <span class="text-sm text-zinc-400 ml-1">Windows</span>
+              </div>
+              <div class="p-5">
+                <pre class="text-sm font-mono text-zinc-400 leading-relaxed overflow-x-auto"><code><span class="text-zinc-600"># PowerShell</span>
+<span class="text-emerald-400">Invoke-WebRequest</span> -Uri https://docs.hostedat.ditto.moe/downloads/hostedat-windows-amd64.exe -OutFile hostedat.exe
+
+<span class="text-zinc-600"># Add to PATH or move to a directory in PATH</span>
+<span class="text-emerald-400">.\hostedat.exe</span> version</code></pre>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Verify checksums -->
+        <section>
+          <h2 class="text-xl font-semibold text-zinc-100 mb-4">Verify checksums</h2>
+          <p class="text-sm text-zinc-500 mb-5">Always verify the SHA-256 checksum after downloading to ensure the binary hasn't been tampered with.</p>
+          <div class="rounded-xl border border-zinc-800/60 bg-zinc-900/30 overflow-hidden">
+            <div class="p-5">
+              <pre class="text-sm font-mono text-zinc-400 leading-relaxed overflow-x-auto"><code><span class="text-zinc-600"># Linux</span>
+<span class="text-emerald-400">sha256sum</span> hostedat-linux-amd64
+
+<span class="text-zinc-600"># macOS</span>
+<span class="text-emerald-400">shasum</span> -a 256 hostedat-darwin-arm64
+
+<span class="text-zinc-600"># Windows (PowerShell)</span>
+<span class="text-emerald-400">Get-FileHash</span> hostedat-windows-amd64.exe -Algorithm SHA256</code></pre>
+            </div>
+          </div>
+        </section>
+      </>
+    ) : (
+      <!-- No releases yet -->
+      <div class="flex flex-col items-center justify-center py-24 text-center">
+        <div class="w-16 h-16 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-6">
+          <svg class="w-8 h-8 text-zinc-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </div>
+        <h2 class="text-xl font-semibold text-zinc-300 mb-2">No releases yet</h2>
+        <p class="text-sm text-zinc-600 max-w-sm">Pre-built binaries will appear here after the first release. In the meantime, you can build from source.</p>
+        <div class="mt-8 rounded-xl border border-zinc-800/60 bg-zinc-900/30 p-5 max-w-md w-full">
+          <pre class="text-sm font-mono text-zinc-400 leading-relaxed text-left"><code><span class="text-emerald-400">git</span> clone https://github.com/cryguy/hostedat.git
+<span class="text-emerald-400">cd</span> hostedat
+<span class="text-emerald-400">make</span> build</code></pre>
+        </div>
+      </div>
+    )}
+
+  </div>
+</Layout>
+
+<script>
+  document.querySelectorAll('.checksum-copy').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const checksum = (btn as HTMLElement).dataset.checksum || '';
+      await navigator.clipboard.writeText(checksum);
+
+      const copyIcon = btn.querySelector('.copy-icon');
+      const checkIcon = btn.querySelector('.check-icon');
+      copyIcon?.classList.add('hidden');
+      checkIcon?.classList.remove('hidden');
+
+      setTimeout(() => {
+        copyIcon?.classList.remove('hidden');
+        checkIcon?.classList.add('hidden');
+      }, 2000);
+    });
+  });
+</script>
+
