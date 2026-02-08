@@ -1,0 +1,67 @@
+export interface User {
+  id: string
+  email: string
+  role: "superadmin" | "admin" | "user"
+  invited_by?: string
+  created_at: string
+}
+
+export interface Site {
+  id: string
+  user_id: string
+  subdomain_slug: string
+  name: string
+  spa_mode: boolean
+  active_version: number | null
+  created_at: string
+}
+
+export interface Deployment {
+  id: string
+  site_id: string
+  version: number
+  file_hash: string
+  uploaded_at: string
+}
+
+export interface APIKey {
+  id: string
+  user_id: string
+  name: string
+  last_used_at?: string
+  created_at: string
+}
+
+export interface APIKeyCreateResponse {
+  id: string
+  name: string
+  key: string
+  created_at: string
+}
+
+export interface Invite {
+  id: string
+  code: string
+  created_by: string
+  max_uses?: number
+  use_count: number
+  expires_at?: string
+  active: boolean
+  created_at: string
+}
+
+export interface AuthResponse {
+  token: string
+  user: User
+}
+
+export interface UsersListResponse {
+  users: User[]
+  total: number
+  page: number
+}
+
+export interface InstanceSettings {
+  registration_enabled: boolean
+  invite_required: boolean
+}
