@@ -1,12 +1,296 @@
 ---
+import Layout from '../layouts/Layout.astro';
+import CodeBlock from '../components/CodeBlock.astro';
 ---
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width" />
-  <title>hostedat</title>
-</head>
-<body>
-  <h1>hostedat.ditto.moe</h1>
-</body>
-</html>
+
+<Layout title="Self-hosted static site hosting">
+
+  <!-- ═══ HERO ═══ -->
+  <section class="relative overflow-hidden">
+    <!-- Dot grid background -->
+    <div class="dot-grid"></div>
+    <!-- Radial glow -->
+    <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] bg-emerald-500/[0.04] rounded-full blur-[120px] pointer-events-none"></div>
+
+    <div class="relative max-w-6xl mx-auto px-6 pt-24 pb-20 md:pt-32 md:pb-28">
+      <!-- Badge -->
+      <div class="flex justify-center mb-8 hero-fade" style="--delay: 0">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-zinc-800 bg-zinc-900/60 text-xs text-zinc-500">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+          Open source &middot; Self-hosted &middot; Single binary
+        </div>
+      </div>
+
+      <!-- Headline -->
+      <h1 class="text-center hero-fade" style="--delay: 1">
+        <span class="block text-4xl md:text-6xl lg:text-7xl font-bold text-zinc-100 tracking-tight leading-[1.1]">
+          Your sites.<br/>
+          <span class="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-300">Your server.</span>
+        </span>
+      </h1>
+
+      <p class="mt-6 text-center text-lg md:text-xl text-zinc-500 max-w-2xl mx-auto leading-relaxed hero-fade" style="--delay: 2">
+        Static site hosting you actually own. Upload a zip, get a subdomain.<br class="hidden md:block" />
+        One binary. One command. Done.
+      </p>
+
+      <!-- CTA -->
+      <div class="flex flex-col sm:flex-row items-center justify-center gap-3 mt-10 hero-fade" style="--delay: 3">
+        <a href="/docs/getting-started" class="group relative inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-emerald-500 text-zinc-950 font-semibold text-sm hover:bg-emerald-400 transition-all duration-200 shadow-lg shadow-emerald-500/20 hover:shadow-emerald-400/30">
+          Get started
+          <svg class="w-4 h-4 group-hover:translate-x-0.5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+        </a>
+        <a href="/downloads" class="inline-flex items-center gap-2 px-6 py-3 rounded-lg border border-zinc-800 text-zinc-300 font-medium text-sm hover:border-zinc-700 hover:bg-zinc-900/60 transition-all duration-200">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download
+        </a>
+      </div>
+
+      <!-- Terminal demo -->
+      <div class="mt-16 max-w-2xl mx-auto hero-fade" style="--delay: 4">
+        <div class="rounded-xl border border-zinc-800 bg-zinc-900/80 overflow-hidden shadow-2xl shadow-black/40">
+          <!-- Title bar -->
+          <div class="flex items-center gap-2 px-4 py-3 border-b border-zinc-800/60 bg-zinc-900/60">
+            <div class="flex gap-1.5">
+              <div class="w-2.5 h-2.5 rounded-full bg-zinc-700"></div>
+              <div class="w-2.5 h-2.5 rounded-full bg-zinc-700"></div>
+              <div class="w-2.5 h-2.5 rounded-full bg-zinc-700"></div>
+            </div>
+            <span class="text-xs text-zinc-600 font-mono ml-2">~/myproject</span>
+          </div>
+          <!-- Terminal content -->
+          <div class="p-5 font-mono text-sm leading-loose">
+            <div class="terminal-line" style="--line-delay: 0">
+              <span class="text-emerald-400">$</span>
+              <span class="text-zinc-300 ml-2">hostedat deploy mysite ./dist</span>
+            </div>
+            <div class="terminal-line" style="--line-delay: 1">
+              <span class="text-zinc-600">Zipping directory...</span>
+            </div>
+            <div class="terminal-line" style="--line-delay: 2">
+              <span class="text-zinc-600">Uploading 2.4 MB...</span>
+            </div>
+            <div class="terminal-line" style="--line-delay: 3">
+              <span class="text-zinc-600">Deploying version 3...</span>
+            </div>
+            <div class="terminal-line" style="--line-delay: 4">
+              <span class="text-emerald-400">&#10003;</span>
+              <span class="text-zinc-300 ml-2">Live at</span>
+              <span class="text-emerald-400 ml-1">https://mysite.hostedat.ditto.moe</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ FEATURES ═══ -->
+  <section class="relative max-w-6xl mx-auto px-6 py-24">
+    <div class="text-center mb-16">
+      <h2 class="text-2xl md:text-3xl font-bold text-zinc-100 tracking-tight">Everything you need. Nothing you don't.</h2>
+      <p class="mt-3 text-zinc-500 max-w-lg mx-auto">A complete static hosting platform in a single binary. No containers, no orchestration, no nonsense.</p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-px bg-zinc-800/40 rounded-xl border border-zinc-800/60 overflow-hidden">
+      <!-- One-command deploy -->
+      <div class="bg-zinc-950 p-8 hover:bg-zinc-900/40 transition-colors duration-300 group">
+        <div class="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-4 group-hover:border-emerald-500/40 transition-colors">
+          <svg class="w-5 h-5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        </div>
+        <h3 class="text-zinc-100 font-semibold mb-2">One-command deploy</h3>
+        <p class="text-sm text-zinc-500 leading-relaxed"><code class="text-emerald-400/80 text-xs bg-emerald-500/5 px-1 rounded">hostedat deploy</code> zips your dist folder and pushes it live. Works from CI or your terminal.</p>
+      </div>
+
+      <!-- Automatic HTTPS -->
+      <div class="bg-zinc-950 p-8 hover:bg-zinc-900/40 transition-colors duration-300 group">
+        <div class="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-4 group-hover:border-emerald-500/40 transition-colors">
+          <svg class="w-5 h-5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </div>
+        <h3 class="text-zinc-100 font-semibold mb-2">Automatic HTTPS</h3>
+        <p class="text-sm text-zinc-500 leading-relaxed">Wildcard certs via Let's Encrypt + CertMagic. Every subdomain gets HTTPS automatically. Zero config.</p>
+      </div>
+
+      <!-- _redirects & _headers -->
+      <div class="bg-zinc-950 p-8 hover:bg-zinc-900/40 transition-colors duration-300 group">
+        <div class="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-4 group-hover:border-emerald-500/40 transition-colors">
+          <svg class="w-5 h-5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        </div>
+        <h3 class="text-zinc-100 font-semibold mb-2">_redirects & _headers</h3>
+        <p class="text-sm text-zinc-500 leading-relaxed">Netlify/Cloudflare Pages compatible. Drop in your existing redirect and header rules — they just work.</p>
+      </div>
+
+      <!-- SPA mode -->
+      <div class="bg-zinc-950 p-8 hover:bg-zinc-900/40 transition-colors duration-300 group">
+        <div class="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-4 group-hover:border-emerald-500/40 transition-colors">
+          <svg class="w-5 h-5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+        </div>
+        <h3 class="text-zinc-100 font-semibold mb-2">SPA mode</h3>
+        <p class="text-sm text-zinc-500 leading-relaxed">Toggle SPA fallback per-site. React, Vue, Svelte — client-side routing works out of the box.</p>
+      </div>
+
+      <!-- Admin dashboard -->
+      <div class="bg-zinc-950 p-8 hover:bg-zinc-900/40 transition-colors duration-300 group">
+        <div class="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-4 group-hover:border-emerald-500/40 transition-colors">
+          <svg class="w-5 h-5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+        </div>
+        <h3 class="text-zinc-100 font-semibold mb-2">Admin dashboard</h3>
+        <p class="text-sm text-zinc-500 leading-relaxed">Manage users, sites, and deployments from a web UI. Role-based access with superadmin, admin, and user tiers.</p>
+      </div>
+
+      <!-- Invite system -->
+      <div class="bg-zinc-950 p-8 hover:bg-zinc-900/40 transition-colors duration-300 group">
+        <div class="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-4 group-hover:border-emerald-500/40 transition-colors">
+          <svg class="w-5 h-5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
+        </div>
+        <h3 class="text-zinc-100 font-semibold mb-2">Invite system</h3>
+        <p class="text-sm text-zinc-500 leading-relaxed">Open registration or invite-only. Generate invite codes with usage limits and expiration dates.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ QUICK START ═══ -->
+  <section class="relative max-w-6xl mx-auto px-6 py-24">
+    <div class="max-w-3xl mx-auto">
+      <h2 class="text-2xl md:text-3xl font-bold text-zinc-100 tracking-tight mb-4">Up and running in three steps</h2>
+      <p class="text-zinc-500 mb-12">From zero to deployed in under a minute.</p>
+
+      <!-- Step 1 -->
+      <div class="relative pl-10 pb-12 border-l border-zinc-800">
+        <div class="absolute left-0 top-0 -translate-x-1/2 w-7 h-7 rounded-full bg-zinc-900 border-2 border-emerald-500/60 flex items-center justify-center">
+          <span class="text-xs font-bold text-emerald-400 font-mono">1</span>
+        </div>
+        <h3 class="text-lg font-semibold text-zinc-100 mb-1">Download the CLI</h3>
+        <p class="text-sm text-zinc-500 mb-4">Grab the binary for your platform from the <a href="/downloads" class="text-emerald-400 hover:text-emerald-300 underline underline-offset-2 decoration-emerald-400/30">downloads page</a>.</p>
+        <CodeBlock
+          code="# macOS / Linux\ncurl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-linux-amd64 -o hostedat\nchmod +x hostedat\nsudo mv hostedat /usr/local/bin/"
+          lang="bash"
+        />
+      </div>
+
+      <!-- Step 2 -->
+      <div class="relative pl-10 pb-12 border-l border-zinc-800">
+        <div class="absolute left-0 top-0 -translate-x-1/2 w-7 h-7 rounded-full bg-zinc-900 border-2 border-emerald-500/60 flex items-center justify-center">
+          <span class="text-xs font-bold text-emerald-400 font-mono">2</span>
+        </div>
+        <h3 class="text-lg font-semibold text-zinc-100 mb-1">Authenticate & create a site</h3>
+        <p class="text-sm text-zinc-500 mb-4">Log in via your browser and create a new site. You'll get a subdomain instantly.</p>
+        <CodeBlock
+          code={`hostedat login\nhostedat sites create my-portfolio`}
+          lang="bash"
+        />
+      </div>
+
+      <!-- Step 3 -->
+      <div class="relative pl-10">
+        <div class="absolute left-0 top-0 -translate-x-1/2 w-7 h-7 rounded-full bg-emerald-500 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+          <span class="text-xs font-bold text-zinc-950 font-mono">3</span>
+        </div>
+        <h3 class="text-lg font-semibold text-zinc-100 mb-1">Deploy</h3>
+        <p class="text-sm text-zinc-500 mb-4">Point it at your build output. That's it.</p>
+        <CodeBlock
+          code={`hostedat deploy my-portfolio ./dist\n\n# ✓ Live at https://my-portfolio.hostedat.ditto.moe`}
+          lang="bash"
+        />
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ WHY HOSTEDAT ═══ -->
+  <section class="relative max-w-6xl mx-auto px-6 py-24">
+    <div class="rounded-xl border border-zinc-800/60 bg-zinc-900/30 overflow-hidden">
+      <div class="p-8 md:p-12">
+        <h2 class="text-2xl md:text-3xl font-bold text-zinc-100 tracking-tight mb-3">Why not just use Cloudflare Pages?</h2>
+        <p class="text-zinc-500 max-w-2xl mb-10">You can. But if you want to own your infrastructure, hostedat gives you the same developer experience without the vendor lock-in.</p>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div class="space-y-2">
+            <div class="flex items-center gap-2 text-zinc-100 font-medium">
+              <svg class="w-4 h-4 text-emerald-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              Self-hosted
+            </div>
+            <p class="text-xs text-zinc-600 leading-relaxed">Runs on your VPS, your homelab, your Raspberry Pi. Your hardware, your rules.</p>
+          </div>
+          <div class="space-y-2">
+            <div class="flex items-center gap-2 text-zinc-100 font-medium">
+              <svg class="w-4 h-4 text-emerald-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              Single binary
+            </div>
+            <p class="text-xs text-zinc-600 leading-relaxed">No Docker, no Node runtime, no dependency hell. One binary with the frontend baked in.</p>
+          </div>
+          <div class="space-y-2">
+            <div class="flex items-center gap-2 text-zinc-100 font-medium">
+              <svg class="w-4 h-4 text-emerald-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              Your data
+            </div>
+            <p class="text-xs text-zinc-600 leading-relaxed">Sites, users, and deployments stay on your machine. SQLite by default, swap to Postgres if you want.</p>
+          </div>
+          <div class="space-y-2">
+            <div class="flex items-center gap-2 text-zinc-100 font-medium">
+              <svg class="w-4 h-4 text-emerald-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              No limits
+            </div>
+            <p class="text-xs text-zinc-600 leading-relaxed">No build minute caps, no bandwidth throttling, no surprise bills. Scale with your server.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ FINAL CTA ═══ -->
+  <section class="max-w-6xl mx-auto px-6 py-24 text-center">
+    <p class="text-sm font-mono text-zinc-600 mb-4 tracking-wider uppercase">Ready?</p>
+    <h2 class="text-3xl md:text-4xl font-bold text-zinc-100 tracking-tight mb-6">Start hosting in under a minute</h2>
+    <div class="flex flex-col sm:flex-row items-center justify-center gap-3">
+      <a href="/docs/getting-started" class="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-emerald-500 text-zinc-950 font-semibold text-sm hover:bg-emerald-400 transition-all duration-200 shadow-lg shadow-emerald-500/20">
+        Read the docs
+      </a>
+      <a href="https://github.com/cryguy/hostedat" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 px-6 py-3 rounded-lg border border-zinc-800 text-zinc-300 font-medium text-sm hover:border-zinc-700 hover:bg-zinc-900/60 transition-all duration-200">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+        View on GitHub
+      </a>
+    </div>
+  </section>
+
+</Layout>
+
+<style>
+  /* Dot grid pattern */
+  .dot-grid {
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(circle, rgba(63, 63, 70, 0.3) 1px, transparent 1px);
+    background-size: 32px 32px;
+    mask-image: radial-gradient(ellipse at center top, black 30%, transparent 70%);
+    -webkit-mask-image: radial-gradient(ellipse at center top, black 30%, transparent 70%);
+  }
+
+  /* Staggered hero entrance */
+  .hero-fade {
+    opacity: 0;
+    transform: translateY(12px);
+    animation: heroReveal 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation-delay: calc(var(--delay, 0) * 120ms + 100ms);
+  }
+
+  @keyframes heroReveal {
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* Terminal line typing reveal */
+  .terminal-line {
+    opacity: 0;
+    transform: translateX(-4px);
+    animation: lineReveal 0.4s ease forwards;
+    animation-delay: calc(var(--line-delay, 0) * 400ms + 1200ms);
+  }
+
+  @keyframes lineReveal {
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+</style>
