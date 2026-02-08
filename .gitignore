@@ -9,6 +9,7 @@ bin/
 # Data
 data/
 config.yaml
+deploy.env
 
 dist/
 
