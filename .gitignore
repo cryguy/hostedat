@@ -22,5 +22,12 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Docs site
+docs/node_modules/
+docs/dist/
+docs/.astro/
+docs/public/downloads/
+docs/public/downloads.json
+
 # Project
 CLAUDE.md
