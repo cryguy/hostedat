@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/cryguy/hostedat/internal/config"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
+	"github.com/cryguy/hostedat/web"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
@@ -66,6 +68,26 @@ func main() {
 	e.Use(api.SubdomainRouter(db, store, rulesCache, cfg.Domain))
 
 	api.RegisterRoutes(e, db, cfg, store)
+
+	// Serve embedded frontend (SPA fallback)
+	distFS, err := fs.Sub(web.DistFS, "dist")
+	if err != nil {
+		log.Fatalf("Failed to load embedded frontend: %v", err)
+	}
+	httpFS := http.FS(distFS)
+	fileServer := http.FileServer(httpFS)
+	e.GET("/*", echo.WrapHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Try serving the exact file first
+		path := r.URL.Path
+		if f, err := httpFS.Open(path); err == nil {
+			f.Close()
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		// SPA fallback: serve index.html for any unmatched route
+		r.URL.Path = "/"
+		fileServer.ServeHTTP(w, r)
+	})))
 
 	// Start with TLS if Cloudflare token is configured, otherwise plain HTTP
 	if cfg.Cloudflare.APIToken != "" {
