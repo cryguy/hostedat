@@ -189,11 +189,19 @@ func (e *Engine) GetOrCreatePool(siteID string, version int, env *Env) (*qjs.Poo
 		func(rt *qjs.Runtime) error {
 			return setupFetch(rt, cfg)
 		},
-		// Setup function 4: evaluate worker bytecode and store module
+		// Setup function 4: load worker module and extract default export
 		func(rt *qjs.Runtime) error {
-			moduleVal, err := rt.Eval("worker.js", qjs.Bytecode(bytecode))
+			// Load registers the compiled module in the runtime.
+			if _, err := rt.Load("worker.js", qjs.Bytecode(bytecode)); err != nil {
+				return fmt.Errorf("loading worker bytecode: %w", err)
+			}
+			// Import the default export from the registered module.
+			moduleVal, err := rt.Eval("__worker_import__.js",
+				qjs.Code(`import mod from 'worker.js'; export default mod;`),
+				qjs.TypeModule(),
+			)
 			if err != nil {
-				return fmt.Errorf("evaluating worker bytecode: %w", err)
+				return fmt.Errorf("importing worker module: %w", err)
 			}
 			rt.Context().Global().SetPropertyStr("__worker_module__", moduleVal)
 			return nil
