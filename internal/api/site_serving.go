@@ -223,7 +223,7 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 
 	var body []byte
 	if req.Body != nil {
-		body, _ = io.ReadAll(io.LimitReader(req.Body, 10<<20))
+		body, _ = io.ReadAll(io.LimitReader(req.Body, int64(workerEngine.MaxResponseBytes())))
 	}
 
 	workerReq := &worker.WorkerRequest{
@@ -254,45 +254,22 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 	for k, v := range resp.Headers {
 		c.Response().Header().Set(k, v)
 	}
-	return c.Blob(resp.StatusCode, c.Response().Header().Get("Content-Type"), resp.Body)
+	ct := c.Response().Header().Get("Content-Type")
+	if ct == "" {
+		ct = "text/plain"
+	}
+	return c.Blob(resp.StatusCode, ct, resp.Body)
 }
 
 func buildWorkerEnv(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, site *models.Site, version int, domain string) *worker.Env {
-	env := &worker.Env{
-		Vars:       make(map[string]string),
-		Secrets:    make(map[string]string),
-		KVBindings: make(map[string]string),
-	}
-
-	// Load env vars.
-	var envVars []models.WorkerEnvVar
-	db.Where("site_id = ?", site.ID).Find(&envVars)
-	for _, ev := range envVars {
-		if ev.Secret {
-			env.Secrets[ev.Name] = ev.Value
-		} else {
-			env.Vars[ev.Name] = ev.Value
-		}
-	}
-
-	// Load KV namespace bindings.
-	var kvNamespaces []models.KVNamespace
-	db.Where("site_id = ?", site.ID).Find(&kvNamespaces)
-	for _, ns := range kvNamespaces {
-		env.KVBindings[ns.Name] = ns.ID
-	}
-
-	// Assets fetcher.
-	env.Assets = &worker.StaticAssetsFetcher{
+	return worker.BuildEnvFromDB(db, site.ID, &worker.StaticAssetsFetcher{
 		Store:   store,
 		Cache:   cache,
 		SiteID:  site.ID,
 		Version: version,
 		SPAMode: site.SPAMode,
 		Domain:  domain,
-	}
-
-	return env
+	})
 }
 
 func storeWorkerLogs(db *gorm.DB, siteID string, logs []worker.LogEntry) {

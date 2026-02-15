@@ -430,3 +430,38 @@ func (e *Engine) Shutdown() {
 		return true
 	})
 }
+
+// MaxResponseBytes returns the configured maximum response body size.
+func (e *Engine) MaxResponseBytes() int {
+	return e.config.MaxResponseBytes
+}
+
+// BuildEnvFromDB loads environment variables, secrets, and KV bindings for
+// a site from the database. Pass an AssetsFetcher to enable env.ASSETS,
+// or nil if assets are not available (e.g., cron context).
+func BuildEnvFromDB(db *gorm.DB, siteID string, assets AssetsFetcher) *Env {
+	env := &Env{
+		Vars:       make(map[string]string),
+		Secrets:    make(map[string]string),
+		KVBindings: make(map[string]string),
+		Assets:     assets,
+	}
+
+	var envVars []models.WorkerEnvVar
+	db.Where("site_id = ?", siteID).Find(&envVars)
+	for _, ev := range envVars {
+		if ev.Secret {
+			env.Secrets[ev.Name] = ev.Value
+		} else {
+			env.Vars[ev.Name] = ev.Value
+		}
+	}
+
+	var kvNamespaces []models.KVNamespace
+	db.Where("site_id = ?", siteID).Find(&kvNamespaces)
+	for _, ns := range kvNamespaces {
+		env.KVBindings[ns.Name] = ns.ID
+	}
+
+	return env
+}

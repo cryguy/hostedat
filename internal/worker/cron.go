@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
@@ -79,7 +80,7 @@ func (cr *CronRunner) tick(now time.Time) {
 		cr.ensureBytecode(site.ID, version)
 
 		// Build env.
-		env := cr.buildEnv(&site, version)
+		env := BuildEnvFromDB(cr.db, site.ID, nil)
 
 		// Dispatch in goroutine.
 		go cr.dispatch(sched, site.ID, version, env)
@@ -90,32 +91,6 @@ func (cr *CronRunner) ensureBytecode(siteID string, version int) {
 	if err := cr.engine.EnsureBytecode(siteID, version); err != nil {
 		log.Printf("cron: failed to ensure bytecode for site %s v%d: %v", siteID, version, err)
 	}
-}
-
-func (cr *CronRunner) buildEnv(site *models.Site, version int) *Env {
-	env := &Env{
-		Vars:       make(map[string]string),
-		Secrets:    make(map[string]string),
-		KVBindings: make(map[string]string),
-	}
-
-	var envVars []models.WorkerEnvVar
-	cr.db.Where("site_id = ?", site.ID).Find(&envVars)
-	for _, ev := range envVars {
-		if ev.Secret {
-			env.Secrets[ev.Name] = ev.Value
-		} else {
-			env.Vars[ev.Name] = ev.Value
-		}
-	}
-
-	var kvNamespaces []models.KVNamespace
-	cr.db.Where("site_id = ?", site.ID).Find(&kvNamespaces)
-	for _, ns := range kvNamespaces {
-		env.KVBindings[ns.Name] = ns.ID
-	}
-
-	return env
 }
 
 func (cr *CronRunner) dispatch(sched models.CronSchedule, siteID string, version int, env *Env) {
@@ -201,4 +176,67 @@ func fieldMatches(field string, value int) bool {
 	}
 
 	return false
+}
+
+// ValidateCron checks if a cron expression is a valid 5-field format.
+// Fields: minute(0-59) hour(0-23) day(1-31) month(1-12) weekday(0-6).
+func ValidateCron(expr string) error {
+	fields := strings.Fields(expr)
+	if len(fields) != 5 {
+		return fmt.Errorf("cron expression must have exactly 5 fields (minute hour day month weekday)")
+	}
+
+	limits := []struct {
+		name string
+		min  int
+		max  int
+	}{
+		{"minute", 0, 59},
+		{"hour", 0, 23},
+		{"day", 1, 31},
+		{"month", 1, 12},
+		{"weekday", 0, 6},
+	}
+
+	for i, field := range fields {
+		if err := validateCronField(field, limits[i].min, limits[i].max, limits[i].name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateCronField(field string, min, max int, name string) error {
+	if field == "*" {
+		return nil
+	}
+	if strings.HasPrefix(field, "*/") {
+		step, err := strconv.Atoi(field[2:])
+		if err != nil || step <= 0 {
+			return fmt.Errorf("invalid step value in %s field: %s", name, field)
+		}
+		return nil
+	}
+	for _, part := range strings.Split(field, ",") {
+		if strings.Contains(part, "-") {
+			bounds := strings.SplitN(part, "-", 2)
+			low, err1 := strconv.Atoi(bounds[0])
+			high, err2 := strconv.Atoi(bounds[1])
+			if err1 != nil || err2 != nil {
+				return fmt.Errorf("invalid range in %s field: %s", name, part)
+			}
+			if low < min || high > max || low > high {
+				return fmt.Errorf("range out of bounds in %s field: %s (allowed %d-%d)", name, part, min, max)
+			}
+			continue
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil {
+			return fmt.Errorf("invalid value in %s field: %s", name, part)
+		}
+		if n < min || n > max {
+			return fmt.Errorf("value out of range in %s field: %d (allowed %d-%d)", name, n, min, max)
+		}
+	}
+	return nil
 }

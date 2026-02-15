@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/cryguy/hostedat/internal/models"
+	"github.com/cryguy/hostedat/internal/worker"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
@@ -236,6 +237,10 @@ func (h *WorkerHandler) CreateCronSchedule(c echo.Context) error {
 
 	if req.Cron == "" {
 		return errorJSON(c, http.StatusBadRequest, "cron is required")
+	}
+
+	if err := worker.ValidateCron(req.Cron); err != nil {
+		return errorJSON(c, http.StatusBadRequest, "invalid cron expression: "+err.Error())
 	}
 
 	enabled := true

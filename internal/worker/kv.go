@@ -36,8 +36,15 @@ func (kv *KVBridge) Get(key string) (string, error) {
 	return entry.Value, nil
 }
 
+// maxKVValueSize is the maximum size of a KV value (1 MB).
+const maxKVValueSize = 1 << 20
+
 // Put upserts a key-value pair with optional metadata and TTL (seconds).
 func (kv *KVBridge) Put(key, value string, metadata *string, ttl *int) error {
+	if len(value) > maxKVValueSize {
+		return fmt.Errorf("value exceeds maximum size of %d bytes", maxKVValueSize)
+	}
+
 	var expiresAt *time.Time
 	if ttl != nil && *ttl > 0 {
 		t := time.Now().Add(time.Duration(*ttl) * time.Second)
