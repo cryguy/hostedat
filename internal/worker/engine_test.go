@@ -290,3 +290,128 @@ func TestAsyncFetchHandler(t *testing.T) {
 
 	t.Logf("response: status=%d body=%q headers=%v", resp.StatusCode, string(resp.Body), resp.Headers)
 }
+
+// TestAssetsFetch tests that env.ASSETS.fetch(request) works correctly
+// by using a mock AssetsFetcher and running the full worker execution flow.
+func TestAssetsFetch(t *testing.T) {
+	source := `export default {
+  async fetch(request, env) {
+    return env.ASSETS.fetch(request);
+  },
+};`
+
+	cfg := config.WorkerConfig{
+		PoolSize:         2,
+		MemoryLimitMB:    128,
+		ExecutionTimeout: 5000,
+		MaxFetchRequests: 10,
+		FetchTimeoutSec:  5,
+		MaxResponseBytes: 1024 * 1024,
+	}
+
+	opt := qjs.Option{
+		Context:          context.Background(),
+		MemoryLimit:      cfg.MemoryLimitMB * 1024 * 1024,
+		MaxStackSize:     1024 * 1024,
+		MaxExecutionTime: cfg.ExecutionTimeout,
+		GCThreshold:      256 * 1024,
+	}
+
+	compileRT, err := qjs.New(opt)
+	if err != nil {
+		t.Fatalf("compile runtime: %v", err)
+	}
+	bytecode, err := compileRT.Compile("worker.js", qjs.Code(source), qjs.TypeModule())
+	compileRT.Close()
+	if err != nil {
+		t.Fatalf("compiling: %v", err)
+	}
+
+	pool := qjs.NewPool(cfg.PoolSize, opt,
+		setupWebAPIs,
+		setupConsole,
+		func(rt *qjs.Runtime) error {
+			return setupFetch(rt, cfg)
+		},
+		func(rt *qjs.Runtime) error {
+			if _, err := rt.Load("worker.js", qjs.Bytecode(bytecode)); err != nil {
+				return fmt.Errorf("loading: %w", err)
+			}
+			moduleVal, err := rt.Eval("__worker_import__.js",
+				qjs.Code(`import mod from 'worker.js'; export default mod;`),
+				qjs.TypeModule(),
+			)
+			if err != nil {
+				return fmt.Errorf("importing: %w", err)
+			}
+			rt.Context().Global().SetPropertyStr("__worker_module__", moduleVal)
+			return nil
+		},
+	)
+
+	rt, err := pool.Get()
+	if err != nil {
+		t.Fatalf("pool.Get: %v", err)
+	}
+	defer pool.Put(rt)
+
+	ctx := rt.Context()
+
+	// Build env with a mock ASSETS fetcher.
+	envObj := ctx.NewObject()
+	mockFetcher := &mockAssetsFetcher{
+		response: &WorkerResponse{
+			StatusCode: 200,
+			Headers:    map[string]string{"content-type": "text/html; charset=utf-8"},
+			Body:       []byte("<h1>Hello from ASSETS</h1>"),
+		},
+	}
+	envObj.SetPropertyStr("ASSETS", buildAssetsBinding(ctx, mockFetcher))
+
+	// Build Request.
+	requestCtor := ctx.Global().GetPropertyStr("Request")
+	jsReq := requestCtor.CallConstructor(ctx.NewString("http://localhost/index.html"), ctx.NewObject())
+	requestCtor.Free()
+
+	defaultExport := ctx.Global().GetPropertyStr("__worker_module__")
+	fetchResult, err := defaultExport.InvokeJS("fetch", jsReq, envObj, ctx.NewObject())
+	defaultExport.Free()
+	if err != nil {
+		t.Fatalf("invoking fetch: %v", err)
+	}
+
+	if fetchResult.IsPromise() {
+		awaited, err := fetchResult.Await()
+		fetchResult.Free()
+		if err != nil {
+			t.Fatalf("awaiting: %v", err)
+		}
+		fetchResult = awaited
+	}
+
+	resp, err := jsResponseToGo(ctx, fetchResult)
+	fetchResult.Free()
+	if err != nil {
+		t.Fatalf("jsResponseToGo: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("response is nil")
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected status 200, got %d", resp.StatusCode)
+	}
+	if string(resp.Body) != "<h1>Hello from ASSETS</h1>" {
+		t.Fatalf("unexpected body: %q", string(resp.Body))
+	}
+	t.Logf("ASSETS.fetch: status=%d body=%q", resp.StatusCode, string(resp.Body))
+}
+
+// mockAssetsFetcher implements AssetsFetcher for testing.
+type mockAssetsFetcher struct {
+	response *WorkerResponse
+	err      error
+}
+
+func (m *mockAssetsFetcher) Fetch(req *WorkerRequest) (*WorkerResponse, error) {
+	return m.response, m.err
+}

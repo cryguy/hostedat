@@ -106,12 +106,12 @@ func (h *DeployHandler) Deploy(c echo.Context) error {
 		if mkErr := os.MkdirAll(bcDir, 0755); mkErr == nil {
 			_ = os.WriteFile(filepath.Join(bcDir, "bytecode.bin"), bytecode, 0644)
 		}
-
-		// Invalidate old pool if there was a previous version
-		if site.ActiveVersion != nil {
-			h.WorkerEngine.InvalidatePool(siteID, *site.ActiveVersion)
-		}
 	}
+
+	// Save the old active version before updating so we can invalidate its pool
+	// AFTER the DB update, avoiding a race where requests see the old version
+	// but find no valid pool for it.
+	oldActiveVersion := site.ActiveVersion
 
 	// Create deployment record
 	deployment := models.Deployment{
@@ -129,6 +129,12 @@ func (h *DeployHandler) Deploy(c echo.Context) error {
 		"active_version": nextVersion,
 		"has_worker":     hasWorker,
 	})
+
+	// Invalidate old worker pool AFTER DB update. This ensures requests
+	// reading the old version still have a valid pool until the switch.
+	if hasWorker && h.WorkerEngine != nil && oldActiveVersion != nil {
+		h.WorkerEngine.InvalidatePool(siteID, *oldActiveVersion)
+	}
 
 	return c.JSON(http.StatusCreated, deployment)
 }

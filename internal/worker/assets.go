@@ -191,19 +191,19 @@ func contentType(filePath string) string {
 	return ct
 }
 
-// buildAssetsBinding creates a JS object with an async fetch(request) method
-// that delegates to the given AssetsFetcher.
+// buildAssetsBinding creates a JS object with a fetch(request) method
+// that delegates to the given AssetsFetcher. This is synchronous because
+// Fetch is local file I/O, and calling the Response constructor from a
+// goroutine causes WASM thread-safety crashes.
 func buildAssetsBinding(ctx *qjs.Context, fetcher AssetsFetcher) *qjs.Value {
 	assets := ctx.NewObject()
 
 	fetchFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
 		c := this.Context()
 		args := this.Args()
-		promise := this.Promise()
 
 		if len(args) == 0 {
-			go func() { promise.Reject(c.NewError(fmt.Errorf("ASSETS.fetch requires a request argument"))) }()
-			return c.NewUndefined(), nil
+			return nil, fmt.Errorf("ASSETS.fetch requires a request argument")
 		}
 
 		// Convert JS Request to Go WorkerRequest.
@@ -242,38 +242,39 @@ func buildAssetsBinding(ctx *qjs.Context, fetcher AssetsFetcher) *qjs.Value {
 		}
 		bodyVal.Free()
 
-		go func() {
-			resp, err := fetcher.Fetch(goReq)
-			if err != nil {
-				promise.Reject(c.NewError(err))
-				return
-			}
+		resp, err := fetcher.Fetch(goReq)
+		if err != nil {
+			return nil, err
+		}
 
-			// Build JS Response from Go response.
-			headersObj := c.NewObject()
-			for k, v := range resp.Headers {
-				headersObj.SetPropertyStr(k, c.NewString(v))
-			}
+		// Build JS Response from Go response on the JS thread.
+		headersObj := c.NewObject()
+		for k, v := range resp.Headers {
+			headersObj.SetPropertyStr(k, c.NewString(v))
+		}
 
-			initObj := c.NewObject()
-			initObj.SetPropertyStr("status", c.NewInt32(int32(resp.StatusCode)))
-			initObj.SetPropertyStr("headers", headersObj)
+		initObj := c.NewObject()
+		initObj.SetPropertyStr("status", c.NewInt32(int32(resp.StatusCode)))
+		initObj.SetPropertyStr("headers", headersObj)
 
-			var bodyJS *qjs.Value
-			if resp.Body != nil {
-				bodyJS = c.NewString(string(resp.Body))
-			} else {
-				bodyJS = c.NewNull()
-			}
+		var bodyJS *qjs.Value
+		if resp.Body != nil {
+			bodyJS = c.NewString(string(resp.Body))
+		} else {
+			bodyJS = c.NewNull()
+		}
 
-			responseCtor := c.Global().GetPropertyStr("Response")
-			jsResp := responseCtor.CallConstructor(bodyJS, initObj)
-			responseCtor.Free()
+		responseCtor := c.Global().GetPropertyStr("Response")
+		jsResp := responseCtor.CallConstructor(bodyJS, initObj)
+		responseCtor.Free()
 
-			promise.Resolve(jsResp)
-		}()
-		return c.NewUndefined(), nil
-	}, true)
+		if jsResp.IsError() {
+			defer jsResp.Free()
+			return nil, fmt.Errorf("ASSETS.fetch: failed to create Response: %s", jsResp.String())
+		}
+
+		return jsResp, nil
+	}, false)
 	assets.SetPropertyStr("fetch", fetchFn)
 
 	return assets
