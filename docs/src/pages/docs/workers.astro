@@ -1,0 +1,348 @@
+---
+import DocsLayout from '../../layouts/DocsLayout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+---
+
+<DocsLayout title="Worker Runtime">
+  <h1>Worker Runtime</h1>
+  <p>
+    The worker runtime allows you to run server-side JavaScript to intercept and handle HTTP requests.
+    Include a <code>_worker.js</code> file in your deploy zip to use a Cloudflare Workers-compatible
+    runtime instead of the static file pipeline.
+  </p>
+
+  <h2>Overview</h2>
+  <p>
+    Workers give you full control over how requests are handled. Instead of serving static files directly,
+    you write JavaScript that receives incoming requests and returns responses. This enables dynamic content,
+    API endpoints, authentication, server-side rendering, and more — all while maintaining the simplicity
+    of a single-command deploy.
+  </p>
+  <p>
+    The runtime is powered by QuickJS (ES2023) compiled to WebAssembly via Wazero, providing a pure-Go,
+    zero-CGO implementation with fast cold starts and predictable performance.
+  </p>
+
+  <h2>Basic example</h2>
+  <p>
+    Create a <code>_worker.js</code> file in the root of your site directory. It must export a default
+    object with a <code>fetch()</code> handler:
+  </p>
+
+  <CodeBlock
+    title="_worker.js"
+    code={`export default {
+  async fetch(request, env, ctx) {
+    // request: Request object (method, url, headers, body)
+    // env: bindings (env vars, secrets, KV namespaces, ASSETS)
+    // ctx: execution context (waitUntil)
+    return new Response("Hello from worker!");
+  },
+
+  async scheduled(event, env, ctx) {
+    // event: { scheduledTime, cron }
+    // Called by cron triggers, not HTTP requests
+    console.log("Cron triggered:", event.cron);
+  }
+};`}
+    lang="js"
+  />
+
+  <p>
+    The <code>fetch()</code> handler is invoked for every HTTP request to your site's subdomain.
+    The <code>scheduled()</code> handler is optional and is called by cron triggers.
+  </p>
+
+  <h2>Available Web APIs</h2>
+  <p>Workers have access to a Cloudflare Workers-compatible subset of standard Web APIs:</p>
+
+  <ul>
+    <li>
+      <strong>Request / Response</strong> — Standard constructors with methods like <code>.text()</code>,
+      <code>.json()</code>, <code>.clone()</code>
+    </li>
+    <li>
+      <strong>Headers</strong> — Full get/set/has/delete/append/forEach API
+    </li>
+    <li>
+      <strong>URL / URLSearchParams</strong> — Standard URL parsing and manipulation
+    </li>
+    <li>
+      <strong>TextEncoder / TextDecoder</strong> — UTF-8 encoding and decoding
+    </li>
+    <li>
+      <strong>fetch()</strong> — Outbound HTTP requests (rate-limited, SSRF-protected — blocks private/loopback IPs)
+    </li>
+    <li>
+      <strong>console.log / warn / error</strong> — Captured to per-site log storage, viewable via API
+    </li>
+  </ul>
+
+  <CodeBlock
+    title="Example: JSON API endpoint"
+    code={`export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/api/hello") {
+      return new Response(JSON.stringify({ message: "Hello, world!" }), {
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    return new Response("Not found", { status: 404 });
+  }
+};`}
+    lang="js"
+  />
+
+  <h2>Environment bindings</h2>
+  <p>
+    The <code>env</code> parameter provides access to environment variables, secrets, KV namespaces,
+    and the static asset pipeline.
+  </p>
+
+  <h3>Environment variables & secrets</h3>
+  <p>
+    Set environment variables via the API or dashboard. Both are accessed the same way in code, but
+    secrets are masked in API list responses. Use secrets for API keys and sensitive values.
+  </p>
+
+  <CodeBlock
+    code={`export default {
+  async fetch(request, env, ctx) {
+    const apiKey = env.MY_API_KEY;  // secret
+    const apiUrl = env.API_URL;     // plain env var
+
+    // Use environment bindings in your requests
+    const headers = new Headers();
+    headers.set("Authorization", "Bearer " + apiKey);
+
+    const response = await fetch(apiUrl, { headers });
+    return response;
+  }
+};`}
+    lang="js"
+  />
+
+  <h3>KV Namespaces</h3>
+  <p>
+    KV namespaces provide persistent key-value storage backed by SQLite. Each namespace is isolated
+    and accessed via a simple async API. Maximum value size is 1 MB.
+  </p>
+
+  <CodeBlock
+    code={`export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/counter") {
+      // Get current count
+      const count = await env.MY_KV.get("counter") || "0";
+      const newCount = parseInt(count) + 1;
+
+      // Store new count with metadata
+      await env.MY_KV.put("counter", String(newCount), {
+        metadata: { lastUpdated: new Date().toISOString() }
+      });
+
+      return new Response("Count: " + newCount);
+    }
+
+    return new Response("Not found", { status: 404 });
+  }
+};`}
+    lang="js"
+  />
+
+  <h4>KV API reference</h4>
+  <ul>
+    <li>
+      <code>env.NAMESPACE.get(key)</code> → <code>Promise&lt;string|null&gt;</code>
+      — Retrieve a value by key
+    </li>
+    <li>
+      <code>env.NAMESPACE.put(key, value, options?)</code> → <code>Promise&lt;void&gt;</code>
+      — Store a value. Options: <code>{'{'} metadata?, expirationTtl? {'}'}</code>
+    </li>
+    <li>
+      <code>env.NAMESPACE.delete(key)</code> → <code>Promise&lt;void&gt;</code>
+      — Delete a key
+    </li>
+    <li>
+      <code>env.NAMESPACE.list(options?)</code> → <code>Promise&lt;{'{'} keys: [{'{'} name, metadata? {'}'}] {'}'}&gt;</code>
+      — List keys. Options: <code>{'{'} prefix?, limit? {'}'}</code>
+    </li>
+  </ul>
+
+  <h3>ASSETS binding</h3>
+  <p>
+    The special <code>env.ASSETS</code> binding provides access to the static file pipeline.
+    Use it to serve static files from your worker, allowing you to add authentication, logging,
+    or other middleware while still serving your site's static content.
+  </p>
+
+  <CodeBlock
+    code={`export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    // Require auth for /admin paths
+    if (url.pathname.startsWith("/admin")) {
+      const authHeader = request.headers.get("Authorization");
+      if (authHeader !== "Bearer secret-token") {
+        return new Response("Unauthorized", { status: 401 });
+      }
+    }
+
+    // Pass through to static files (respects _redirects, _headers, SPA mode, 404.html)
+    return env.ASSETS.fetch(request);
+  }
+};`}
+    lang="js"
+  />
+
+  <p>
+    <code>env.ASSETS.fetch(request)</code> serves files as if no worker existed — it respects
+    <code>_redirects</code>, <code>_headers</code>, SPA mode, and custom <code>404.html</code>.
+  </p>
+
+  <h2>Cron triggers</h2>
+  <p>
+    Cron schedules can be created via the API or dashboard. Each cron trigger calls the worker's
+    <code>scheduled()</code> handler at the specified interval.
+  </p>
+
+  <CodeBlock
+    code={`export default {
+  async scheduled(event, env, ctx) {
+    // event.cron contains the cron expression (e.g., "0 * * * *")
+    // event.scheduledTime is the Unix timestamp (ms) when this should have run
+
+    console.log("Running scheduled task:", event.cron);
+
+    // Example: clear old KV entries
+    const keys = await env.MY_KV.list();
+    for (const key of keys.keys) {
+      await env.MY_KV.delete(key.name);
+    }
+  }
+};`}
+    lang="js"
+  />
+
+  <h3>Cron format</h3>
+  <p>Standard 5-field cron format: <code>minute hour day month weekday</code></p>
+  <ul>
+    <li><code>*</code> — Any value</li>
+    <li><code>*/N</code> — Every N units (e.g., <code>*/15</code> = every 15 minutes)</li>
+    <li><code>0-30</code> — Ranges</li>
+    <li><code>0,15,30</code> — Comma-separated lists</li>
+  </ul>
+
+  <p>Examples:</p>
+  <ul>
+    <li><code>0 * * * *</code> — Every hour at minute 0</li>
+    <li><code>*/15 * * * *</code> — Every 15 minutes</li>
+    <li><code>0 0 * * *</code> — Daily at midnight</li>
+    <li><code>0 9 * * 1</code> — Every Monday at 9:00 AM</li>
+  </ul>
+
+  <h2>Worker lifecycle</h2>
+  <p>Understanding the worker lifecycle helps optimize performance and troubleshoot issues:</p>
+
+  <ol>
+    <li>
+      <strong>Deploy</strong> — When you upload a site with <code>_worker.js</code>, the server detects it
+      and compiles the script to QuickJS bytecode
+    </li>
+    <li>
+      <strong>Bytecode storage</strong> — Compiled bytecode is saved to disk for fast restarts
+    </li>
+    <li>
+      <strong>Runtime pool</strong> — A pool of pre-warmed JavaScript runtimes is created (size configurable
+      via <code>worker.pool_size</code>)
+    </li>
+    <li>
+      <strong>Request handling</strong> — Incoming requests are routed to an available runtime from the pool,
+      minimizing cold start latency
+    </li>
+    <li>
+      <strong>Redeploy</strong> — On a new deployment, the old pool is invalidated and new bytecode is compiled
+    </li>
+    <li>
+      <strong>Server restart</strong> — Bytecode is reloaded from disk (or recompiled from source as fallback)
+    </li>
+  </ol>
+
+  <h2>API routes</h2>
+  <p>
+    All worker-related settings are managed via the API under <code>/api/v1/sites/:id/worker/</code>.
+    These endpoints require authentication and site ownership.
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Method</th>
+        <th>Path</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>POST</code></td>
+        <td><code>/worker/env</code></td>
+        <td>Set environment variable (upsert by name)</td>
+      </tr>
+      <tr>
+        <td><code>GET</code></td>
+        <td><code>/worker/env</code></td>
+        <td>List environment variables (secrets masked)</td>
+      </tr>
+      <tr>
+        <td><code>DELETE</code></td>
+        <td><code>/worker/env/:varId</code></td>
+        <td>Delete environment variable</td>
+      </tr>
+      <tr>
+        <td><code>POST</code></td>
+        <td><code>/worker/kv</code></td>
+        <td>Create KV namespace</td>
+      </tr>
+      <tr>
+        <td><code>GET</code></td>
+        <td><code>/worker/kv</code></td>
+        <td>List KV namespaces</td>
+      </tr>
+      <tr>
+        <td><code>DELETE</code></td>
+        <td><code>/worker/kv/:nsId</code></td>
+        <td>Delete KV namespace and all entries</td>
+      </tr>
+      <tr>
+        <td><code>POST</code></td>
+        <td><code>/worker/crons</code></td>
+        <td>Create cron schedule</td>
+      </tr>
+      <tr>
+        <td><code>GET</code></td>
+        <td><code>/worker/crons</code></td>
+        <td>List cron schedules</td>
+      </tr>
+      <tr>
+        <td><code>DELETE</code></td>
+        <td><code>/worker/crons/:cronId</code></td>
+        <td>Delete cron schedule</td>
+      </tr>
+      <tr>
+        <td><code>GET</code></td>
+        <td><code>/worker/logs</code></td>
+        <td>Get recent worker logs (last 100, newest first)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <hr />
+  <p>Next: <a href="/docs/cli">CLI Reference</a> to learn how to deploy workers from the command line.</p>
+</DocsLayout>

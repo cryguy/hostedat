@@ -182,6 +182,19 @@ database:
     <code>_redirects</code> rule.
   </p>
 
+  <h2>Worker runtime</h2>
+  <p>
+    hostedat includes a Cloudflare Workers-compatible server-side JavaScript runtime. Include a
+    <code>_worker.js</code> file in your deployment to intercept HTTP requests with JavaScript instead
+    of serving static files directly. This enables dynamic content, API endpoints, authentication,
+    server-side rendering, and more.
+  </p>
+  <p>
+    Workers have access to environment variables, KV storage, cron triggers, and the <code>ASSETS</code>
+    binding to serve static files when needed. See the full <a href="/docs/workers">Worker Runtime</a> documentation
+    for API reference, examples, and lifecycle details.
+  </p>
+
   <h2>User roles</h2>
   <table>
     <thead>

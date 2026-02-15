@@ -41,7 +41,18 @@ registration:
 # Cloudflare DNS for Let's Encrypt wildcard cert
 # Leave api_token empty to disable TLS (dev mode)
 cloudflare:
-  api_token: ""`}
+  api_token: ""
+
+# Worker runtime settings
+worker:
+  pool_size: 4               # Pre-warmed JS runtimes per site
+  memory_limit_mb: 128       # Max memory per runtime
+  execution_timeout: 30000   # Max execution time in ms
+  max_fetch_requests: 50     # Max outbound fetch() calls per invocation
+  fetch_timeout_sec: 10      # Timeout per fetch() call
+  max_response_bytes: 10485760  # 10 MB max response body
+  max_log_retention: 7       # Days to keep worker logs
+  max_script_size_kb: 1024   # Max _worker.js file size`}
     lang="yaml"
   />
 
@@ -130,6 +141,62 @@ cloudflare:
     Cloudflare API token with <strong>Zone:DNS:Edit</strong> permission. Used for DNS-01 challenge
     to obtain wildcard TLS certificates from Let's Encrypt. Leave empty to run without TLS (development mode).
   </p>
+
+  <h3>worker.pool_size</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
+    <tbody><tr><td><code>int</code></td><td><code>4</code></td><td>No</td></tr></tbody>
+  </table>
+  <p>Number of pre-warmed JavaScript runtimes to maintain per site with a worker. Higher values reduce cold start latency but consume more memory.</p>
+
+  <h3>worker.memory_limit_mb</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
+    <tbody><tr><td><code>int</code></td><td><code>128</code></td><td>No</td></tr></tbody>
+  </table>
+  <p>Maximum memory per JavaScript runtime in megabytes. Workers exceeding this limit will be terminated.</p>
+
+  <h3>worker.execution_timeout</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
+    <tbody><tr><td><code>int</code></td><td><code>30000</code></td><td>No</td></tr></tbody>
+  </table>
+  <p>Maximum execution time for a single worker invocation in milliseconds. Requests exceeding this limit will be terminated with a timeout error.</p>
+
+  <h3>worker.max_fetch_requests</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
+    <tbody><tr><td><code>int</code></td><td><code>50</code></td><td>No</td></tr></tbody>
+  </table>
+  <p>Maximum number of outbound <code>fetch()</code> calls allowed per worker invocation. Prevents runaway request loops.</p>
+
+  <h3>worker.fetch_timeout_sec</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
+    <tbody><tr><td><code>int</code></td><td><code>10</code></td><td>No</td></tr></tbody>
+  </table>
+  <p>Timeout for individual outbound <code>fetch()</code> calls in seconds. Requests taking longer will be aborted.</p>
+
+  <h3>worker.max_response_bytes</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
+    <tbody><tr><td><code>int</code></td><td><code>10485760</code></td><td>No</td></tr></tbody>
+  </table>
+  <p>Maximum response body size in bytes (default: 10 MB). Workers returning larger responses will be terminated.</p>
+
+  <h3>worker.max_log_retention</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
+    <tbody><tr><td><code>int</code></td><td><code>7</code></td><td>No</td></tr></tbody>
+  </table>
+  <p>Number of days to retain worker console logs. Older logs are automatically pruned.</p>
+
+  <h3>worker.max_script_size_kb</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
+    <tbody><tr><td><code>int</code></td><td><code>1024</code></td><td>No</td></tr></tbody>
+  </table>
+  <p>Maximum <code>_worker.js</code> file size in kilobytes. Deployments with larger worker scripts will be rejected.</p>
 
   <h2>Environment variables</h2>
   <p>The server does not read environment variables directly — all configuration is via the YAML file. However, the CLI supports these environment variables:</p>

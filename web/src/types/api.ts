@@ -12,6 +12,7 @@ export interface Site {
   subdomain_slug: string
   name: string
   spa_mode: boolean
+  has_worker: boolean
   active_version: number | null
   created_at: string
 }
@@ -64,4 +65,36 @@ export interface UsersListResponse {
 export interface InstanceSettings {
   registration_enabled: boolean
   invite_required: boolean
+}
+
+export interface WorkerEnvVar {
+  id: string
+  site_id: string
+  name: string
+  value: string
+  secret: boolean
+}
+
+export interface KVNamespace {
+  id: string
+  site_id: string
+  name: string
+  created_at: string
+}
+
+export interface CronSchedule {
+  id: string
+  site_id: string
+  cron: string
+  enabled: boolean
+  last_run_at?: string
+  created_at: string
+}
+
+export interface WorkerLog {
+  id: string
+  site_id: string
+  level: string
+  message: string
+  created_at: string
 }

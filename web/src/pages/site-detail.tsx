@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { DeployUpload } from "@/components/sites/deploy-upload"
 import { DeploymentList } from "@/components/sites/deployment-list"
 import { SiteSettings } from "@/components/sites/site-settings"
+import { WorkerPanel } from "@/components/sites/worker-panel"
 import type { Site, Deployment } from "@/types/api"
 
 const DOMAIN = "hostedat.ditto.moe"
@@ -85,6 +86,7 @@ export default function SiteDetailPage() {
         <TabsList>
           <TabsTrigger value="deploy">Deploy</TabsTrigger>
           <TabsTrigger value="deployments">Deployments</TabsTrigger>
+          <TabsTrigger value="worker">Worker</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
 
@@ -94,6 +96,10 @@ export default function SiteDetailPage() {
 
         <TabsContent value="deployments">
           <DeploymentList items={deps} activeVersion={site.active_version} />
+        </TabsContent>
+
+        <TabsContent value="worker">
+          <WorkerPanel siteId={site.id} hasWorker={site.has_worker} />
         </TabsContent>
 
         <TabsContent value="settings">

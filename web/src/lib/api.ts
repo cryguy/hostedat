@@ -8,6 +8,10 @@ import type {
   UsersListResponse,
   InstanceSettings,
   User,
+  WorkerEnvVar,
+  KVNamespace,
+  CronSchedule,
+  WorkerLog,
 } from "@/types/api"
 
 const TOKEN_KEY = "hostedat_token"
@@ -197,5 +201,47 @@ export const admin = {
     return request<{ message: string }>(`/admin/invites/${id}`, {
       method: "DELETE",
     })
+  },
+}
+
+export const workers = {
+  listEnv(siteId: string) {
+    return request<WorkerEnvVar[]>(`/sites/${siteId}/worker/env`)
+  },
+  setEnv(siteId: string, data: { name: string; value: string; secret: boolean }) {
+    return request<WorkerEnvVar>(`/sites/${siteId}/worker/env`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  },
+  deleteEnv(siteId: string, varId: string) {
+    return request<{ message: string }>(`/sites/${siteId}/worker/env/${varId}`, { method: "DELETE" })
+  },
+  listKV(siteId: string) {
+    return request<KVNamespace[]>(`/sites/${siteId}/worker/kv`)
+  },
+  createKV(siteId: string, name: string) {
+    return request<KVNamespace>(`/sites/${siteId}/worker/kv`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    })
+  },
+  deleteKV(siteId: string, nsId: string) {
+    return request<{ message: string }>(`/sites/${siteId}/worker/kv/${nsId}`, { method: "DELETE" })
+  },
+  listCrons(siteId: string) {
+    return request<CronSchedule[]>(`/sites/${siteId}/worker/crons`)
+  },
+  createCron(siteId: string, data: { cron: string; enabled: boolean }) {
+    return request<CronSchedule>(`/sites/${siteId}/worker/crons`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  },
+  deleteCron(siteId: string, cronId: string) {
+    return request<{ message: string }>(`/sites/${siteId}/worker/crons/${cronId}`, { method: "DELETE" })
+  },
+  getLogs(siteId: string) {
+    return request<WorkerLog[]>(`/sites/${siteId}/worker/logs`)
   },
 }
