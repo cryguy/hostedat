@@ -14,6 +14,7 @@ import (
 	"github.com/cryguy/hostedat/internal/config"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
+	"github.com/cryguy/hostedat/internal/worker"
 	"github.com/cryguy/hostedat/web"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -52,6 +53,17 @@ func main() {
 	if err := models.SeedDefaults(db, cfg); err != nil {
 		log.Fatalf("Failed to seed defaults: %v", err)
 	}
+
+	// Create worker engine
+	workerEngine := worker.NewEngine(cfg.Worker, db)
+	defer workerEngine.Shutdown()
+
+	store := storage.NewManager(cfg.StoragePath)
+	workerEngine.SetStore(store)
+
+	// Start cron runner
+	cronRunner := worker.NewCronRunner(db, workerEngine)
+	defer cronRunner.Shutdown()
 
 	e := echo.New()
 	e.HideBanner = true
@@ -92,13 +104,12 @@ func main() {
 	// Global rate limiter: 20 req/s per IP
 	e.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(20))))
 
-	store := storage.NewManager(cfg.StoragePath)
 	rulesCache := storage.NewSiteRulesCache()
 
 	// Subdomain router must come before API routes
-	e.Use(api.SubdomainRouter(db, store, rulesCache, cfg.Domain))
+	e.Use(api.SubdomainRouter(db, store, rulesCache, cfg.Domain, workerEngine))
 
-	api.RegisterRoutes(e, db, cfg, store, version)
+	api.RegisterRoutes(e, db, cfg, store, version, workerEngine)
 
 	// Serve embedded frontend (SPA fallback)
 	distFS, err := fs.Sub(web.DistFS, "dist")

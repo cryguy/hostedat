@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
@@ -15,8 +16,12 @@ import (
 )
 
 type DeployHandler struct {
-	DB      *gorm.DB
-	Storage *storage.Manager
+	DB           *gorm.DB
+	Storage      *storage.Manager
+	WorkerEngine interface {
+		CompileAndCache(siteID string, version int, source string) ([]byte, error)
+		InvalidatePool(siteID string, version int)
+	}
 }
 
 func (h *DeployHandler) Deploy(c echo.Context) error {
@@ -77,18 +82,53 @@ func (h *DeployHandler) Deploy(c echo.Context) error {
 		return errorJSON(c, http.StatusBadRequest, "invalid zip file")
 	}
 
+	// Check for _worker.js and compile if present
+	hasWorker := h.Storage.HasWorkerScript(siteID, nextVersion)
+	if hasWorker && h.WorkerEngine != nil {
+		source, err := h.Storage.GetWorkerScript(siteID, nextVersion)
+		if err != nil {
+			return errorJSON(c, http.StatusBadRequest, "failed to read _worker.js: "+err.Error())
+		}
+
+		// Validate script size
+		if len(source) > 1024*1024 { // 1MB default
+			return errorJSON(c, http.StatusBadRequest, "_worker.js exceeds maximum size")
+		}
+
+		// Compile to bytecode
+		bytecode, err := h.WorkerEngine.CompileAndCache(siteID, nextVersion, source)
+		if err != nil {
+			return errorJSON(c, http.StatusBadRequest, "worker compilation failed: "+err.Error())
+		}
+
+		// Save bytecode to disk for persistence across restarts
+		bcDir := h.Storage.GetWorkerBytecodeDir(siteID, nextVersion)
+		if mkErr := os.MkdirAll(bcDir, 0755); mkErr == nil {
+			_ = os.WriteFile(filepath.Join(bcDir, "bytecode.bin"), bytecode, 0644)
+		}
+
+		// Invalidate old pool if there was a previous version
+		if site.ActiveVersion != nil {
+			h.WorkerEngine.InvalidatePool(siteID, *site.ActiveVersion)
+		}
+	}
+
 	// Create deployment record
 	deployment := models.Deployment{
-		SiteID:   siteID,
-		Version:  nextVersion,
-		FileHash: fileHash,
+		SiteID:    siteID,
+		Version:   nextVersion,
+		FileHash:  fileHash,
+		HasWorker: hasWorker,
 	}
 	if err := h.DB.Create(&deployment).Error; err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to create deployment")
 	}
 
-	// Update site active version
-	h.DB.Model(&site).Update("active_version", nextVersion)
+	// Update site active version and worker flag
+	h.DB.Model(&site).Updates(map[string]interface{}{
+		"active_version": nextVersion,
+		"has_worker":     hasWorker,
+	})
 
 	return c.JSON(http.StatusCreated, deployment)
 }

@@ -43,6 +43,7 @@ type Site struct {
 	SubdomainSlug string    `gorm:"uniqueIndex;not null" json:"subdomain_slug"`
 	Name          string    `gorm:"not null" json:"name"`
 	SPAMode       bool      `gorm:"default:false" json:"spa_mode"`
+	HasWorker     bool      `gorm:"default:false" json:"has_worker"`
 	ActiveVersion *int      `json:"active_version"`
 	CreatedAt     time.Time `json:"created_at"`
 
@@ -62,6 +63,7 @@ type Deployment struct {
 	SiteID     string    `gorm:"index;not null" json:"site_id"`
 	Version    int       `gorm:"not null" json:"version"`
 	FileHash   string    `gorm:"not null" json:"file_hash"`
+	HasWorker  bool      `gorm:"default:false" json:"has_worker"`
 	UploadedAt time.Time `json:"uploaded_at"`
 
 	Site Site `gorm:"foreignKey:SiteID" json:"-"`
@@ -135,4 +137,92 @@ func (a *AuthCode) BeforeCreate(tx *gorm.DB) error {
 type Setting struct {
 	Key   string `gorm:"primaryKey" json:"key"`
 	Value string `gorm:"not null" json:"value"`
+}
+
+// Worker-related models
+
+type WorkerEnvVar struct {
+	ID     string `gorm:"primaryKey;size:20" json:"id"`
+	SiteID string `gorm:"index;not null" json:"site_id"`
+	Name   string `gorm:"not null" json:"name"`
+	Value  string `gorm:"not null" json:"value"`
+	Secret bool   `gorm:"default:false" json:"secret"`
+
+	Site Site `gorm:"foreignKey:SiteID" json:"-"`
+}
+
+func (w *WorkerEnvVar) BeforeCreate(tx *gorm.DB) error {
+	if w.ID == "" {
+		w.ID = generateID()
+	}
+	return nil
+}
+
+type KVNamespace struct {
+	ID     string    `gorm:"primaryKey;size:20" json:"id"`
+	SiteID string    `gorm:"index;not null" json:"site_id"`
+	Name   string    `gorm:"not null" json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+
+	Site Site `gorm:"foreignKey:SiteID" json:"-"`
+}
+
+func (k *KVNamespace) BeforeCreate(tx *gorm.DB) error {
+	if k.ID == "" {
+		k.ID = generateID()
+	}
+	return nil
+}
+
+type KVEntry struct {
+	ID          string     `gorm:"primaryKey;size:20" json:"id"`
+	NamespaceID string     `gorm:"index;not null" json:"namespace_id"`
+	Key         string     `gorm:"not null" json:"key"`
+	Value       string     `gorm:"type:text" json:"value"`
+	Metadata    *string    `gorm:"type:text" json:"metadata,omitempty"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+
+	Namespace KVNamespace `gorm:"foreignKey:NamespaceID" json:"-"`
+}
+
+func (k *KVEntry) BeforeCreate(tx *gorm.DB) error {
+	if k.ID == "" {
+		k.ID = generateID()
+	}
+	return nil
+}
+
+type CronSchedule struct {
+	ID        string     `gorm:"primaryKey;size:20" json:"id"`
+	SiteID    string     `gorm:"index;not null" json:"site_id"`
+	Cron      string     `gorm:"not null" json:"cron"`
+	Enabled   bool       `gorm:"default:true" json:"enabled"`
+	LastRunAt *time.Time `json:"last_run_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+
+	Site Site `gorm:"foreignKey:SiteID" json:"-"`
+}
+
+func (cs *CronSchedule) BeforeCreate(tx *gorm.DB) error {
+	if cs.ID == "" {
+		cs.ID = generateID()
+	}
+	return nil
+}
+
+type WorkerLog struct {
+	ID        string    `gorm:"primaryKey;size:20" json:"id"`
+	SiteID    string    `gorm:"index;not null" json:"site_id"`
+	Level     string    `gorm:"not null" json:"level"`
+	Message   string    `gorm:"type:text;not null" json:"message"`
+	CreatedAt time.Time `gorm:"index" json:"created_at"`
+
+	Site Site `gorm:"foreignKey:SiteID" json:"-"`
+}
+
+func (wl *WorkerLog) BeforeCreate(tx *gorm.DB) error {
+	if wl.ID == "" {
+		wl.ID = generateID()
+	}
+	return nil
 }

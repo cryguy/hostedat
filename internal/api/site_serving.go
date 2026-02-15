@@ -1,6 +1,8 @@
 package api
 
 import (
+	"log"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
+	"github.com/cryguy/hostedat/internal/worker"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
@@ -62,8 +65,8 @@ func isAllowedRedirectTarget(target, domain string) bool {
 
 // SubdomainRouter inspects the Host header and routes subdomain requests
 // to the static site handler. Bare-domain requests pass through to the API.
-func SubdomainRouter(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, domain string) echo.MiddlewareFunc {
-	handler := staticSiteHandler(db, store, cache, domain)
+func SubdomainRouter(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, domain string, workerEngine *worker.Engine) echo.MiddlewareFunc {
+	handler := staticSiteHandler(db, store, cache, domain, workerEngine)
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -102,7 +105,7 @@ func SubdomainRouter(db *gorm.DB, store *storage.Manager, cache *storage.SiteRul
 	}
 }
 
-func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, domain string) echo.HandlerFunc {
+func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, domain string, workerEngine *worker.Engine) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		subdomain, _ := c.Get("subdomain").(string)
 		if subdomain == "" {
@@ -120,6 +123,12 @@ func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteR
 		}
 
 		version := *site.ActiveVersion
+
+		// Worker intercept: if site has a worker, execute it before static pipeline
+		if site.HasWorker && workerEngine != nil {
+			return handleWorkerRequest(c, db, store, cache, &site, version, domain, workerEngine)
+		}
+
 		deployPath := store.GetDeploymentPath(site.ID, version)
 		reqPath := c.Request().URL.Path
 
@@ -194,6 +203,107 @@ func loadRules(store *storage.Manager, cache *storage.SiteRulesCache, siteID str
 
 	cache.Set(siteID, version, rules)
 	return rules
+}
+
+func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, site *models.Site, version int, domain string, workerEngine *worker.Engine) error {
+	// Build WorkerRequest from Echo context.
+	req := c.Request()
+	headers := make(map[string]string)
+	for k, vals := range req.Header {
+		if len(vals) > 0 {
+			headers[strings.ToLower(k)] = vals[0]
+		}
+	}
+
+	scheme := "https"
+	if req.TLS == nil {
+		scheme = "http"
+	}
+	fullURL := scheme + "://" + req.Host + req.RequestURI
+
+	var body []byte
+	if req.Body != nil {
+		body, _ = io.ReadAll(io.LimitReader(req.Body, 10<<20))
+	}
+
+	workerReq := &worker.WorkerRequest{
+		Method:  req.Method,
+		URL:     fullURL,
+		Headers: headers,
+		Body:    body,
+	}
+
+	// Build Env: load env vars, secrets, KV bindings from DB.
+	env := buildWorkerEnv(db, store, cache, site, version, domain)
+
+	// Execute worker.
+	result := workerEngine.Execute(site.ID, version, env, workerReq)
+
+	// Store logs async.
+	if len(result.Logs) > 0 {
+		go storeWorkerLogs(db, site.ID, result.Logs)
+	}
+
+	if result.Error != nil {
+		log.Printf("worker error for site %s: %v", site.ID, result.Error)
+		return errorJSON(c, http.StatusInternalServerError, "worker execution failed")
+	}
+
+	// Write response.
+	resp := result.Response
+	for k, v := range resp.Headers {
+		c.Response().Header().Set(k, v)
+	}
+	return c.Blob(resp.StatusCode, c.Response().Header().Get("Content-Type"), resp.Body)
+}
+
+func buildWorkerEnv(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, site *models.Site, version int, domain string) *worker.Env {
+	env := &worker.Env{
+		Vars:       make(map[string]string),
+		Secrets:    make(map[string]string),
+		KVBindings: make(map[string]string),
+	}
+
+	// Load env vars.
+	var envVars []models.WorkerEnvVar
+	db.Where("site_id = ?", site.ID).Find(&envVars)
+	for _, ev := range envVars {
+		if ev.Secret {
+			env.Secrets[ev.Name] = ev.Value
+		} else {
+			env.Vars[ev.Name] = ev.Value
+		}
+	}
+
+	// Load KV namespace bindings.
+	var kvNamespaces []models.KVNamespace
+	db.Where("site_id = ?", site.ID).Find(&kvNamespaces)
+	for _, ns := range kvNamespaces {
+		env.KVBindings[ns.Name] = ns.ID
+	}
+
+	// Assets fetcher.
+	env.Assets = &worker.StaticAssetsFetcher{
+		Store:   store,
+		Cache:   cache,
+		SiteID:  site.ID,
+		Version: version,
+		SPAMode: site.SPAMode,
+		Domain:  domain,
+	}
+
+	return env
+}
+
+func storeWorkerLogs(db *gorm.DB, siteID string, logs []worker.LogEntry) {
+	for _, l := range logs {
+		db.Create(&models.WorkerLog{
+			SiteID:    siteID,
+			Level:     l.Level,
+			Message:   l.Message,
+			CreatedAt: l.Time,
+		})
+	}
 }
 
 func serveFile(c echo.Context, filePath string) error {

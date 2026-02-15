@@ -186,3 +186,24 @@ func isFile(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
 }
+
+// HasWorkerScript checks if a _worker.js file exists in the deployment.
+func (m *Manager) HasWorkerScript(siteID string, version int) bool {
+	workerPath := filepath.Join(m.GetDeploymentPath(siteID, version), "_worker.js")
+	return isFile(workerPath)
+}
+
+// GetWorkerScript reads the _worker.js source from a deployment.
+func (m *Manager) GetWorkerScript(siteID string, version int) (string, error) {
+	workerPath := filepath.Join(m.GetDeploymentPath(siteID, version), "_worker.js")
+	data, err := os.ReadFile(workerPath)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// GetWorkerBytecodeDir returns the path to the .worker directory for a deployment.
+func (m *Manager) GetWorkerBytecodeDir(siteID string, version int) string {
+	return filepath.Join(m.GetDeploymentPath(siteID, version), ".worker")
+}

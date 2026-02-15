@@ -33,3 +33,15 @@ registration:
 # Leave empty to run without TLS (dev mode).
 cloudflare:
   api_token: ""
+
+# Worker (server-side JavaScript) configuration.
+# Workers use QuickJS (ES2023) compiled to WASM via Wazero — pure Go, zero CGO.
+worker:
+  pool_size: 4               # Pre-warmed JS runtimes per site
+  memory_limit_mb: 128       # Max memory per runtime
+  execution_timeout: 30000   # Max execution time in ms
+  max_fetch_requests: 50     # Max outbound fetch() calls per invocation
+  fetch_timeout_sec: 10      # Timeout per fetch() call
+  max_response_bytes: 10485760  # 10 MB max response body
+  max_log_retention: 7       # Days to keep worker logs
+  max_script_size_kb: 1024   # Max _worker.js file size

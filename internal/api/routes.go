@@ -5,13 +5,14 @@ import (
 
 	"github.com/cryguy/hostedat/internal/config"
 	"github.com/cryguy/hostedat/internal/storage"
+	"github.com/cryguy/hostedat/internal/worker"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"golang.org/x/time/rate"
 	"gorm.io/gorm"
 )
 
-func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storage.Manager, serverVersion string) {
+func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storage.Manager, serverVersion string, workerEngine *worker.Engine) {
 	api := e.Group("/api/v1")
 
 	// Public version endpoint
@@ -24,9 +25,10 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 
 	authHandler := &AuthHandler{DB: db, JWTSecret: cfg.JWTSecret}
 	siteHandler := &SiteHandler{DB: db, Storage: store}
-	deployHandler := &DeployHandler{DB: db, Storage: store}
+	deployHandler := &DeployHandler{DB: db, Storage: store, WorkerEngine: workerEngine}
 	apiKeyHandler := &APIKeyHandler{DB: db}
 	adminHandler := &AdminHandler{DB: db, Storage: store}
+	workerHandler := &WorkerHandler{DB: db}
 
 	// Public auth routes — stricter rate limit (5 req/s per IP)
 	// Auth is Bearer-token only (JWT/API key), never cookies, so CSRF is not applicable.
@@ -55,6 +57,18 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	// Deployment routes
 	sites.POST("/:id/deploy", deployHandler.Deploy)
 	sites.GET("/:id/deployments", deployHandler.List)
+
+	// Worker routes
+	sites.POST("/:id/worker/env", workerHandler.SetEnvVar)
+	sites.GET("/:id/worker/env", workerHandler.ListEnvVars)
+	sites.DELETE("/:id/worker/env/:varId", workerHandler.DeleteEnvVar)
+	sites.POST("/:id/worker/kv", workerHandler.CreateKVNamespace)
+	sites.GET("/:id/worker/kv", workerHandler.ListKVNamespaces)
+	sites.DELETE("/:id/worker/kv/:nsId", workerHandler.DeleteKVNamespace)
+	sites.POST("/:id/worker/crons", workerHandler.CreateCronSchedule)
+	sites.GET("/:id/worker/crons", workerHandler.ListCronSchedules)
+	sites.DELETE("/:id/worker/crons/:cronId", workerHandler.DeleteCronSchedule)
+	sites.GET("/:id/worker/logs", workerHandler.GetLogs)
 
 	// API key routes
 	keys := protected.Group("/keys")

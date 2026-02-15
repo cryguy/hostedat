@@ -19,6 +19,7 @@ require (
 require (
 	github.com/caddyserver/zerossl v0.1.4 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/fastschema/qjs v0.0.6 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -33,6 +34,7 @@ require (
 	github.com/miekg/dns v1.1.69 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
+	github.com/tetratelabs/wazero v1.9.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect

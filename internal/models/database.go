@@ -36,6 +36,11 @@ func InitDB(cfg config.DBConfig) (*gorm.DB, error) {
 		&Invite{},
 		&AuthCode{},
 		&Setting{},
+		&WorkerEnvVar{},
+		&KVNamespace{},
+		&KVEntry{},
+		&CronSchedule{},
+		&WorkerLog{},
 	); err != nil {
 		return nil, fmt.Errorf("auto-migrating: %w", err)
 	}

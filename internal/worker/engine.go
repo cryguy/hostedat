@@ -1,0 +1,432 @@
+package worker
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/cryguy/hostedat/internal/config"
+	"github.com/cryguy/hostedat/internal/models"
+	"github.com/cryguy/hostedat/internal/storage"
+	"github.com/fastschema/qjs"
+	"gorm.io/gorm"
+)
+
+// poolKey uniquely identifies a compiled worker version for a site.
+type poolKey struct {
+	SiteID  string
+	Version int
+}
+
+// sitePool wraps a qjs.Pool with an invalidation flag so that stale pools
+// are replaced transparently on the next Execute call.
+type sitePool struct {
+	pool    *qjs.Pool
+	invalid bool
+	mu      sync.RWMutex
+}
+
+func (sp *sitePool) isValid() bool {
+	sp.mu.RLock()
+	defer sp.mu.RUnlock()
+	return !sp.invalid
+}
+
+func (sp *sitePool) markInvalid() {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.invalid = true
+}
+
+// Engine manages per-site worker pools and executes JS worker scripts.
+type Engine struct {
+	pools     sync.Map // poolKey -> *sitePool
+	bytecodes sync.Map // poolKey -> []byte
+	config    config.WorkerConfig
+	db        *gorm.DB
+	store     *storage.Manager
+	logDone   chan struct{}
+}
+
+// NewEngine creates an Engine with the given configuration and database handle.
+// It starts a background goroutine for log retention cleanup.
+func NewEngine(cfg config.WorkerConfig, db *gorm.DB) *Engine {
+	e := &Engine{
+		config:  cfg,
+		db:      db,
+		logDone: make(chan struct{}),
+	}
+	go e.logRetentionLoop()
+	return e
+}
+
+// SetStore sets the storage manager for bytecode reload on server restart.
+func (e *Engine) SetStore(store *storage.Manager) {
+	e.store = store
+}
+
+// logRetentionLoop deletes worker logs older than max_log_retention days.
+func (e *Engine) logRetentionLoop() {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-e.logDone:
+			return
+		case <-ticker.C:
+			cutoff := time.Now().AddDate(0, 0, -e.config.MaxLogRetention)
+			if result := e.db.Where("created_at < ?", cutoff).Delete(&models.WorkerLog{}); result.Error != nil {
+				log.Printf("worker log cleanup error: %v", result.Error)
+			}
+		}
+	}
+}
+
+// EnsureBytecode loads bytecode from disk if not already in memory.
+// This handles the server restart scenario where pools and bytecodes are lost
+// but the compiled bytecode.bin files remain on disk.
+func (e *Engine) EnsureBytecode(siteID string, version int) error {
+	key := poolKey{SiteID: siteID, Version: version}
+	if _, ok := e.bytecodes.Load(key); ok {
+		return nil
+	}
+
+	if e.store == nil {
+		return fmt.Errorf("storage manager not set")
+	}
+
+	// Try reading cached bytecode from disk.
+	bcPath := filepath.Join(e.store.GetWorkerBytecodeDir(siteID, version), "bytecode.bin")
+	bytecode, err := os.ReadFile(bcPath)
+	if err == nil && len(bytecode) > 0 {
+		e.bytecodes.Store(key, bytecode)
+		return nil
+	}
+
+	// Fallback: recompile from source.
+	source, err := e.store.GetWorkerScript(siteID, version)
+	if err != nil {
+		return fmt.Errorf("no bytecode or source for site %s version %d: %w", siteID, version, err)
+	}
+
+	if _, err := e.CompileAndCache(siteID, version, source); err != nil {
+		return fmt.Errorf("recompiling worker: %w", err)
+	}
+
+	return nil
+}
+
+// CompileAndCache compiles a worker script into QuickJS bytecode and stores
+// it for later pool creation. The source must be a valid ES module that
+// exports a default object with a fetch() handler.
+func (e *Engine) CompileAndCache(siteID string, version int, source string) ([]byte, error) {
+	key := poolKey{SiteID: siteID, Version: version}
+
+	rt, err := qjs.New(qjs.Option{
+		Context:          context.Background(),
+		MemoryLimit:      e.config.MemoryLimitMB * 1024 * 1024,
+		MaxStackSize:     1024 * 1024,
+		MaxExecutionTime: e.config.ExecutionTimeout,
+		GCThreshold:      256 * 1024,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating compile runtime: %w", err)
+	}
+	defer rt.Close()
+
+	bytecode, err := rt.Compile("worker.js", qjs.Code(source), qjs.TypeModule())
+	if err != nil {
+		return nil, fmt.Errorf("compiling worker script: %w", err)
+	}
+
+	e.bytecodes.Store(key, bytecode)
+	return bytecode, nil
+}
+
+// GetOrCreatePool returns the runtime pool for the given site/version,
+// creating it if necessary. Each runtime in the pool has the Web APIs,
+// console, and fetch injected, and the compiled worker bytecode evaluated.
+func (e *Engine) GetOrCreatePool(siteID string, version int, env *Env) (*qjs.Pool, error) {
+	key := poolKey{SiteID: siteID, Version: version}
+
+	// Check for a valid existing pool.
+	if val, ok := e.pools.Load(key); ok {
+		sp := val.(*sitePool)
+		if sp.isValid() {
+			return sp.pool, nil
+		}
+		// Stale pool -- remove and create a new one.
+		e.pools.Delete(key)
+	}
+
+	// Load bytecode.
+	bcVal, ok := e.bytecodes.Load(key)
+	if !ok {
+		return nil, fmt.Errorf("no compiled bytecode for site %s version %d", siteID, version)
+	}
+	bytecode := bcVal.([]byte)
+
+	cfg := e.config
+	option := qjs.Option{
+		Context:          context.Background(),
+		MemoryLimit:      cfg.MemoryLimitMB * 1024 * 1024,
+		MaxStackSize:     1024 * 1024,
+		MaxExecutionTime: cfg.ExecutionTimeout,
+		GCThreshold:      256 * 1024,
+	}
+
+	pool := qjs.NewPool(cfg.PoolSize, option,
+		// Setup function 1: Web APIs (Headers, Request, Response, URL, etc.)
+		setupWebAPIs,
+		// Setup function 2: console capture
+		setupConsole,
+		// Setup function 3: fetch()
+		func(rt *qjs.Runtime) error {
+			return setupFetch(rt, cfg)
+		},
+		// Setup function 4: evaluate worker bytecode and store module
+		func(rt *qjs.Runtime) error {
+			moduleVal, err := rt.Eval("worker.js", qjs.Bytecode(bytecode))
+			if err != nil {
+				return fmt.Errorf("evaluating worker bytecode: %w", err)
+			}
+			rt.Context().Global().SetPropertyStr("__worker_module__", moduleVal)
+			return nil
+		},
+	)
+
+	sp := &sitePool{pool: pool}
+	e.pools.Store(key, sp)
+	return pool, nil
+}
+
+// Execute runs the worker's fetch handler for the given request and returns
+// the result including the response, captured logs, and any error.
+func (e *Engine) Execute(siteID string, version int, env *Env, req *WorkerRequest) *WorkerResult {
+	start := time.Now()
+	result := &WorkerResult{}
+
+	defer func() {
+		if r := recover(); r != nil {
+			result.Error = fmt.Errorf("worker panic: %v", r)
+		}
+		result.Duration = time.Since(start)
+	}()
+
+	// Ensure bytecode is loaded (handles server restart).
+	if err := e.EnsureBytecode(siteID, version); err != nil {
+		result.Error = err
+		return result
+	}
+
+	pool, err := e.GetOrCreatePool(siteID, version, env)
+	if err != nil {
+		result.Error = err
+		return result
+	}
+
+	rt, err := pool.Get()
+	if err != nil {
+		result.Error = fmt.Errorf("acquiring runtime from pool: %w", err)
+		return result
+	}
+	defer pool.Put(rt)
+
+	ctx := rt.Context()
+
+	// Set up per-request state.
+	reqID := newRequestState(e.config.MaxFetchRequests, env)
+	ctx.Global().SetPropertyStr("__requestID", ctx.NewInt64(int64(reqID)))
+
+	// Build the JS arguments: request, env, ctx.
+	jsReq, err := goRequestToJS(ctx, req)
+	if err != nil {
+		clearRequestState(reqID)
+		result.Error = fmt.Errorf("building JS request: %w", err)
+		return result
+	}
+
+	jsEnv := buildEnvObject(ctx, env, e.db)
+	jsCtx := buildExecContext(ctx)
+
+	// Call __worker_module__.default.fetch(request, env, ctx).
+	workerModule := ctx.Global().GetPropertyStr("__worker_module__")
+	defaultExport := workerModule.GetPropertyStr("default")
+	workerModule.Free()
+
+	if defaultExport.IsUndefined() || defaultExport.IsNull() {
+		defaultExport.Free()
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("worker module has no default export")
+		return result
+	}
+
+	fetchResult, err := defaultExport.InvokeJS("fetch", jsReq, jsEnv, jsCtx)
+	defaultExport.Free()
+
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("invoking worker fetch: %w", err)
+		return result
+	}
+
+	// The fetch handler returns a Promise<Response>.
+	if fetchResult.IsPromise() {
+		awaited, err := fetchResult.Await()
+		fetchResult.Free()
+		if err != nil {
+			state := clearRequestState(reqID)
+			if state != nil {
+				result.Logs = state.logs
+			}
+			result.Error = fmt.Errorf("awaiting worker response: %w", err)
+			return result
+		}
+		fetchResult = awaited
+	}
+
+	// Convert JS Response to Go.
+	resp, err := jsResponseToGo(ctx, fetchResult)
+	fetchResult.Free()
+
+	state := clearRequestState(reqID)
+	if state != nil {
+		result.Logs = state.logs
+	}
+
+	if err != nil {
+		result.Error = fmt.Errorf("converting worker response: %w", err)
+		return result
+	}
+
+	result.Response = resp
+	return result
+}
+
+// ExecuteScheduled runs the worker's scheduled handler for cron triggers.
+func (e *Engine) ExecuteScheduled(siteID string, version int, env *Env, cron string) *WorkerResult {
+	start := time.Now()
+	result := &WorkerResult{}
+
+	defer func() {
+		if r := recover(); r != nil {
+			result.Error = fmt.Errorf("worker panic: %v", r)
+		}
+		result.Duration = time.Since(start)
+	}()
+
+	pool, err := e.GetOrCreatePool(siteID, version, env)
+	if err != nil {
+		result.Error = err
+		return result
+	}
+
+	rt, err := pool.Get()
+	if err != nil {
+		result.Error = fmt.Errorf("acquiring runtime from pool: %w", err)
+		return result
+	}
+	defer pool.Put(rt)
+
+	ctx := rt.Context()
+
+	// Set up per-request state.
+	reqID := newRequestState(e.config.MaxFetchRequests, env)
+	ctx.Global().SetPropertyStr("__requestID", ctx.NewInt64(int64(reqID)))
+
+	// Build the scheduled event.
+	event := ctx.NewObject()
+	event.SetPropertyStr("scheduledTime", ctx.NewFloat64(float64(time.Now().UnixMilli())))
+	event.SetPropertyStr("cron", ctx.NewString(cron))
+
+	jsEnv := buildEnvObject(ctx, env, e.db)
+	jsCtx := buildExecContext(ctx)
+
+	// Call __worker_module__.default.scheduled(event, env, ctx).
+	workerModule := ctx.Global().GetPropertyStr("__worker_module__")
+	defaultExport := workerModule.GetPropertyStr("default")
+	workerModule.Free()
+
+	if defaultExport.IsUndefined() || defaultExport.IsNull() {
+		defaultExport.Free()
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("worker module has no default export")
+		return result
+	}
+
+	schedResult, err := defaultExport.InvokeJS("scheduled", event, jsEnv, jsCtx)
+	defaultExport.Free()
+
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("invoking worker scheduled: %w", err)
+		return result
+	}
+
+	// Await if the handler returns a promise.
+	if schedResult != nil && schedResult.IsPromise() {
+		awaited, err := schedResult.Await()
+		schedResult.Free()
+		if err != nil {
+			state := clearRequestState(reqID)
+			if state != nil {
+				result.Logs = state.logs
+			}
+			result.Error = fmt.Errorf("awaiting scheduled handler: %w", err)
+			return result
+		}
+		awaited.Free()
+	} else if schedResult != nil {
+		schedResult.Free()
+	}
+
+	state := clearRequestState(reqID)
+	if state != nil {
+		result.Logs = state.logs
+	}
+	return result
+}
+
+// InvalidatePool marks the pool for the given site/version as invalid.
+// The next Execute call will create a fresh pool.
+func (e *Engine) InvalidatePool(siteID string, version int) {
+	key := poolKey{SiteID: siteID, Version: version}
+	if val, ok := e.pools.LoadAndDelete(key); ok {
+		sp := val.(*sitePool)
+		sp.markInvalid()
+	}
+	e.bytecodes.Delete(key)
+}
+
+// Shutdown invalidates all pools, clears all cached bytecode, and stops
+// the log retention goroutine.
+func (e *Engine) Shutdown() {
+	close(e.logDone)
+	e.pools.Range(func(key, val any) bool {
+		sp := val.(*sitePool)
+		sp.markInvalid()
+		e.pools.Delete(key)
+		return true
+	})
+	e.bytecodes.Range(func(key, _ any) bool {
+		e.bytecodes.Delete(key)
+		return true
+	})
+}
