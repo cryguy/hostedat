@@ -16,6 +16,11 @@ import (
 // setupFetch registers the global fetch() function as a Go-backed async
 // function. It enforces per-request rate limits and blocks requests to
 // private/loopback addresses.
+//
+// The HTTP request runs synchronously on the JS thread. QuickJS/Wazero is
+// not thread-safe — building JS objects from goroutines causes WASM
+// out-of-bounds crashes. Each runtime serves one request at a time, so
+// blocking during the HTTP call is acceptable.
 func setupFetch(rt *qjs.Runtime, cfg config.WorkerConfig) error {
 	ctx := rt.Context()
 
@@ -135,53 +140,51 @@ func setupFetch(rt *qjs.Runtime, cfg config.WorkerConfig) error {
 		timeout := time.Duration(cfg.FetchTimeoutSec) * time.Second
 		maxBytes := int64(cfg.MaxResponseBytes)
 
-		go func() {
-			var bodyReader io.Reader
-			if body != "" {
-				bodyReader = strings.NewReader(body)
-			}
+		var bodyReader io.Reader
+		if body != "" {
+			bodyReader = strings.NewReader(body)
+		}
 
-			httpReq, err := http.NewRequest(method, fetchURL, bodyReader)
-			if err != nil {
-				promise.Reject(c.NewError(fmt.Errorf("fetch: %w", err)))
-				return
-			}
-			for k, v := range headers {
-				httpReq.Header.Set(k, v)
-			}
+		httpReq, err := http.NewRequest(method, fetchURL, bodyReader)
+		if err != nil {
+			promise.Reject(c.NewError(fmt.Errorf("fetch: %w", err)))
+			return
+		}
+		for k, v := range headers {
+			httpReq.Header.Set(k, v)
+		}
 
-			client := &http.Client{Timeout: timeout}
-			resp, err := client.Do(httpReq)
-			if err != nil {
-				promise.Reject(c.NewError(fmt.Errorf("fetch: %w", err)))
-				return
-			}
-			defer resp.Body.Close()
+		client := &http.Client{Timeout: timeout}
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			promise.Reject(c.NewError(fmt.Errorf("fetch: %w", err)))
+			return
+		}
+		defer resp.Body.Close()
 
-			respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
-			if err != nil {
-				promise.Reject(c.NewError(fmt.Errorf("fetch: reading body: %w", err)))
-				return
-			}
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
+		if err != nil {
+			promise.Reject(c.NewError(fmt.Errorf("fetch: reading body: %w", err)))
+			return
+		}
 
-			// Build Response-compatible JS object via constructor.
-			respHeaders := c.NewObject()
-			for k, vals := range resp.Header {
-				respHeaders.SetPropertyStr(strings.ToLower(k), c.NewString(strings.Join(vals, ", ")))
-			}
+		// Build Response-compatible JS object via constructor.
+		respHeaders := c.NewObject()
+		for k, vals := range resp.Header {
+			respHeaders.SetPropertyStr(strings.ToLower(k), c.NewString(strings.Join(vals, ", ")))
+		}
 
-			initObj := c.NewObject()
-			initObj.SetPropertyStr("status", c.NewInt32(int32(resp.StatusCode)))
-			initObj.SetPropertyStr("statusText", c.NewString(resp.Status))
-			initObj.SetPropertyStr("headers", respHeaders)
-			initObj.SetPropertyStr("url", c.NewString(fetchURL))
+		initObj := c.NewObject()
+		initObj.SetPropertyStr("status", c.NewInt32(int32(resp.StatusCode)))
+		initObj.SetPropertyStr("statusText", c.NewString(resp.Status))
+		initObj.SetPropertyStr("headers", respHeaders)
+		initObj.SetPropertyStr("url", c.NewString(fetchURL))
 
-			responseCtor := c.Global().GetPropertyStr("Response")
-			jsResp := responseCtor.CallConstructor(c.NewString(string(respBody)), initObj)
-			responseCtor.Free()
+		responseCtor := c.Global().GetPropertyStr("Response")
+		jsResp := responseCtor.CallConstructor(c.NewString(string(respBody)), initObj)
+		responseCtor.Free()
 
-			promise.Resolve(jsResp)
-		}()
+		promise.Resolve(jsResp)
 	})
 
 	return nil

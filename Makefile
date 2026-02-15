@@ -17,7 +17,7 @@ CLI_LDFLAGS := $(LDFLAGS) -X main.defaultServer=$(DEFAULT_SERVER)
 
 .PHONY: all clean frontend server cli build test
 .PHONY: build-linux build-darwin build-windows build-all
-.PHONY: docs docs-dev release deploy-docs
+.PHONY: docs docs-dev release deploy-docs full-release
 
 # Default: build frontend + server + cli for current platform
 all: frontend server cli
@@ -82,6 +82,8 @@ release:
 # Deploy docs site to hostedat (reads credentials from deploy.env)
 deploy-docs: docs
 	set -a && . ./deploy.env && set +a && bin/$(CLI_NAME) deploy $(DOCS_SITE) docs/dist
+
+full-release: release deploy-docs
 
 clean:
 	rm -rf bin/ $(DIST_DIR)/ web/dist/ web/node_modules/ docs/dist/ docs/node_modules/

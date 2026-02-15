@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cryguy/hostedat/internal/config"
@@ -128,11 +129,12 @@ func (e *Engine) CompileAndCache(siteID string, version int, source string) ([]b
 	key := poolKey{SiteID: siteID, Version: version}
 
 	rt, err := qjs.New(qjs.Option{
-		Context:          context.Background(),
-		MemoryLimit:      e.config.MemoryLimitMB * 1024 * 1024,
-		MaxStackSize:     1024 * 1024,
-		MaxExecutionTime: e.config.ExecutionTimeout,
-		GCThreshold:      256 * 1024,
+		Context:            context.Background(),
+		CloseOnContextDone: true, // Must match pool option to initialize global Wazero config correctly.
+		MemoryLimit:        e.config.MemoryLimitMB * 1024 * 1024,
+		MaxStackSize:       1024 * 1024,
+		MaxExecutionTime:   e.config.ExecutionTimeout,
+		GCThreshold:        256 * 1024,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating compile runtime: %w", err)
@@ -173,11 +175,12 @@ func (e *Engine) GetOrCreatePool(siteID string, version int, env *Env) (*qjs.Poo
 
 	cfg := e.config
 	option := qjs.Option{
-		Context:          context.Background(),
-		MemoryLimit:      cfg.MemoryLimitMB * 1024 * 1024,
-		MaxStackSize:     1024 * 1024,
-		MaxExecutionTime: cfg.ExecutionTimeout,
-		GCThreshold:      256 * 1024,
+		Context:            context.Background(),
+		CloseOnContextDone: true, // Required for rt.Close() to interrupt running WASM execution.
+		MemoryLimit:        cfg.MemoryLimitMB * 1024 * 1024,
+		MaxStackSize:       1024 * 1024,
+		MaxExecutionTime:   cfg.ExecutionTimeout,
+		GCThreshold:        256 * 1024,
 	}
 
 	pool := qjs.NewPool(cfg.PoolSize, option,
@@ -215,35 +218,64 @@ func (e *Engine) GetOrCreatePool(siteID string, version int, env *Env) (*qjs.Poo
 
 // Execute runs the worker's fetch handler for the given request and returns
 // the result including the response, captured logs, and any error.
-func (e *Engine) Execute(siteID string, version int, env *Env, req *WorkerRequest) *WorkerResult {
+func (e *Engine) Execute(siteID string, version int, env *Env, req *WorkerRequest) (result *WorkerResult) {
 	start := time.Now()
-	result := &WorkerResult{}
-
-	defer func() {
-		if r := recover(); r != nil {
-			result.Error = fmt.Errorf("worker panic: %v", r)
-		}
-		result.Duration = time.Since(start)
-	}()
+	result = &WorkerResult{}
 
 	// Ensure bytecode is loaded (handles server restart).
 	if err := e.EnsureBytecode(siteID, version); err != nil {
 		result.Error = err
+		result.Duration = time.Since(start)
 		return result
 	}
 
 	pool, err := e.GetOrCreatePool(siteID, version, env)
 	if err != nil {
 		result.Error = err
+		result.Duration = time.Since(start)
 		return result
 	}
 
 	rt, err := pool.Get()
 	if err != nil {
 		result.Error = fmt.Errorf("acquiring runtime from pool: %w", err)
+		result.Duration = time.Since(start)
 		return result
 	}
-	defer pool.Put(rt)
+
+	// Watchdog: cancel the runtime's context if execution exceeds timeout.
+	// Wazero's CloseOnContextDone inserts periodic checks during WASM execution;
+	// when the context is cancelled, the running function call is interrupted.
+	var timedOut atomic.Bool
+	timeout := time.Duration(e.config.ExecutionTimeout) * time.Millisecond
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	origCtx := rt.Context().Context
+	rt.Context().Context = reqCtx
+
+	watchdog := time.AfterFunc(timeout, func() {
+		timedOut.Store(true)
+		cancelReq()
+	})
+
+	defer func() {
+		stopped := watchdog.Stop()
+		if r := recover(); r != nil {
+			if timedOut.Load() {
+				result.Error = fmt.Errorf("worker execution timed out (limit: %v)", timeout)
+			} else {
+				result.Error = fmt.Errorf("worker panic: %v", r)
+			}
+		}
+		result.Duration = time.Since(start)
+		// Only return healthy runtimes to the pool. If the watchdog fired
+		// (stopped==false), the context is cancelled and the runtime may be
+		// in a broken state — discard it.
+		if stopped && !timedOut.Load() {
+			rt.Context().Context = origCtx
+			cancelReq() // Release context resources.
+			pool.Put(rt)
+		}
+	}()
 
 	ctx := rt.Context()
 
@@ -292,7 +324,10 @@ func (e *Engine) Execute(siteID string, version int, env *Env, req *WorkerReques
 	// The fetch handler returns a Promise<Response>.
 	if fetchResult.IsPromise() {
 		awaited, err := fetchResult.Await()
-		fetchResult.Free()
+		// Do NOT Free the Promise here — in the QuickJS WASM build, freeing
+		// a resolved Promise can cause out-of-bounds memory access when the
+		// resolved value was created by static constructors (e.g. Response.json).
+		// The Promise will be garbage-collected by QuickJS on the next GC cycle.
 		if err != nil {
 			state := clearRequestState(reqID)
 			if state != nil {
@@ -306,7 +341,9 @@ func (e *Engine) Execute(siteID string, version int, env *Env, req *WorkerReques
 
 	// Convert JS Response to Go.
 	resp, err := jsResponseToGo(ctx, fetchResult)
-	fetchResult.Free()
+	// Same caution: only Free non-Promise results. For awaited Promises the
+	// resolved value shares internal WASM memory with the Promise and must
+	// be left for GC.  Sync results are safe to Free immediately.
 
 	state := clearRequestState(reqID)
 	if state != nil {
@@ -323,29 +360,52 @@ func (e *Engine) Execute(siteID string, version int, env *Env, req *WorkerReques
 }
 
 // ExecuteScheduled runs the worker's scheduled handler for cron triggers.
-func (e *Engine) ExecuteScheduled(siteID string, version int, env *Env, cron string) *WorkerResult {
+func (e *Engine) ExecuteScheduled(siteID string, version int, env *Env, cron string) (result *WorkerResult) {
 	start := time.Now()
-	result := &WorkerResult{}
-
-	defer func() {
-		if r := recover(); r != nil {
-			result.Error = fmt.Errorf("worker panic: %v", r)
-		}
-		result.Duration = time.Since(start)
-	}()
+	result = &WorkerResult{}
 
 	pool, err := e.GetOrCreatePool(siteID, version, env)
 	if err != nil {
 		result.Error = err
+		result.Duration = time.Since(start)
 		return result
 	}
 
 	rt, err := pool.Get()
 	if err != nil {
 		result.Error = fmt.Errorf("acquiring runtime from pool: %w", err)
+		result.Duration = time.Since(start)
 		return result
 	}
-	defer pool.Put(rt)
+
+	// Watchdog: cancel the runtime's context if execution exceeds timeout.
+	var timedOut atomic.Bool
+	timeout := time.Duration(e.config.ExecutionTimeout) * time.Millisecond
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	origCtx := rt.Context().Context
+	rt.Context().Context = reqCtx
+
+	watchdog := time.AfterFunc(timeout, func() {
+		timedOut.Store(true)
+		cancelReq()
+	})
+
+	defer func() {
+		stopped := watchdog.Stop()
+		if r := recover(); r != nil {
+			if timedOut.Load() {
+				result.Error = fmt.Errorf("worker execution timed out (limit: %v)", timeout)
+			} else {
+				result.Error = fmt.Errorf("worker panic: %v", r)
+			}
+		}
+		result.Duration = time.Since(start)
+		if stopped && !timedOut.Load() {
+			rt.Context().Context = origCtx
+			cancelReq()
+			pool.Put(rt)
+		}
+	}()
 
 	ctx := rt.Context()
 
@@ -388,9 +448,9 @@ func (e *Engine) ExecuteScheduled(siteID string, version int, env *Env, cron str
 	}
 
 	// Await if the handler returns a promise.
+	// Do NOT Free Promise/awaited values — see Execute() comment for rationale.
 	if schedResult != nil && schedResult.IsPromise() {
-		awaited, err := schedResult.Await()
-		schedResult.Free()
+		_, err := schedResult.Await()
 		if err != nil {
 			state := clearRequestState(reqID)
 			if state != nil {
@@ -399,9 +459,6 @@ func (e *Engine) ExecuteScheduled(siteID string, version int, env *Env, cron str
 			result.Error = fmt.Errorf("awaiting scheduled handler: %w", err)
 			return result
 		}
-		awaited.Free()
-	} else if schedResult != nil {
-		schedResult.Free()
 	}
 
 	state := clearRequestState(reqID)

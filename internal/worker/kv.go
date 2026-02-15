@@ -114,6 +114,11 @@ func (kv *KVBridge) List(prefix string, limit int) ([]map[string]interface{}, er
 
 // buildKVBinding creates a JS object with async get/put/delete/list methods
 // backed by the given KVBridge.
+//
+// All operations run synchronously on the JS thread. QuickJS/Wazero is not
+// thread-safe — calling context methods (NewString, NewObject, ParseJSON,
+// promise.Resolve, etc.) from goroutines causes WASM out-of-bounds crashes.
+// SQLite queries are fast local I/O, so synchronous execution is fine.
 func buildKVBinding(ctx *qjs.Context, bridge *KVBridge) *qjs.Value {
 	kv := ctx.NewObject()
 
@@ -123,22 +128,20 @@ func buildKVBinding(ctx *qjs.Context, bridge *KVBridge) *qjs.Value {
 		args := this.Args()
 		promise := this.Promise()
 		if len(args) == 0 {
-			go func() { promise.Reject(c.NewError(fmt.Errorf("KV.get requires a key argument"))) }()
+			promise.Reject(c.NewError(fmt.Errorf("KV.get requires a key argument")))
 			return c.NewUndefined(), nil
 		}
 		key := args[0].String()
-		go func() {
-			val, err := bridge.Get(key)
-			if err != nil {
-				promise.Reject(c.NewError(err))
-				return
-			}
-			if val == "" {
-				promise.Resolve(c.NewNull())
-				return
-			}
+		val, err := bridge.Get(key)
+		if err != nil {
+			promise.Reject(c.NewError(err))
+			return c.NewUndefined(), nil
+		}
+		if val == "" {
+			promise.Resolve(c.NewNull())
+		} else {
 			promise.Resolve(c.NewString(val))
-		}()
+		}
 		return c.NewUndefined(), nil
 	}, true)
 	kv.SetPropertyStr("get", getFn)
@@ -149,7 +152,7 @@ func buildKVBinding(ctx *qjs.Context, bridge *KVBridge) *qjs.Value {
 		args := this.Args()
 		promise := this.Promise()
 		if len(args) < 2 {
-			go func() { promise.Reject(c.NewError(fmt.Errorf("KV.put requires key and value arguments"))) }()
+			promise.Reject(c.NewError(fmt.Errorf("KV.put requires key and value arguments")))
 			return c.NewUndefined(), nil
 		}
 		key := args[0].String()
@@ -174,13 +177,11 @@ func buildKVBinding(ctx *qjs.Context, bridge *KVBridge) *qjs.Value {
 			ttlVal.Free()
 		}
 
-		go func() {
-			if err := bridge.Put(key, value, metadata, ttl); err != nil {
-				promise.Reject(c.NewError(err))
-				return
-			}
-			promise.Resolve(c.NewUndefined())
-		}()
+		if err := bridge.Put(key, value, metadata, ttl); err != nil {
+			promise.Reject(c.NewError(err))
+			return c.NewUndefined(), nil
+		}
+		promise.Resolve(c.NewUndefined())
 		return c.NewUndefined(), nil
 	}, true)
 	kv.SetPropertyStr("put", putFn)
@@ -191,17 +192,15 @@ func buildKVBinding(ctx *qjs.Context, bridge *KVBridge) *qjs.Value {
 		args := this.Args()
 		promise := this.Promise()
 		if len(args) == 0 {
-			go func() { promise.Reject(c.NewError(fmt.Errorf("KV.delete requires a key argument"))) }()
+			promise.Reject(c.NewError(fmt.Errorf("KV.delete requires a key argument")))
 			return c.NewUndefined(), nil
 		}
 		key := args[0].String()
-		go func() {
-			if err := bridge.Delete(key); err != nil {
-				promise.Reject(c.NewError(err))
-				return
-			}
-			promise.Resolve(c.NewUndefined())
-		}()
+		if err := bridge.Delete(key); err != nil {
+			promise.Reject(c.NewError(err))
+			return c.NewUndefined(), nil
+		}
+		promise.Resolve(c.NewUndefined())
 		return c.NewUndefined(), nil
 	}, true)
 	kv.SetPropertyStr("delete", delFn)
@@ -229,18 +228,16 @@ func buildKVBinding(ctx *qjs.Context, bridge *KVBridge) *qjs.Value {
 			lVal.Free()
 		}
 
-		go func() {
-			entries, err := bridge.List(prefix, limit)
-			if err != nil {
-				promise.Reject(c.NewError(err))
-				return
-			}
+		entries, err := bridge.List(prefix, limit)
+		if err != nil {
+			promise.Reject(c.NewError(err))
+			return c.NewUndefined(), nil
+		}
 
-			data, _ := json.Marshal(map[string]interface{}{
-				"keys": entries,
-			})
-			promise.Resolve(c.ParseJSON(string(data)))
-		}()
+		data, _ := json.Marshal(map[string]interface{}{
+			"keys": entries,
+		})
+		promise.Resolve(c.ParseJSON(string(data)))
 		return c.NewUndefined(), nil
 	}, true)
 	kv.SetPropertyStr("list", listFn)

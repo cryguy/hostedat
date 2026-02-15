@@ -17,11 +17,12 @@ func TestModuleDefaultExportFetch(t *testing.T) {
 };`
 
 	opt := qjs.Option{
-		Context:          context.Background(),
-		MemoryLimit:      128 * 1024 * 1024,
-		MaxStackSize:     1024 * 1024,
-		MaxExecutionTime: 5000,
-		GCThreshold:      256 * 1024,
+		Context:            context.Background(),
+		CloseOnContextDone: true,
+		MemoryLimit:        128 * 1024 * 1024,
+		MaxStackSize:       1024 * 1024,
+		MaxExecutionTime:   5000,
+		GCThreshold:        256 * 1024,
 	}
 
 	// Compile on one runtime (same as CompileAndCache).
