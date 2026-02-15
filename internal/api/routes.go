@@ -57,6 +57,7 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	// Deployment routes
 	sites.POST("/:id/deploy", deployHandler.Deploy)
 	sites.GET("/:id/deployments", deployHandler.List)
+	sites.POST("/:id/deployments/:version/rollback", deployHandler.Rollback)
 
 	// Worker routes
 	sites.POST("/:id/worker/env", workerHandler.SetEnvVar)

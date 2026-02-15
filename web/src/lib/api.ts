@@ -138,6 +138,13 @@ export const deployments = {
       body: form,
     })
   },
+
+  rollback(siteId: string, version: number) {
+    return request<{ message: string; active_version: number }>(
+      `/sites/${siteId}/deployments/${version}/rollback`,
+      { method: "POST" },
+    )
+  },
 }
 
 export const apiKeys = {

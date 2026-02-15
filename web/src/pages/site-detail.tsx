@@ -95,7 +95,7 @@ export default function SiteDetailPage() {
         </TabsContent>
 
         <TabsContent value="deployments">
-          <DeploymentList items={deps} activeVersion={site.active_version} />
+          <DeploymentList siteId={site.id} items={deps} activeVersion={site.active_version} onRollback={load} />
         </TabsContent>
 
         <TabsContent value="worker">

@@ -133,6 +133,50 @@ func (h *DeployHandler) Deploy(c echo.Context) error {
 	return c.JSON(http.StatusCreated, deployment)
 }
 
+func (h *DeployHandler) Rollback(c echo.Context) error {
+	userID, _, role := GetUserFromContext(c)
+	siteID := c.Param("id")
+	version := 0
+	if err := echo.PathParamsBinder(c).Int("version", &version).BindError(); err != nil || version <= 0 {
+		return errorJSON(c, http.StatusBadRequest, "invalid version")
+	}
+
+	var site models.Site
+	if err := h.DB.First(&site, "id = ?", siteID).Error; err != nil {
+		return errorJSON(c, http.StatusNotFound, "site not found")
+	}
+
+	if site.UserID != userID && role != "admin" && role != "superadmin" {
+		return errorJSON(c, http.StatusForbidden, "access denied")
+	}
+
+	if site.ActiveVersion != nil && *site.ActiveVersion == version {
+		return errorJSON(c, http.StatusBadRequest, "already the active version")
+	}
+
+	// Verify the deployment exists
+	var dep models.Deployment
+	if err := h.DB.First(&dep, "site_id = ? AND version = ?", siteID, version).Error; err != nil {
+		return errorJSON(c, http.StatusNotFound, "deployment not found")
+	}
+
+	// Invalidate old worker pool if applicable
+	if h.WorkerEngine != nil && site.ActiveVersion != nil {
+		h.WorkerEngine.InvalidatePool(siteID, *site.ActiveVersion)
+	}
+
+	// Update site to the target version
+	h.DB.Model(&site).Updates(map[string]interface{}{
+		"active_version": version,
+		"has_worker":     dep.HasWorker,
+	})
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message":        "rolled back",
+		"active_version": version,
+	})
+}
+
 func (h *DeployHandler) List(c echo.Context) error {
 	userID, _, role := GetUserFromContext(c)
 	siteID := c.Param("id")

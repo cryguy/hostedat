@@ -254,10 +254,10 @@ func (e *Engine) Execute(siteID string, version int, env *Env, req *WorkerReques
 	jsEnv := buildEnvObject(ctx, env, e.db)
 	jsCtx := buildExecContext(ctx)
 
-	// Call __worker_module__.default.fetch(request, env, ctx).
-	workerModule := ctx.Global().GetPropertyStr("__worker_module__")
-	defaultExport := workerModule.GetPropertyStr("default")
-	workerModule.Free()
+	// Call __worker_module__.fetch(request, env, ctx).
+	// Note: qjs Eval with TypeModule() returns the default export directly,
+	// not a module namespace object, so __worker_module__ IS the default export.
+	defaultExport := ctx.Global().GetPropertyStr("__worker_module__")
 
 	if defaultExport.IsUndefined() || defaultExport.IsNull() {
 		defaultExport.Free()
@@ -353,10 +353,9 @@ func (e *Engine) ExecuteScheduled(siteID string, version int, env *Env, cron str
 	jsEnv := buildEnvObject(ctx, env, e.db)
 	jsCtx := buildExecContext(ctx)
 
-	// Call __worker_module__.default.scheduled(event, env, ctx).
-	workerModule := ctx.Global().GetPropertyStr("__worker_module__")
-	defaultExport := workerModule.GetPropertyStr("default")
-	workerModule.Free()
+	// Call __worker_module__.scheduled(event, env, ctx).
+	// Note: qjs Eval with TypeModule() returns the default export directly.
+	defaultExport := ctx.Global().GetPropertyStr("__worker_module__")
 
 	if defaultExport.IsUndefined() || defaultExport.IsNull() {
 		defaultExport.Free()
