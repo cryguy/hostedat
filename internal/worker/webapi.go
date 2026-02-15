@@ -359,27 +359,17 @@ func jsResponseToGo(ctx *qjs.Context, val *qjs.Value) (*WorkerResponse, error) {
 	headersMap.Free()
 	headersVal.Free()
 
-	// Get body via .text()
+	// Read body directly from _body property to avoid async .text() Promise
+	// which causes WASM memory issues when freeing the awaited Promise.
 	var body []byte
-	textResult, err := val.InvokeJS("text")
-	if err == nil && textResult != nil {
-		if textResult.IsPromise() {
-			awaited, aerr := textResult.Await()
-			if aerr == nil && awaited != nil {
-				bodyStr := awaited.String()
-				if bodyStr != "" && bodyStr != "null" && bodyStr != "undefined" {
-					body = []byte(bodyStr)
-				}
-				awaited.Free()
-			}
-		} else {
-			bodyStr := textResult.String()
-			if bodyStr != "" && bodyStr != "null" && bodyStr != "undefined" {
-				body = []byte(bodyStr)
-			}
+	bodyVal := val.GetPropertyStr("_body")
+	if !bodyVal.IsNull() && !bodyVal.IsUndefined() {
+		bodyStr := bodyVal.String()
+		if bodyStr != "" {
+			body = []byte(bodyStr)
 		}
-		textResult.Free()
 	}
+	bodyVal.Free()
 
 	return &WorkerResponse{
 		StatusCode: statusCode,

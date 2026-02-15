@@ -251,6 +251,10 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 
 	// Write response.
 	resp := result.Response
+	if resp == nil {
+		log.Printf("worker error for site %s: fetch returned nil response without error", site.ID)
+		return errorJSON(c, http.StatusInternalServerError, "worker returned empty response")
+	}
 	for k, v := range resp.Headers {
 		c.Response().Header().Set(k, v)
 	}
