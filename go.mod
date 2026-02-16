@@ -1,9 +1,12 @@
 module github.com/cryguy/hostedat
 
-go 1.25
+go 1.24.0
+
+toolchain go1.24.7
 
 require (
 	github.com/caddyserver/certmagic v0.25.1
+	github.com/fastschema/qjs v0.0.6
 	github.com/glebarez/sqlite v1.11.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/labstack/echo/v4 v4.15.0
@@ -19,7 +22,6 @@ require (
 require (
 	github.com/caddyserver/zerossl v0.1.4 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/fastschema/qjs v0.0.6 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
