@@ -11,6 +11,8 @@ import (
 // CronRunner lifecycle tests
 // ---------------------------------------------------------------------------
 
+func boolPtr(b bool) *bool { return &b }
+
 func cronTestDB(t *testing.T) (*Engine, *models.Site) {
 	t.Helper()
 	db := testDB(t)
@@ -68,7 +70,7 @@ func TestCronRunner_TickDispatchesMatchingSchedule(t *testing.T) {
 	sched := models.CronSchedule{
 		SiteID:  site.ID,
 		Cron:    "* * * * *", // matches every minute
-		Enabled: true,
+		Enabled: boolPtr(true),
 	}
 	e.db.Create(&sched)
 
@@ -105,11 +107,9 @@ func TestCronRunner_SkipsDisabledSchedule(t *testing.T) {
 	sched := models.CronSchedule{
 		SiteID:  site.ID,
 		Cron:    "* * * * *",
-		Enabled: true,
+		Enabled: boolPtr(false),
 	}
 	e.db.Create(&sched)
-	// GORM treats false as zero-value and applies default:true, so update after create.
-	e.db.Model(&sched).Update("enabled", false)
 
 	cr := &CronRunner{
 		db:     e.db,
@@ -142,7 +142,7 @@ func TestCronRunner_SkipsNonMatchingTime(t *testing.T) {
 	sched := models.CronSchedule{
 		SiteID:  site.ID,
 		Cron:    "0 0 1 1 *",
-		Enabled: true,
+		Enabled: boolPtr(true),
 	}
 	e.db.Create(&sched)
 
@@ -184,7 +184,7 @@ func TestCronRunner_SkipsSiteWithNoWorker(t *testing.T) {
 	sched := models.CronSchedule{
 		SiteID:  site.ID,
 		Cron:    "* * * * *",
-		Enabled: true,
+		Enabled: boolPtr(true),
 	}
 	db.Create(&sched)
 
@@ -219,7 +219,7 @@ func TestCronRunner_StoresLogs(t *testing.T) {
 	sched := models.CronSchedule{
 		SiteID:  site.ID,
 		Cron:    "* * * * *",
-		Enabled: true,
+		Enabled: boolPtr(true),
 	}
 	e.db.Create(&sched)
 

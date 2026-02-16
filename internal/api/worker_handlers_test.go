@@ -342,10 +342,6 @@ func TestWorkerCron_CreateAndList(t *testing.T) {
 func TestWorkerCron_CreateDisabled(t *testing.T) {
 	env, token, siteID := workerTestSetup(t)
 
-	// NOTE: GORM's `default:true` tag on CronSchedule.Enabled means setting
-	// enabled=false via Create is silently overridden to true. This test
-	// documents the current (buggy) behavior where the schedule is created
-	// as enabled=true regardless of the request payload.
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+siteID+"/worker/crons",
 		jsonBody(map[string]interface{}{"cron": "0 * * * *", "enabled": false}))
 	createReq.Header.Set("Content-Type", "application/json")
@@ -356,9 +352,8 @@ func TestWorkerCron_CreateDisabled(t *testing.T) {
 		t.Fatalf("status = %d: %s", createRec.Code, createRec.Body.String())
 	}
 	body := parseJSON(t, createRec)
-	// Known issue: GORM treats false as zero-value and applies default:true.
-	if body["enabled"] != true {
-		t.Errorf("enabled = %v, want true (GORM default:true overrides false)", body["enabled"])
+	if body["enabled"] != false {
+		t.Errorf("enabled = %v, want false", body["enabled"])
 	}
 }
 

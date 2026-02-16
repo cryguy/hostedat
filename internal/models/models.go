@@ -196,7 +196,7 @@ type CronSchedule struct {
 	ID        string     `gorm:"primaryKey;size:20" json:"id"`
 	SiteID    string     `gorm:"index;not null" json:"site_id"`
 	Cron      string     `gorm:"not null" json:"cron"`
-	Enabled   bool       `gorm:"default:true" json:"enabled"`
+	Enabled   *bool      `gorm:"default:true" json:"enabled"`
 	LastRunAt *time.Time `json:"last_run_at,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`
 
@@ -206,6 +206,10 @@ type CronSchedule struct {
 func (cs *CronSchedule) BeforeCreate(tx *gorm.DB) error {
 	if cs.ID == "" {
 		cs.ID = generateID()
+	}
+	if cs.Enabled == nil {
+		enabled := true
+		cs.Enabled = &enabled
 	}
 	return nil
 }

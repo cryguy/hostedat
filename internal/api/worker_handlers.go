@@ -243,15 +243,10 @@ func (h *WorkerHandler) CreateCronSchedule(c echo.Context) error {
 		return errorJSON(c, http.StatusBadRequest, "invalid cron expression: "+err.Error())
 	}
 
-	enabled := true
-	if req.Enabled != nil {
-		enabled = *req.Enabled
-	}
-
 	schedule := models.CronSchedule{
 		SiteID:  siteID,
 		Cron:    req.Cron,
-		Enabled: enabled,
+		Enabled: req.Enabled,
 	}
 	if err := h.DB.Create(&schedule).Error; err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to create cron schedule")
