@@ -32,7 +32,7 @@ type StorageObject struct {
 	Key          string    `gorm:"index:idx_site_key,unique;not null;size:1024" json:"key"`
 	Size         int64     `gorm:"not null" json:"size"`
 	ContentType  string    `gorm:"not null;default:'application/octet-stream'" json:"content_type"`
-	ETag         string    `gorm:"not null;size:34" json:"etag"`        // MD5 hex with quotes
+	ETag         string    `gorm:"column:etag;not null;size:34" json:"etag"` // MD5 hex with quotes
 	Metadata     string    `gorm:"type:text" json:"metadata,omitempty"` // JSON-encoded x-amz-meta-* headers
 	LastModified time.Time `gorm:"not null;index" json:"last_modified"`
 	StoragePath  string    `gorm:"not null" json:"-"` // path on disk
@@ -74,7 +74,7 @@ type MultipartPart struct {
 	UploadID    string    `gorm:"index;not null;size:40" json:"upload_id"`
 	PartNumber  int       `gorm:"not null" json:"part_number"`
 	Size        int64     `gorm:"not null" json:"size"`
-	ETag        string    `gorm:"not null;size:34" json:"etag"`
+	ETag        string    `gorm:"column:etag;not null;size:34" json:"etag"`
 	StoragePath string    `gorm:"not null" json:"-"`
 	CreatedAt   time.Time `json:"created_at"`
 }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -71,12 +72,23 @@ func setupTestEnv(t *testing.T) *testEnv {
 	}
 }
 
-func (env *testEnv) signedRequest(method, path string, body []byte) *http.Request {
+func (env *testEnv) signedRequest(method, target string, body []byte) *http.Request {
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
 	}
-	req := httptest.NewRequest(method, path, bodyReader)
+	// Separate path from query string, then encode each path segment so
+	// httptest.NewRequest can parse the URL (e.g. spaces become %20).
+	pathPart, queryPart, hasQuery := strings.Cut(target, "?")
+	segments := strings.Split(pathPart, "/")
+	for i, seg := range segments {
+		segments[i] = url.PathEscape(seg)
+	}
+	encodedTarget := strings.Join(segments, "/")
+	if hasQuery {
+		encodedTarget += "?" + queryPart
+	}
+	req := httptest.NewRequest(method, encodedTarget, bodyReader)
 	req.Host = "localhost"
 	signRequest(req, env.accessKey, env.secretKey, "us-east-1", "s3", body)
 	return req

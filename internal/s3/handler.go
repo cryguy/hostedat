@@ -63,10 +63,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid access key") {
 			WriteErrorResponse(w, http.StatusForbidden, "InvalidAccessKeyId", "The AWS Access Key Id you provided does not exist in our records.", r.URL.Path)
-		} else if strings.Contains(err.Error(), "signature does not match") {
-			WriteErrorResponse(w, http.StatusForbidden, "SignatureDoesNotMatch", "The request signature we calculated does not match the signature you provided.", r.URL.Path)
 		} else if strings.Contains(err.Error(), "timestamp expired") {
 			WriteErrorResponse(w, http.StatusForbidden, "RequestTimeTooSkewed", "The difference between the request time and the current time is too large.", r.URL.Path)
+		} else if strings.Contains(err.Error(), "signature does not match") {
+			WriteErrorResponse(w, http.StatusForbidden, "SignatureDoesNotMatch", "The request signature we calculated does not match the signature you provided.", r.URL.Path)
 		} else {
 			WriteErrorResponse(w, http.StatusForbidden, "AccessDenied", err.Error(), r.URL.Path)
 		}

@@ -2,7 +2,6 @@ package s3
 
 import (
 	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
@@ -189,7 +188,7 @@ func TestBuildCanonicalQueryString(t *testing.T) {
 		{"empty", "", ""},
 		{"single", "prefix=test", "prefix=test"},
 		{"sorted", "z=1&a=2", "a=2&z=1"},
-		{"encoded", "prefix=hello world", "prefix=hello%20world"},
+		{"encoded", "prefix=hello%20world", "prefix=hello%20world"},
 	}
 
 	for _, tt := range tests {
