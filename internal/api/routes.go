@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/cryguy/hostedat/internal/config"
+	"github.com/cryguy/hostedat/internal/s3"
 	"github.com/cryguy/hostedat/internal/storage"
 	"github.com/cryguy/hostedat/internal/worker"
 	"github.com/labstack/echo/v4"
@@ -29,6 +30,7 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	apiKeyHandler := &APIKeyHandler{DB: db}
 	adminHandler := &AdminHandler{DB: db, Storage: store}
 	workerHandler := &WorkerHandler{DB: db}
+	storageHandler := &StorageHandler{DB: db}
 
 	// Public auth routes — stricter rate limit (5 req/s per IP)
 	// Auth is Bearer-token only (JWT/API key), never cookies, so CSRF is not applicable.
@@ -71,6 +73,12 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	sites.DELETE("/:id/worker/crons/:cronId", workerHandler.DeleteCronSchedule)
 	sites.GET("/:id/worker/logs", workerHandler.GetLogs)
 
+	// Storage credential routes
+	sites.POST("/:id/storage/credentials", storageHandler.CreateCredential)
+	sites.GET("/:id/storage/credentials", storageHandler.ListCredentials)
+	sites.DELETE("/:id/storage/credentials/:accessKeyId", storageHandler.DeleteCredential)
+	sites.GET("/:id/storage/usage", storageHandler.GetUsage)
+
 	// API key routes
 	keys := protected.Group("/keys")
 	keys.POST("", apiKeyHandler.Create)
@@ -87,4 +95,8 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	admin.POST("/invites", adminHandler.CreateInvite)
 	admin.GET("/invites", adminHandler.ListInvites)
 	admin.DELETE("/invites/:id", adminHandler.RevokeInvite)
+
+	// S3-compatible storage endpoint (uses SigV4 auth, not JWT).
+	s3Handler := s3.NewHandler(db, store.BasePath)
+	e.Any("/storage/*", echo.WrapHandler(http.StripPrefix("/storage", s3Handler)))
 }

@@ -312,6 +312,11 @@ func buildEnvObject(ctx *qjs.Context, env *Env, db *gorm.DB) *qjs.Value {
 		envObj.SetPropertyStr("ASSETS", buildAssetsBinding(ctx, env.Assets))
 	}
 
+	// STORAGE binding (R2-compatible).
+	if env.StorageBridge != nil {
+		envObj.SetPropertyStr("STORAGE", buildStorageBinding(ctx, env.StorageBridge))
+	}
+
 	return envObj
 }
 

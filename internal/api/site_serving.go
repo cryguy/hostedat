@@ -266,7 +266,7 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 }
 
 func buildWorkerEnv(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, site *models.Site, version int, domain string) *worker.Env {
-	return worker.BuildEnvFromDB(db, site.ID, &worker.StaticAssetsFetcher{
+	env := worker.BuildEnvFromDB(db, site.ID, &worker.StaticAssetsFetcher{
 		Store:   store,
 		Cache:   cache,
 		SiteID:  site.ID,
@@ -274,6 +274,13 @@ func buildWorkerEnv(db *gorm.DB, store *storage.Manager, cache *storage.SiteRule
 		SPAMode: site.SPAMode,
 		Domain:  domain,
 	})
+	// Attach R2-compatible STORAGE binding.
+	env.StorageBridge = &worker.StorageBridge{
+		DB:          db,
+		SiteID:      site.ID,
+		StoragePath: store.BasePath,
+	}
+	return env
 }
 
 func storeWorkerLogs(db *gorm.DB, siteID string, logs []worker.LogEntry) {
