@@ -1599,3 +1599,808 @@ func TestPKCE_InvalidCode(t *testing.T) {
 		t.Errorf("status = %d, want 401", tokenRec.Code)
 	}
 }
+
+// ──────────────────────────────────────────────
+// Worker handler tests
+// ──────────────────────────────────────────────
+
+func TestWorker_SetEnvVar_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/env",
+		jsonBody(map[string]interface{}{"name": "API_KEY", "value": "secret123", "secret": true}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	if body["name"] != "API_KEY" {
+		t.Errorf("name = %v", body["name"])
+	}
+	if body["secret"] != true {
+		t.Errorf("secret = %v", body["secret"])
+	}
+}
+
+func TestWorker_SetEnvVar_Upsert(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	// Create initial var
+	env.db.Create(&models.WorkerEnvVar{SiteID: site.ID, Name: "KEY", Value: "old", Secret: false})
+
+	// Update it
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/env",
+		jsonBody(map[string]interface{}{"name": "KEY", "value": "new", "secret": true}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	if body["value"] != "new" {
+		t.Errorf("value = %v, want new", body["value"])
+	}
+	if body["secret"] != true {
+		t.Errorf("secret = %v, want true", body["secret"])
+	}
+
+	// Verify only one record exists
+	var count int64
+	env.db.Model(&models.WorkerEnvVar{}).Where("site_id = ? AND name = ?", site.ID, "KEY").Count(&count)
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+}
+
+func TestWorker_SetEnvVar_MissingName(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/env",
+		jsonBody(map[string]interface{}{"value": "val"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestWorker_SetEnvVar_SiteNotFound(t *testing.T) {
+	env := setupTestEnv(t)
+	_, token := env.createTestUser(t, "u@t.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/nonexistent/worker/env",
+		jsonBody(map[string]interface{}{"name": "KEY", "value": "val"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestWorker_SetEnvVar_AccessDenied(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/env",
+		jsonBody(map[string]interface{}{"name": "KEY", "value": "val"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestWorker_SetEnvVar_AdminBypass(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, adminToken := env.createTestUser(t, "admin@t.com", "password123", "admin")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/env",
+		jsonBody(map[string]interface{}{"name": "KEY", "value": "val"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("admin: status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWorker_ListEnvVars_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	env.db.Create(&models.WorkerEnvVar{SiteID: site.ID, Name: "PUBLIC", Value: "visible", Secret: false})
+	env.db.Create(&models.WorkerEnvVar{SiteID: site.ID, Name: "SECRET", Value: "hidden", Secret: true})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+site.ID+"/worker/env", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var vars []map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &vars)
+	if len(vars) != 2 {
+		t.Errorf("got %d vars, want 2", len(vars))
+	}
+
+	// Check secret masking
+	for _, v := range vars {
+		if v["name"] == "SECRET" && v["value"] != "********" {
+			t.Errorf("secret value not masked: %v", v["value"])
+		}
+		if v["name"] == "PUBLIC" && v["value"] != "visible" {
+			t.Errorf("public value should be visible: %v", v["value"])
+		}
+	}
+}
+
+func TestWorker_ListEnvVars_AccessDenied(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+site.ID+"/worker/env", nil)
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestWorker_DeleteEnvVar_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	envVar := models.WorkerEnvVar{SiteID: site.ID, Name: "DELETE_ME", Value: "val"}
+	env.db.Create(&envVar)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+site.ID+"/worker/env/"+envVar.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify deleted
+	var count int64
+	env.db.Model(&models.WorkerEnvVar{}).Where("id = ?", envVar.ID).Count(&count)
+	if count != 0 {
+		t.Error("env var not deleted")
+	}
+}
+
+func TestWorker_DeleteEnvVar_NotFound(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+site.ID+"/worker/env/nonexistent", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestWorker_DeleteEnvVar_AccessDenied(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	envVar := models.WorkerEnvVar{SiteID: site.ID, Name: "KEY", Value: "val"}
+	env.db.Create(&envVar)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+site.ID+"/worker/env/"+envVar.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestWorker_CreateKVNamespace_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/kv",
+		jsonBody(map[string]string{"name": "MY_KV"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	if body["name"] != "MY_KV" {
+		t.Errorf("name = %v", body["name"])
+	}
+}
+
+func TestWorker_CreateKVNamespace_MissingName(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/kv",
+		jsonBody(map[string]string{}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestWorker_CreateKVNamespace_AccessDenied(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/kv",
+		jsonBody(map[string]string{"name": "KV"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestWorker_ListKVNamespaces_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	env.db.Create(&models.KVNamespace{SiteID: site.ID, Name: "KV1"})
+	env.db.Create(&models.KVNamespace{SiteID: site.ID, Name: "KV2"})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+site.ID+"/worker/kv", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var namespaces []map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &namespaces)
+	if len(namespaces) != 2 {
+		t.Errorf("got %d namespaces, want 2", len(namespaces))
+	}
+}
+
+func TestWorker_DeleteKVNamespace_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	ns := models.KVNamespace{SiteID: site.ID, Name: "DELETE_ME"}
+	env.db.Create(&ns)
+
+	// Create some entries in the namespace
+	env.db.Create(&models.KVEntry{NamespaceID: ns.ID, Key: "key1", Value: "val1"})
+	env.db.Create(&models.KVEntry{NamespaceID: ns.ID, Key: "key2", Value: "val2"})
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+site.ID+"/worker/kv/"+ns.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify namespace deleted
+	var nsCount int64
+	env.db.Model(&models.KVNamespace{}).Where("id = ?", ns.ID).Count(&nsCount)
+	if nsCount != 0 {
+		t.Error("namespace not deleted")
+	}
+
+	// Verify entries cascaded
+	var entryCount int64
+	env.db.Model(&models.KVEntry{}).Where("namespace_id = ?", ns.ID).Count(&entryCount)
+	if entryCount != 0 {
+		t.Error("KV entries not cascaded")
+	}
+}
+
+func TestWorker_DeleteKVNamespace_NotFound(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+site.ID+"/worker/kv/nonexistent", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestWorker_CreateCronSchedule_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/crons",
+		jsonBody(map[string]interface{}{"cron": "*/5 * * * *", "enabled": true}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	if body["cron"] != "*/5 * * * *" {
+		t.Errorf("cron = %v", body["cron"])
+	}
+	if body["enabled"] != true {
+		t.Errorf("enabled = %v", body["enabled"])
+	}
+}
+
+func TestWorker_CreateCronSchedule_DefaultEnabled(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/crons",
+		jsonBody(map[string]string{"cron": "0 0 * * *"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	if body["enabled"] != true {
+		t.Errorf("enabled = %v, want true (default)", body["enabled"])
+	}
+}
+
+func TestWorker_CreateCronSchedule_InvalidCron(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	tests := []struct {
+		name string
+		cron string
+	}{
+		{"missing fields", "* *"},
+		{"too many fields", "* * * * * *"},
+		{"invalid minute", "60 * * * *"},
+		{"invalid hour", "* 24 * * *"},
+		{"invalid day", "* * 0 * *"},
+		{"invalid month", "* * * 13 *"},
+		{"invalid weekday", "* * * * 7"},
+		{"invalid step", "*/0 * * * *"},
+		{"invalid range", "10-5 * * * *"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/crons",
+				jsonBody(map[string]string{"cron": tt.cron}))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := env.doRequest(req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("cron %q: status = %d, want 400", tt.cron, rec.Code)
+			}
+		})
+	}
+}
+
+func TestWorker_CreateCronSchedule_MissingCron(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/crons",
+		jsonBody(map[string]string{}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestWorker_CreateCronSchedule_AccessDenied(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/crons",
+		jsonBody(map[string]string{"cron": "* * * * *"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestWorker_ListCronSchedules_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	env.db.Create(&models.CronSchedule{SiteID: site.ID, Cron: "0 0 * * *", Enabled: true})
+	env.db.Create(&models.CronSchedule{SiteID: site.ID, Cron: "*/15 * * * *", Enabled: false})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+site.ID+"/worker/crons", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var schedules []map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &schedules)
+	if len(schedules) != 2 {
+		t.Errorf("got %d schedules, want 2", len(schedules))
+	}
+}
+
+func TestWorker_DeleteCronSchedule_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	sched := models.CronSchedule{SiteID: site.ID, Cron: "0 0 * * *", Enabled: true}
+	env.db.Create(&sched)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+site.ID+"/worker/crons/"+sched.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify deleted
+	var count int64
+	env.db.Model(&models.CronSchedule{}).Where("id = ?", sched.ID).Count(&count)
+	if count != 0 {
+		t.Error("cron schedule not deleted")
+	}
+}
+
+func TestWorker_DeleteCronSchedule_NotFound(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+site.ID+"/worker/crons/nonexistent", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestWorker_GetLogs_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	// Create some logs
+	for i := 0; i < 5; i++ {
+		env.db.Create(&models.WorkerLog{
+			SiteID:  site.ID,
+			Level:   "info",
+			Message: fmt.Sprintf("log %d", i),
+		})
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+site.ID+"/worker/logs", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var logs []map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &logs)
+	if len(logs) != 5 {
+		t.Errorf("got %d logs, want 5", len(logs))
+	}
+}
+
+func TestWorker_GetLogs_AccessDenied(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "worker", Name: "Worker"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+site.ID+"/worker/logs", nil)
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+// ──────────────────────────────────────────────
+// Deployment rollback tests
+// ──────────────────────────────────────────────
+
+func TestDeploy_Rollback_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "rollback", Name: "Rollback"}
+	env.db.Create(&site)
+
+	// Create deployments
+	env.db.Create(&models.Deployment{SiteID: site.ID, Version: 1, FileHash: "abc"})
+	env.db.Create(&models.Deployment{SiteID: site.ID, Version: 2, FileHash: "def"})
+
+	// Set active to v2
+	v2 := 2
+	site.ActiveVersion = &v2
+	env.db.Save(&site)
+
+	// Rollback to v1
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deployments/1/rollback", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	if body["active_version"] != float64(1) {
+		t.Errorf("active_version = %v, want 1", body["active_version"])
+	}
+
+	// Verify DB update
+	var updated models.Site
+	env.db.First(&updated, "id = ?", site.ID)
+	if updated.ActiveVersion == nil || *updated.ActiveVersion != 1 {
+		t.Errorf("DB active_version = %v, want 1", updated.ActiveVersion)
+	}
+}
+
+func TestDeploy_Rollback_AlreadyActive(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "rollback", Name: "Rollback"}
+	env.db.Create(&site)
+
+	env.db.Create(&models.Deployment{SiteID: site.ID, Version: 1, FileHash: "abc"})
+	v1 := 1
+	site.ActiveVersion = &v1
+	env.db.Save(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deployments/1/rollback", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	body := parseJSON(t, rec)
+	if !strings.Contains(body["error"].(string), "already") {
+		t.Errorf("error = %q, want 'already' message", body["error"])
+	}
+}
+
+func TestDeploy_Rollback_InvalidVersion(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "rollback", Name: "Rollback"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deployments/abc/rollback", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestDeploy_Rollback_DeploymentNotFound(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "rollback", Name: "Rollback"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deployments/999/rollback", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestDeploy_Rollback_AccessDenied(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "rollback", Name: "Rollback"}
+	env.db.Create(&site)
+
+	env.db.Create(&models.Deployment{SiteID: site.ID, Version: 1, FileHash: "abc"})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deployments/1/rollback", nil)
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+// ──────────────────────────────────────────────
+// Auth logout test
+// ──────────────────────────────────────────────
+
+func TestAuth_Logout(t *testing.T) {
+	env := setupTestEnv(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	body := parseJSON(t, rec)
+	if body["message"] != "logged out" {
+		t.Errorf("message = %q, want 'logged out'", body["message"])
+	}
+}
+
+// ──────────────────────────────────────────────
+// Error handler tests
+// ──────────────────────────────────────────────
+
+func TestCustomErrorHandler_HTTPError(t *testing.T) {
+	env := setupTestEnv(t)
+
+	// Request a completely unknown route outside /api/v1 to bypass auth middleware
+	// and trigger Echo's default 405/404 which invokes CustomErrorHandler
+	req := httptest.NewRequest(http.MethodGet, "/nonexistent-path", nil)
+	req.Host = "test.local" // bare domain so subdomain router passes through
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 404 or 405", rec.Code)
+	}
+	body := parseJSON(t, rec)
+	if body["error"] == nil {
+		t.Error("expected error field in JSON response")
+	}
+}
+
+func TestCustomErrorHandler_GenericError(t *testing.T) {
+	env := setupTestEnv(t)
+
+	// The CustomErrorHandler is already being tested indirectly by all error cases.
+	// This test ensures it returns proper JSON for internal errors.
+	// We can't easily trigger a generic non-HTTPError without modifying the handlers,
+	// so we verify the structure is correct from other tests.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
+	// No auth header → should trigger 401
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	body := parseJSON(t, rec)
+	if _, ok := body["error"].(string); !ok {
+		t.Error("error field should be a string")
+	}
+}
+
+// ──────────────────────────────────────────────
+// isAllowedRedirectTarget tests
+// ──────────────────────────────────────────────
+
+func TestIsAllowedRedirectTarget(t *testing.T) {
+	domain := "test.local"
+
+	tests := []struct {
+		name     string
+		target   string
+		expected bool
+	}{
+		{"empty", "", false},
+		{"protocol-relative", "//evil.com", false},
+		{"relative path", "/path", true},
+		{"relative deep path", "/path/to/file", true},
+		{"javascript scheme", "javascript:alert(1)", false},
+		{"data scheme", "data:text/html,<script>alert(1)</script>", false},
+		{"same domain absolute", "https://test.local/path", true},
+		{"subdomain", "https://sub.test.local/path", true},
+		{"external domain", "https://evil.com/path", false},
+		{"http same domain", "http://test.local/path", true},
+		{"mixed case scheme", "JaVaScRiPt:alert(1)", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isAllowedRedirectTarget(tt.target, domain)
+			if result != tt.expected {
+				t.Errorf("isAllowedRedirectTarget(%q, %q) = %v, want %v", tt.target, domain, result, tt.expected)
+			}
+		})
+	}
+}

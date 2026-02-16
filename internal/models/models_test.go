@@ -2,6 +2,7 @@ package models
 
 import (
 	"testing"
+	"time"
 
 	"github.com/cryguy/hostedat/internal/config"
 	"gorm.io/gorm"
@@ -187,5 +188,235 @@ func TestSite_SubdomainSlugUniqueIndex(t *testing.T) {
 	err := db.Create(&Site{UserID: u.ID, SubdomainSlug: "taken", Name: "Site 2"}).Error
 	if err == nil {
 		t.Fatal("expected unique constraint error for duplicate slug")
+	}
+}
+
+func TestWorkerEnvVar_BeforeCreate_SetsID(t *testing.T) {
+	db := setupTestDB(t)
+	u := User{Email: "u@t.com", PasswordHash: "h"}
+	db.Create(&u)
+	s := Site{UserID: u.ID, SubdomainSlug: "test", Name: "Test"}
+	db.Create(&s)
+
+	w := WorkerEnvVar{SiteID: s.ID, Name: "API_KEY", Value: "secret123", Secret: false}
+	if err := db.Create(&w).Error; err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if w.ID == "" {
+		t.Error("expected auto-generated ID")
+	}
+	if len(w.ID) != nanoidLength {
+		t.Errorf("ID length = %d, want %d", len(w.ID), nanoidLength)
+	}
+}
+
+func TestWorkerEnvVar_Secret(t *testing.T) {
+	db := setupTestDB(t)
+	u := User{Email: "u@t.com", PasswordHash: "h"}
+	db.Create(&u)
+	s := Site{UserID: u.ID, SubdomainSlug: "test", Name: "Test"}
+	db.Create(&s)
+
+	w1 := WorkerEnvVar{SiteID: s.ID, Name: "PUBLIC", Value: "public", Secret: false}
+	db.Create(&w1)
+	if w1.Secret {
+		t.Error("expected Secret=false")
+	}
+
+	w2 := WorkerEnvVar{SiteID: s.ID, Name: "SECRET", Value: "secret", Secret: true}
+	db.Create(&w2)
+	if !w2.Secret {
+		t.Error("expected Secret=true")
+	}
+}
+
+func TestKVNamespace_BeforeCreate_SetsID(t *testing.T) {
+	db := setupTestDB(t)
+	u := User{Email: "u@t.com", PasswordHash: "h"}
+	db.Create(&u)
+	s := Site{UserID: u.ID, SubdomainSlug: "test", Name: "Test"}
+	db.Create(&s)
+
+	kv := KVNamespace{SiteID: s.ID, Name: "MY_KV"}
+	if err := db.Create(&kv).Error; err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if kv.ID == "" {
+		t.Error("expected auto-generated ID")
+	}
+	if len(kv.ID) != nanoidLength {
+		t.Errorf("ID length = %d, want %d", len(kv.ID), nanoidLength)
+	}
+}
+
+func TestKVEntry_BeforeCreate_SetsID(t *testing.T) {
+	db := setupTestDB(t)
+	u := User{Email: "u@t.com", PasswordHash: "h"}
+	db.Create(&u)
+	s := Site{UserID: u.ID, SubdomainSlug: "test", Name: "Test"}
+	db.Create(&s)
+	ns := KVNamespace{SiteID: s.ID, Name: "MY_KV"}
+	db.Create(&ns)
+
+	entry := KVEntry{NamespaceID: ns.ID, Key: "key1", Value: "value1"}
+	if err := db.Create(&entry).Error; err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if entry.ID == "" {
+		t.Error("expected auto-generated ID")
+	}
+	if len(entry.ID) != nanoidLength {
+		t.Errorf("ID length = %d, want %d", len(entry.ID), nanoidLength)
+	}
+}
+
+func TestKVEntry_WithMetadataAndExpiry(t *testing.T) {
+	db := setupTestDB(t)
+	u := User{Email: "u@t.com", PasswordHash: "h"}
+	db.Create(&u)
+	s := Site{UserID: u.ID, SubdomainSlug: "test", Name: "Test"}
+	db.Create(&s)
+	ns := KVNamespace{SiteID: s.ID, Name: "MY_KV"}
+	db.Create(&ns)
+
+	// Test with nil metadata and expiry
+	e1 := KVEntry{NamespaceID: ns.ID, Key: "k1", Value: "v1"}
+	db.Create(&e1)
+	if e1.Metadata != nil {
+		t.Error("expected nil Metadata")
+	}
+	if e1.ExpiresAt != nil {
+		t.Error("expected nil ExpiresAt")
+	}
+
+	// Test with metadata and expiry
+	metadata := `{"version":1}`
+	expiry := time.Now().Add(24 * time.Hour)
+	e2 := KVEntry{NamespaceID: ns.ID, Key: "k2", Value: "v2", Metadata: &metadata, ExpiresAt: &expiry}
+	db.Create(&e2)
+	if e2.Metadata == nil || *e2.Metadata != metadata {
+		t.Errorf("Metadata = %v, want %q", e2.Metadata, metadata)
+	}
+	if e2.ExpiresAt == nil {
+		t.Error("expected non-nil ExpiresAt")
+	}
+}
+
+func TestCronSchedule_BeforeCreate_SetsID(t *testing.T) {
+	db := setupTestDB(t)
+	u := User{Email: "u@t.com", PasswordHash: "h"}
+	db.Create(&u)
+	s := Site{UserID: u.ID, SubdomainSlug: "test", Name: "Test"}
+	db.Create(&s)
+
+	cron := CronSchedule{SiteID: s.ID, Cron: "0 * * * *", Enabled: true}
+	if err := db.Create(&cron).Error; err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if cron.ID == "" {
+		t.Error("expected auto-generated ID")
+	}
+	if len(cron.ID) != nanoidLength {
+		t.Errorf("ID length = %d, want %d", len(cron.ID), nanoidLength)
+	}
+}
+
+func TestCronSchedule_Enabled(t *testing.T) {
+	db := setupTestDB(t)
+	u := User{Email: "u@t.com", PasswordHash: "h"}
+	db.Create(&u)
+	s := Site{UserID: u.ID, SubdomainSlug: "test", Name: "Test"}
+	db.Create(&s)
+
+	c1 := CronSchedule{SiteID: s.ID, Cron: "0 0 * * *", Enabled: true}
+	db.Create(&c1)
+	if !c1.Enabled {
+		t.Error("expected Enabled=true")
+	}
+
+	// For false values with GORM defaults, we need to use Select to force the field update
+	c2 := CronSchedule{SiteID: s.ID, Cron: "0 1 * * *", Enabled: false}
+	db.Select("SiteID", "Cron", "Enabled").Create(&c2)
+
+	// Re-read from DB to verify
+	var fetched CronSchedule
+	db.First(&fetched, "id = ?", c2.ID)
+	if fetched.Enabled {
+		t.Error("expected Enabled=false")
+	}
+}
+
+func TestWorkerLog_BeforeCreate_SetsID(t *testing.T) {
+	db := setupTestDB(t)
+	u := User{Email: "u@t.com", PasswordHash: "h"}
+	db.Create(&u)
+	s := Site{UserID: u.ID, SubdomainSlug: "test", Name: "Test"}
+	db.Create(&s)
+
+	log := WorkerLog{SiteID: s.ID, Level: "info", Message: "test log"}
+	if err := db.Create(&log).Error; err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if log.ID == "" {
+		t.Error("expected auto-generated ID")
+	}
+	if len(log.ID) != nanoidLength {
+		t.Errorf("ID length = %d, want %d", len(log.ID), nanoidLength)
+	}
+}
+
+func TestAuthCode_BeforeCreate_SetsID(t *testing.T) {
+	db := setupTestDB(t)
+	u := User{Email: "u@t.com", PasswordHash: "h"}
+	db.Create(&u)
+
+	code := AuthCode{
+		Code:          "auth_code_123",
+		UserID:        u.ID,
+		CodeChallenge: "challenge",
+		ExpiresAt:     time.Now().Add(10 * time.Minute),
+	}
+	if err := db.Create(&code).Error; err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if code.ID == "" {
+		t.Error("expected auto-generated ID")
+	}
+	if len(code.ID) != nanoidLength {
+		t.Errorf("ID length = %d, want %d", len(code.ID), nanoidLength)
+	}
+}
+
+func TestAPIKey_BeforeCreate_SetsID(t *testing.T) {
+	db := setupTestDB(t)
+	u := User{Email: "u@t.com", PasswordHash: "h"}
+	db.Create(&u)
+
+	key := APIKey{UserID: u.ID, KeyHash: "hash123", Name: "Test Key"}
+	if err := db.Create(&key).Error; err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if key.ID == "" {
+		t.Error("expected auto-generated ID")
+	}
+	if len(key.ID) != nanoidLength {
+		t.Errorf("ID length = %d, want %d", len(key.ID), nanoidLength)
+	}
+}
+
+func TestInvite_BeforeCreate_SetsID(t *testing.T) {
+	db := setupTestDB(t)
+	u := User{Email: "u@t.com", PasswordHash: "h"}
+	db.Create(&u)
+
+	inv := Invite{Code: "INVITE123", CreatedBy: u.ID}
+	if err := db.Create(&inv).Error; err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if inv.ID == "" {
+		t.Error("expected auto-generated ID")
+	}
+	if len(inv.ID) != nanoidLength {
+		t.Errorf("ID length = %d, want %d", len(inv.ID), nanoidLength)
 	}
 }

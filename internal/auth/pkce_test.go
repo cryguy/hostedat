@@ -59,3 +59,16 @@ func TestGenerateAuthCode(t *testing.T) {
 		t.Error("two auth codes should not be equal")
 	}
 }
+
+func TestGenerateCodeVerifier_URLSafe(t *testing.T) {
+	v, err := GenerateCodeVerifier()
+	if err != nil {
+		t.Fatalf("GenerateCodeVerifier: %v", err)
+	}
+	// base64url should not contain +, /, or =
+	for _, ch := range v {
+		if ch == '+' || ch == '/' || ch == '=' {
+			t.Errorf("verifier contains non-URL-safe character: %q in %q", ch, v)
+		}
+	}
+}

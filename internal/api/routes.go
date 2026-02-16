@@ -25,7 +25,10 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 
 	authHandler := &AuthHandler{DB: db, JWTSecret: cfg.JWTSecret}
 	siteHandler := &SiteHandler{DB: db, Storage: store}
-	deployHandler := &DeployHandler{DB: db, Storage: store, WorkerEngine: workerEngine}
+	deployHandler := &DeployHandler{DB: db, Storage: store}
+	if workerEngine != nil {
+		deployHandler.WorkerEngine = workerEngine
+	}
 	apiKeyHandler := &APIKeyHandler{DB: db}
 	adminHandler := &AdminHandler{DB: db, Storage: store}
 	workerHandler := &WorkerHandler{DB: db}

@@ -116,3 +116,93 @@ func TestMatchRedirect_FirstMatchWins(t *testing.T) {
 		t.Errorf("target = %q, want /first (first match wins)", target)
 	}
 }
+
+func TestMatchPattern_WildcardPrefixExact(t *testing.T) {
+	// Test /blog/* matching /blog exactly (path == prefix case)
+	// When path is exactly the prefix, TrimPrefix(path, prefix+"/") returns the original path
+	// because "/blog" doesn't start with "/blog/"
+	matched, resolved := matchPattern("/blog/*", "/blog", "/articles/:splat")
+	if !matched {
+		t.Error("expected /blog/* to match /blog")
+	}
+	// splat = TrimPrefix("/blog", "/blog/") = "/blog" (unchanged)
+	expected := "/articles//blog"
+	if resolved != expected {
+		t.Errorf("resolved = %q, want %q", resolved, expected)
+	}
+}
+
+func TestMatchPattern_WildcardWithSplat(t *testing.T) {
+	// Test /api/* with :splat substitution
+	matched, resolved := matchPattern("/api/*", "/api/users/123", "/v2/api/:splat")
+	if !matched {
+		t.Error("expected match")
+	}
+	if resolved != "/v2/api/users/123" {
+		t.Errorf("resolved = %q, want /v2/api/users/123", resolved)
+	}
+}
+
+func TestMatchPattern_RootWildcardWithSplat(t *testing.T) {
+	// Test /* with :splat replacement
+	matched, resolved := matchPattern("/*", "/some/deep/path", "/app/:splat")
+	if !matched {
+		t.Error("expected match")
+	}
+	if resolved != "/app/some/deep/path" {
+		t.Errorf("resolved = %q, want /app/some/deep/path", resolved)
+	}
+}
+
+func TestMatchPattern_ExactMatchWithSplat(t *testing.T) {
+	// Test exact match removes :splat entirely
+	matched, resolved := matchPattern("/exact", "/exact", "/target/:splat/more")
+	if !matched {
+		t.Error("expected match")
+	}
+	if resolved != "/target//more" {
+		t.Errorf("resolved = %q, want /target//more", resolved)
+	}
+}
+
+func TestMatchPattern_WildcardNoMatch(t *testing.T) {
+	// Test wildcard pattern that doesn't match
+	matched, _ := matchPattern("/blog/*", "/about/page", "/articles/:splat")
+	if matched {
+		t.Error("expected no match for /blog/* against /about/page")
+	}
+}
+
+func TestMatchPattern_NoMatchAtAll(t *testing.T) {
+	// Test pattern that doesn't match (no exact, no wildcard)
+	matched, resolved := matchPattern("/specific", "/different", "/target")
+	if matched {
+		t.Error("expected no match")
+	}
+	if resolved != "" {
+		t.Errorf("resolved should be empty on no match, got %q", resolved)
+	}
+}
+
+func TestMatchPattern_WildcardWithTrailingSlash(t *testing.T) {
+	// Test /api/* matching /api/v1/users (path has prefix+"/")
+	matched, resolved := matchPattern("/api/*", "/api/v1/users", "/backend/:splat")
+	if !matched {
+		t.Error("expected match")
+	}
+	if resolved != "/backend/v1/users" {
+		t.Errorf("resolved = %q, want /backend/v1/users", resolved)
+	}
+}
+
+func TestMatchPattern_RootWildcardDirect(t *testing.T) {
+	// Test the /* pattern directly (note: this is handled by lines 80-86, not 90-94)
+	// Lines 90-94 are unreachable because /* matches the HasSuffix check at line 80
+	matched, resolved := matchPattern("/*", "/foo/bar", "/app/:splat")
+	if !matched {
+		t.Error("expected /* to match /foo/bar")
+	}
+	if resolved != "/app/foo/bar" {
+		t.Errorf("resolved = %q, want /app/foo/bar", resolved)
+	}
+}

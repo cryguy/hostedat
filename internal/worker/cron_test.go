@@ -73,3 +73,49 @@ func TestValidateCron(t *testing.T) {
 		})
 	}
 }
+
+func TestFieldMatches_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+		value int
+		want  bool
+	}{
+		{"wildcard", "*", 42, true},
+		{"step divide evenly", "*/10", 30, true},
+		{"step no match", "*/10", 33, false},
+		{"step at zero", "*/15", 0, true},
+		{"comma single match", "5,10,15", 10, true},
+		{"comma no match", "5,10,15", 7, false},
+		{"range start", "10-20", 10, true},
+		{"range end", "10-20", 20, true},
+		{"range middle", "10-20", 15, true},
+		{"range below", "10-20", 9, false},
+		{"range above", "10-20", 21, false},
+		{"exact match", "42", 42, true},
+		{"exact no match", "42", 43, false},
+		{"invalid step", "*/0", 5, false},
+		{"invalid step negative", "*/-5", 5, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := fieldMatches(tt.field, tt.value)
+			if got != tt.want {
+				t.Errorf("fieldMatches(%q, %d) = %v, want %v", tt.field, tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewCronRunner_BasicCreation(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Create and immediately shutdown
+	cr := NewCronRunner(db, e)
+	if cr == nil {
+		t.Fatal("NewCronRunner returned nil")
+	}
+	cr.Shutdown()
+}

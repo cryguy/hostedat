@@ -416,3 +416,153 @@ type mockAssetsFetcher struct {
 func (m *mockAssetsFetcher) Fetch(req *WorkerRequest) (*WorkerResponse, error) {
 	return m.response, m.err
 }
+
+// ---------------------------------------------------------------------------
+// Additional Coverage Tests
+// ---------------------------------------------------------------------------
+
+func TestEngine_SetStore(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// SetStore should not panic and should set the store field
+	e.SetStore(nil) // Should handle nil
+	if e.store != nil {
+		t.Error("SetStore(nil) should set store to nil")
+	}
+}
+
+func TestEngine_MaxResponseBytes(t *testing.T) {
+	db := testDB(t)
+	cfg := testCfg()
+	cfg.MaxResponseBytes = 12345678
+	e := NewEngine(cfg, db)
+	defer e.Shutdown()
+
+	got := e.MaxResponseBytes()
+	if got != 12345678 {
+		t.Errorf("MaxResponseBytes() = %d, want 12345678", got)
+	}
+}
+
+func TestBuildEnvFromDB(t *testing.T) {
+	db := testDB(t)
+	// testDB already migrates KVNamespace, KVEntry, WorkerLog
+	// We need to also migrate WorkerEnvVar for this test
+	db.Exec("CREATE TABLE IF NOT EXISTS worker_env_vars (id TEXT PRIMARY KEY, site_id TEXT, name TEXT, value TEXT, secret INTEGER DEFAULT 0)")
+
+	siteID := "test-site-env"
+
+	// Create some environment variables (manual insert since WorkerEnvVar might not have BeforeCreate in test)
+	db.Exec("INSERT INTO worker_env_vars (id, site_id, name, value, secret) VALUES (?, ?, ?, ?, ?)", "ev1", siteID, "PUBLIC_KEY", "pk_test_123", 0)
+	db.Exec("INSERT INTO worker_env_vars (id, site_id, name, value, secret) VALUES (?, ?, ?, ?, ?)", "ev2", siteID, "SECRET_KEY", "sk_live_456", 1)
+	db.Exec("INSERT INTO worker_env_vars (id, site_id, name, value, secret) VALUES (?, ?, ?, ?, ?)", "ev3", siteID, "API_URL", "https://api.example.com", 0)
+
+	// Create KV namespaces (using models from worker_test.go pattern)
+	db.Exec("INSERT INTO kv_namespaces (id, site_id, name, created_at) VALUES (?, ?, ?, datetime('now'))", "ns1", siteID, "CACHE")
+	db.Exec("INSERT INTO kv_namespaces (id, site_id, name, created_at) VALUES (?, ?, ?, datetime('now'))", "ns2", siteID, "STORE")
+
+	// Build env from DB
+	env := BuildEnvFromDB(db, siteID, nil)
+
+	// Verify regular vars
+	if env.Vars["PUBLIC_KEY"] != "pk_test_123" {
+		t.Errorf("Vars[PUBLIC_KEY] = %q, want pk_test_123", env.Vars["PUBLIC_KEY"])
+	}
+	if env.Vars["API_URL"] != "https://api.example.com" {
+		t.Errorf("Vars[API_URL] = %q", env.Vars["API_URL"])
+	}
+	if _, exists := env.Vars["SECRET_KEY"]; exists {
+		t.Error("SECRET_KEY should not be in Vars (it's a secret)")
+	}
+
+	// Verify secrets
+	if env.Secrets["SECRET_KEY"] != "sk_live_456" {
+		t.Errorf("Secrets[SECRET_KEY] = %q, want sk_live_456", env.Secrets["SECRET_KEY"])
+	}
+
+	// Verify KV bindings
+	if env.KVBindings["CACHE"] != "ns1" {
+		t.Errorf("KVBindings[CACHE] = %q, want ns1", env.KVBindings["CACHE"])
+	}
+	if env.KVBindings["STORE"] != "ns2" {
+		t.Errorf("KVBindings[STORE] = %q, want ns2", env.KVBindings["STORE"])
+	}
+
+	// Verify ASSETS is nil when not provided
+	if env.Assets != nil {
+		t.Error("Assets should be nil when not provided")
+	}
+}
+
+func TestBuildEnvFromDB_WithAssets(t *testing.T) {
+	db := testDB(t)
+	siteID := "test-site-assets"
+
+	mockFetcher := &mockAssetsFetcher{
+		response: &WorkerResponse{StatusCode: 200, Body: []byte("test")},
+	}
+
+	env := BuildEnvFromDB(db, siteID, mockFetcher)
+
+	if env.Assets == nil {
+		t.Error("Assets should not be nil when fetcher is provided")
+	}
+	if env.Assets != mockFetcher {
+		t.Error("Assets should be the provided fetcher")
+	}
+}
+
+func TestEngine_EnsureBytecode_FromCache(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	siteID := "test-bytecode-cache"
+	version := 1
+
+	source := `export default { fetch() { return new Response("ok"); } };`
+
+	// Compile and cache first
+	bytecode, err := e.CompileAndCache(siteID, version, source)
+	if err != nil {
+		t.Fatalf("CompileAndCache: %v", err)
+	}
+	if len(bytecode) == 0 {
+		t.Fatal("bytecode is empty")
+	}
+
+	// Clear the in-memory cache to simulate server restart
+	key := poolKey{SiteID: siteID, Version: version}
+	e.bytecodes.Delete(key)
+
+	// Manually store it back (simulating it's in memory now)
+	e.bytecodes.Store(key, bytecode)
+
+	// EnsureBytecode should find it in cache and not error
+	err = e.EnsureBytecode(siteID, version)
+	if err != nil {
+		t.Errorf("EnsureBytecode (from cache): %v", err)
+	}
+}
+
+func TestEngine_EnsureBytecode_NoStore(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Don't set a store (e.store == nil)
+	siteID := "test-no-store"
+	version := 1
+
+	// Clear bytecode cache
+	key := poolKey{SiteID: siteID, Version: version}
+	e.bytecodes.Delete(key)
+
+	// EnsureBytecode should fail when there's no cached bytecode and no store
+	err := e.EnsureBytecode(siteID, version)
+	if err == nil {
+		t.Fatal("EnsureBytecode should fail when store is not set")
+	}
+	if err.Error() != "storage manager not set" {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
