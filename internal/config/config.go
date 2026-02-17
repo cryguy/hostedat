@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"os"
+	"runtime"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,11 +23,19 @@ type Config struct {
 }
 
 type ObjectStorageConfig struct {
-	Enabled    bool   `yaml:"enabled"`
-	Managed    bool   `yaml:"managed"`
-	DataDir    string `yaml:"data_dir"`
-	S3Endpoint string `yaml:"s3_endpoint"`
-	Region     string `yaml:"region"`
+	Enabled    bool                    `yaml:"enabled"`
+	Managed    bool                    `yaml:"managed"`
+	DataDir    string                  `yaml:"data_dir"`
+	BinaryPath string                  `yaml:"binary_path"`
+	S3Endpoint string                  `yaml:"s3_endpoint"`
+	Region     string                  `yaml:"region"`
+	Auth       ObjectStorageAuthConfig `yaml:"auth"`
+}
+
+type ObjectStorageAuthConfig struct {
+	AccessKeyID     string `yaml:"access_key_id"`
+	SecretAccessKey string `yaml:"secret_access_key"`
+	RequireSigV4    *bool  `yaml:"require_sigv4"`
 }
 
 type WorkerConfig struct {
@@ -107,8 +117,25 @@ func Load(path string) (*Config, error) {
 		if cfg.ObjectStorage.Managed && cfg.ObjectStorage.DataDir == "" {
 			cfg.ObjectStorage.DataDir = "./data/seaweedfs"
 		}
+		if cfg.ObjectStorage.Managed && cfg.ObjectStorage.BinaryPath == "" {
+			if runtime.GOOS == "windows" {
+				cfg.ObjectStorage.BinaryPath = "./weed.exe"
+			} else {
+				cfg.ObjectStorage.BinaryPath = "weed"
+			}
+		}
 		if cfg.ObjectStorage.Region == "" {
 			cfg.ObjectStorage.Region = "us-east-1"
+		}
+		if cfg.ObjectStorage.Auth.RequireSigV4 == nil {
+			requireSigV4 := true
+			cfg.ObjectStorage.Auth.RequireSigV4 = &requireSigV4
+		}
+
+		hasAccessKey := strings.TrimSpace(cfg.ObjectStorage.Auth.AccessKeyID) != ""
+		hasSecretKey := strings.TrimSpace(cfg.ObjectStorage.Auth.SecretAccessKey) != ""
+		if hasAccessKey != hasSecretKey {
+			return nil, fmt.Errorf("config: object_storage.auth.access_key_id and object_storage.auth.secret_access_key must be set together")
 		}
 	}
 

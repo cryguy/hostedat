@@ -28,6 +28,17 @@ func InitDB(cfg config.DBConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
+	closeDB := func() {
+		if sqlDB, err := db.DB(); err == nil {
+			sqlDB.Close()
+		}
+	}
+
+	if err := ensureNoDuplicateStorageBindingNames(db); err != nil {
+		closeDB()
+		return nil, err
+	}
+
 	if err := db.AutoMigrate(
 		&User{},
 		&Site{},
@@ -44,10 +55,39 @@ func InitDB(cfg config.DBConfig) (*gorm.DB, error) {
 		&StorageBucket{},
 		&S3Credential{},
 	); err != nil {
+		closeDB()
 		return nil, fmt.Errorf("auto-migrating: %w", err)
 	}
 
 	return db, nil
+}
+
+func ensureNoDuplicateStorageBindingNames(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&StorageBucket{}) {
+		return nil
+	}
+
+	var row struct {
+		SiteID string
+		Name   string
+		Count  int64
+	}
+
+	err := db.Raw(`
+		SELECT site_id, name, COUNT(*) AS count
+		FROM storage_buckets
+		GROUP BY site_id, name
+		HAVING COUNT(*) > 1
+		LIMIT 1
+	`).Scan(&row).Error
+	if err != nil {
+		return fmt.Errorf("checking storage binding duplicates: %w", err)
+	}
+	if row.Count > 1 {
+		return fmt.Errorf("cannot migrate storage_buckets: duplicate binding name %q exists for site %q; resolve duplicates before starting", row.Name, row.SiteID)
+	}
+
+	return nil
 }
 
 func SeedDefaults(db *gorm.DB, cfg *config.Config) error {

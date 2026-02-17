@@ -1,8 +1,8 @@
 package api
 
 import (
-	"log"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"net/url"
@@ -86,7 +86,8 @@ func SubdomainRouter(db *gorm.DB, store *storage.Manager, cache *storage.SiteRul
 			if strings.HasSuffix(host, suffix) {
 				subdomain := strings.TrimSuffix(host, suffix)
 				if subdomain != "" && !strings.Contains(subdomain, ".") {
-					// Intercept storage subdomain → S3 proxy
+					// Intercept storage subdomain -> S3 proxy.
+					// The proxy enforces SigV4 request signing when configured.
 					if subdomain == "storage" {
 						if s3Proxy != nil {
 							s3Proxy.ServeHTTP(c.Response().Writer, c.Request())

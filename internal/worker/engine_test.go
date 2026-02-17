@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/cryguy/hostedat/internal/config"
+	"github.com/cryguy/hostedat/internal/models"
 	"github.com/fastschema/qjs"
 )
 
@@ -447,20 +448,37 @@ func TestEngine_MaxResponseBytes(t *testing.T) {
 
 func TestBuildEnvFromDB(t *testing.T) {
 	db := testDB(t)
-	// testDB already migrates KVNamespace, KVEntry, WorkerLog
-	// We need to also migrate WorkerEnvVar for this test
-	db.Exec("CREATE TABLE IF NOT EXISTS worker_env_vars (id TEXT PRIMARY KEY, site_id TEXT, name TEXT, value TEXT, secret INTEGER DEFAULT 0)")
-
 	siteID := "test-site-env"
 
-	// Create some environment variables (manual insert since WorkerEnvVar might not have BeforeCreate in test)
-	db.Exec("INSERT INTO worker_env_vars (id, site_id, name, value, secret) VALUES (?, ?, ?, ?, ?)", "ev1", siteID, "PUBLIC_KEY", "pk_test_123", 0)
-	db.Exec("INSERT INTO worker_env_vars (id, site_id, name, value, secret) VALUES (?, ?, ?, ?, ?)", "ev2", siteID, "SECRET_KEY", "sk_live_456", 1)
-	db.Exec("INSERT INTO worker_env_vars (id, site_id, name, value, secret) VALUES (?, ?, ?, ?, ?)", "ev3", siteID, "API_URL", "https://api.example.com", 0)
+	u := models.User{Email: "worker-env@test.local", PasswordHash: "hash"}
+	if err := db.Create(&u).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	s := models.Site{ID: siteID, UserID: u.ID, SubdomainSlug: "env-site", Name: "Env Site"}
+	if err := db.Create(&s).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
 
-	// Create KV namespaces (using models from worker_test.go pattern)
-	db.Exec("INSERT INTO kv_namespaces (id, site_id, name, created_at) VALUES (?, ?, ?, datetime('now'))", "ns1", siteID, "CACHE")
-	db.Exec("INSERT INTO kv_namespaces (id, site_id, name, created_at) VALUES (?, ?, ?, datetime('now'))", "ns2", siteID, "STORE")
+	if err := db.Create(&models.WorkerEnvVar{SiteID: siteID, Name: "PUBLIC_KEY", Value: "pk_test_123", Secret: false}).Error; err != nil {
+		t.Fatalf("create env var PUBLIC_KEY: %v", err)
+	}
+	if err := db.Create(&models.WorkerEnvVar{SiteID: siteID, Name: "SECRET_KEY", Value: "sk_live_456", Secret: true}).Error; err != nil {
+		t.Fatalf("create env var SECRET_KEY: %v", err)
+	}
+	if err := db.Create(&models.WorkerEnvVar{SiteID: siteID, Name: "API_URL", Value: "https://api.example.com", Secret: false}).Error; err != nil {
+		t.Fatalf("create env var API_URL: %v", err)
+	}
+
+	if err := db.Create(&models.KVNamespace{ID: "ns1", SiteID: siteID, Name: "CACHE"}).Error; err != nil {
+		t.Fatalf("create kv namespace CACHE: %v", err)
+	}
+	if err := db.Create(&models.KVNamespace{ID: "ns2", SiteID: siteID, Name: "STORE"}).Error; err != nil {
+		t.Fatalf("create kv namespace STORE: %v", err)
+	}
+
+	if err := db.Create(&models.StorageBucket{SiteID: siteID, Name: "IMAGES", BucketName: siteID + "-images"}).Error; err != nil {
+		t.Fatalf("create storage bucket IMAGES: %v", err)
+	}
 
 	// Build env from DB
 	env := BuildEnvFromDB(db, siteID, nil)
@@ -487,6 +505,10 @@ func TestBuildEnvFromDB(t *testing.T) {
 	}
 	if env.KVBindings["STORE"] != "ns2" {
 		t.Errorf("KVBindings[STORE] = %q, want ns2", env.KVBindings["STORE"])
+	}
+
+	if env.StorageBindings["IMAGES"] != siteID+"-images" {
+		t.Errorf("StorageBindings[IMAGES] = %q, want %q", env.StorageBindings["IMAGES"], siteID+"-images")
 	}
 
 	// Verify ASSETS is nil when not provided

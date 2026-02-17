@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -157,5 +158,101 @@ database:
 	}
 	if cfg.Registration.InviteRequired {
 		t.Error("Registration.InviteRequired should default to false")
+	}
+}
+
+func TestLoad_ObjectStorage_DefaultsWhenEnabled(t *testing.T) {
+	cfg, err := Load(writeTemp(t, `
+domain: example.com
+jwt_secret: this-is-a-test-secret-that-is-at-least-32-chars-long
+database:
+  dsn: test.db
+object_storage:
+  enabled: true
+  managed: true
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.ObjectStorage.S3Endpoint != "http://127.0.0.1:8333" {
+		t.Errorf("S3Endpoint default = %q", cfg.ObjectStorage.S3Endpoint)
+	}
+	if cfg.ObjectStorage.DataDir != "./data/seaweedfs" {
+		t.Errorf("DataDir default = %q", cfg.ObjectStorage.DataDir)
+	}
+	if cfg.ObjectStorage.Region != "us-east-1" {
+		t.Errorf("Region default = %q", cfg.ObjectStorage.Region)
+	}
+	if cfg.ObjectStorage.Auth.RequireSigV4 == nil || !*cfg.ObjectStorage.Auth.RequireSigV4 {
+		t.Error("RequireSigV4 should default to true")
+	}
+	if runtime.GOOS == "windows" {
+		if cfg.ObjectStorage.BinaryPath != "./weed.exe" {
+			t.Errorf("BinaryPath default = %q", cfg.ObjectStorage.BinaryPath)
+		}
+	} else if cfg.ObjectStorage.BinaryPath != "weed" {
+		t.Errorf("BinaryPath default = %q", cfg.ObjectStorage.BinaryPath)
+	}
+}
+
+func TestLoad_ObjectStorage_AuthConfig(t *testing.T) {
+	cfg, err := Load(writeTemp(t, `
+domain: example.com
+jwt_secret: this-is-a-test-secret-that-is-at-least-32-chars-long
+database:
+  dsn: test.db
+object_storage:
+  enabled: true
+  auth:
+    access_key_id: test-access
+    secret_access_key: test-secret
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ObjectStorage.Auth.AccessKeyID != "test-access" {
+		t.Errorf("AccessKeyID = %q", cfg.ObjectStorage.Auth.AccessKeyID)
+	}
+	if cfg.ObjectStorage.Auth.SecretAccessKey != "test-secret" {
+		t.Errorf("SecretAccessKey = %q", cfg.ObjectStorage.Auth.SecretAccessKey)
+	}
+}
+
+func TestLoad_ObjectStorage_InvalidPartialAuthConfig(t *testing.T) {
+	_, err := Load(writeTemp(t, `
+domain: example.com
+jwt_secret: this-is-a-test-secret-that-is-at-least-32-chars-long
+database:
+  dsn: test.db
+object_storage:
+  enabled: true
+  auth:
+    access_key_id: only-access-key
+`))
+	if err == nil || !strings.Contains(err.Error(), "object_storage.auth.access_key_id") {
+		t.Fatalf("expected auth pair validation error, got %v", err)
+	}
+}
+
+func TestLoad_ObjectStorage_RequireSigV4CanBeDisabled(t *testing.T) {
+	cfg, err := Load(writeTemp(t, `
+domain: example.com
+jwt_secret: this-is-a-test-secret-that-is-at-least-32-chars-long
+database:
+  dsn: test.db
+object_storage:
+  enabled: true
+  auth:
+    require_sigv4: false
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ObjectStorage.Auth.RequireSigV4 == nil {
+		t.Fatal("RequireSigV4 should not be nil")
+	}
+	if *cfg.ObjectStorage.Auth.RequireSigV4 {
+		t.Fatal("RequireSigV4 should remain false when explicitly configured")
 	}
 }

@@ -231,8 +231,8 @@ func (wl *WorkerLog) BeforeCreate(tx *gorm.DB) error {
 
 type StorageBucket struct {
 	ID         string    `gorm:"primaryKey;size:20" json:"id"`
-	SiteID     string    `gorm:"index;not null" json:"site_id"`
-	Name       string    `gorm:"not null" json:"name"`
+	SiteID     string    `gorm:"not null;uniqueIndex:idx_storage_buckets_site_name,priority:1" json:"site_id"`
+	Name       string    `gorm:"not null;uniqueIndex:idx_storage_buckets_site_name,priority:2" json:"name"`
 	BucketName string    `gorm:"uniqueIndex;not null" json:"bucket_name"`
 	CreatedAt  time.Time `json:"created_at"`
 

@@ -1,10 +1,13 @@
 package models
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/cryguy/hostedat/internal/config"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -464,6 +467,33 @@ func TestStorageBucket_UniqueBucketName(t *testing.T) {
 	}
 }
 
+func TestStorageBucket_UniqueBindingNamePerSite(t *testing.T) {
+	db := setupTestDB(t)
+	u := User{Email: "u@t.com", PasswordHash: "h"}
+	u2 := User{Email: "u2@t.com", PasswordHash: "h"}
+	db.Create(&u)
+	db.Create(&u2)
+	s1 := Site{UserID: u.ID, SubdomainSlug: "storage-site-1", Name: "Site 1"}
+	s2 := Site{UserID: u2.ID, SubdomainSlug: "storage-site-2", Name: "Site 2"}
+	db.Create(&s1)
+	db.Create(&s2)
+
+	err := db.Create(&StorageBucket{SiteID: s1.ID, Name: "IMAGES", BucketName: "bucket-one"}).Error
+	if err != nil {
+		t.Fatalf("create first bucket: %v", err)
+	}
+
+	err = db.Create(&StorageBucket{SiteID: s1.ID, Name: "IMAGES", BucketName: "bucket-two"}).Error
+	if err == nil {
+		t.Fatal("expected unique constraint error for duplicate (site_id, name)")
+	}
+
+	err = db.Create(&StorageBucket{SiteID: s2.ID, Name: "IMAGES", BucketName: "bucket-three"}).Error
+	if err != nil {
+		t.Fatalf("same binding name on different site should be allowed: %v", err)
+	}
+}
+
 func TestS3Credential_BeforeCreate_SetsID(t *testing.T) {
 	db := setupTestDB(t)
 	u := User{Email: "u@t.com", PasswordHash: "h"}
@@ -500,4 +530,54 @@ func TestS3Credential_UniqueAccessKeyID(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unique constraint error for duplicate access_key_id")
 	}
+}
+
+func TestInitDB_FailsWhenLegacyStorageBindingsContainDuplicates(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+
+	if err := db.Exec(`
+		CREATE TABLE storage_buckets (
+			id TEXT PRIMARY KEY,
+			site_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			bucket_name TEXT NOT NULL
+		)
+	`).Error; err != nil {
+		t.Fatalf("create legacy storage_buckets: %v", err)
+	}
+	if err := db.Exec(`
+		INSERT INTO storage_buckets (id, site_id, name, bucket_name) VALUES
+		('a', 'site1', 'IMAGES', 'site1-images-1'),
+		('b', 'site1', 'IMAGES', 'site1-images-2')
+	`).Error; err != nil {
+		t.Fatalf("insert legacy duplicates: %v", err)
+	}
+
+	// Close the setup DB connection before InitDB opens its own, and before
+	// TempDir cleanup — Windows holds file locks on open SQLite handles.
+	sqlDB, _ := db.DB()
+	if sqlDB != nil {
+		sqlDB.Close()
+	}
+
+	_, err = InitDB(config.DBConfig{Driver: "sqlite", DSN: dbPath})
+	if err == nil {
+		t.Fatal("expected InitDB to fail when duplicate (site_id, name) exists")
+	}
+	if got := err.Error(); got == "" || !containsAll(got, "duplicate", "storage_buckets") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func containsAll(s string, parts ...string) bool {
+	for _, p := range parts {
+		if !strings.Contains(strings.ToLower(s), strings.ToLower(p)) {
+			return false
+		}
+	}
+	return true
 }

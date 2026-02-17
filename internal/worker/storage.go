@@ -72,6 +72,12 @@ func buildStorageBinding(ctx *qjs.Context, bridge *StorageBridge) *qjs.Value {
 			return c.NewUndefined(), nil
 		}
 		key := args[0].String()
+		// P0 contract: reject non-string bodies explicitly instead of coercing
+		// (which can silently corrupt binary payloads).
+		if !args[1].IsString() {
+			promise.Reject(c.NewError(fmt.Errorf("BUCKET.put currently supports string values only")))
+			return c.NewUndefined(), nil
+		}
 		value := args[1].String()
 
 		opts := minio.PutObjectOptions{}
@@ -324,6 +330,10 @@ func buildR2ObjectBody(c *qjs.Context, key string, data []byte, stat *minio.Obje
 
 	bodyUsed := false
 	bodyData := string(data)
+	markBodyUsed := func() {
+		bodyUsed = true
+		obj.SetPropertyStr("bodyUsed", c.NewBool(true))
+	}
 
 	// text() -> Promise<string>
 	textFn := c.Function(func(this *qjs.This) (*qjs.Value, error) {
@@ -333,7 +343,7 @@ func buildR2ObjectBody(c *qjs.Context, key string, data []byte, stat *minio.Obje
 			p.Reject(cc.NewError(fmt.Errorf("body already consumed")))
 			return cc.NewUndefined(), nil
 		}
-		bodyUsed = true
+		markBodyUsed()
 		p.Resolve(cc.NewString(bodyData))
 		return cc.NewUndefined(), nil
 	}, true)
@@ -347,9 +357,8 @@ func buildR2ObjectBody(c *qjs.Context, key string, data []byte, stat *minio.Obje
 			p.Reject(cc.NewError(fmt.Errorf("body already consumed")))
 			return cc.NewUndefined(), nil
 		}
-		bodyUsed = true
-		// Return as string since QuickJS ArrayBuffer creation from Go is complex.
-		p.Resolve(cc.NewString(bodyData))
+		// P0 contract: fail explicitly until real binary support is implemented.
+		p.Reject(cc.NewError(fmt.Errorf("arrayBuffer() is not implemented for storage objects")))
 		return cc.NewUndefined(), nil
 	}, true)
 	obj.SetPropertyStr("arrayBuffer", abFn)
@@ -362,13 +371,12 @@ func buildR2ObjectBody(c *qjs.Context, key string, data []byte, stat *minio.Obje
 			p.Reject(cc.NewError(fmt.Errorf("body already consumed")))
 			return cc.NewUndefined(), nil
 		}
-		bodyUsed = true
-		parsed := cc.ParseJSON(bodyData)
-		if parsed.IsError() {
-			defer parsed.Free()
+		markBodyUsed()
+		if !json.Valid([]byte(bodyData)) {
 			p.Reject(cc.NewError(fmt.Errorf("invalid JSON")))
 			return cc.NewUndefined(), nil
 		}
+		parsed := cc.ParseJSON(bodyData)
 		p.Resolve(parsed)
 		return cc.NewUndefined(), nil
 	}, true)

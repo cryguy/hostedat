@@ -41,7 +41,15 @@ func testDB(t *testing.T) *gorm.DB {
 		t.Fatalf("opening test db: %v", err)
 	}
 	db.Exec("PRAGMA foreign_keys = OFF")
-	if err := db.AutoMigrate(&models.KVNamespace{}, &models.KVEntry{}, &models.WorkerLog{}); err != nil {
+	if err := db.AutoMigrate(
+		&models.User{},
+		&models.Site{},
+		&models.WorkerEnvVar{},
+		&models.KVNamespace{},
+		&models.KVEntry{},
+		&models.WorkerLog{},
+		&models.StorageBucket{},
+	); err != nil {
 		t.Fatalf("auto-migrate: %v", err)
 	}
 	return db

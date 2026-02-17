@@ -20,6 +20,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	minio "github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 	"golang.org/x/time/rate"
 )
 
@@ -81,15 +82,26 @@ func main() {
 		} else {
 			iamClient = seaweedfs.NewClient(cfg.ObjectStorage.S3Endpoint)
 		}
-		s3Proxy = api.NewS3Proxy(cfg.ObjectStorage.S3Endpoint)
+		requireSigV4 := true
+		if cfg.ObjectStorage.Auth.RequireSigV4 != nil {
+			requireSigV4 = *cfg.ObjectStorage.Auth.RequireSigV4
+		}
+		s3Proxy = api.NewS3Proxy(cfg.ObjectStorage.S3Endpoint, requireSigV4)
 
 		// Create minio-go client for S3 bucket ops and worker bindings.
 		s3Host := strings.TrimPrefix(cfg.ObjectStorage.S3Endpoint, "http://")
 		s3Host = strings.TrimPrefix(s3Host, "https://")
 		useSSL := strings.HasPrefix(cfg.ObjectStorage.S3Endpoint, "https://")
+
+		var creds *credentials.Credentials
+		if cfg.ObjectStorage.Auth.AccessKeyID != "" && cfg.ObjectStorage.Auth.SecretAccessKey != "" {
+			creds = credentials.NewStaticV4(cfg.ObjectStorage.Auth.AccessKeyID, cfg.ObjectStorage.Auth.SecretAccessKey, "")
+		}
+
 		minioClient, err := minio.New(s3Host, &minio.Options{
 			Secure: useSSL,
 			Region: cfg.ObjectStorage.Region,
+			Creds:  creds,
 		})
 		if err != nil {
 			log.Printf("Warning: failed to create S3 client: %v", err)

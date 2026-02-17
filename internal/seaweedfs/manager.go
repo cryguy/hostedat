@@ -3,9 +3,11 @@ package seaweedfs
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
+	"runtime"
 	"time"
 
 	"github.com/cryguy/hostedat/internal/config"
@@ -38,8 +40,16 @@ func (m *Manager) Start() error {
 	// Pick non-conflicting ports for master and volume services.
 	masterPort := s3Port + 1
 	volumePort := s3Port + 2
+	if err := ensurePortsAvailable(s3Port, masterPort, volumePort); err != nil {
+		return err
+	}
 
-	m.cmd = exec.Command("weed", "server", "-s3",
+	weedBinary := m.Config.BinaryPath
+	if weedBinary == "" {
+		weedBinary = "weed"
+	}
+
+	m.cmd = exec.Command(weedBinary, "server", "-s3",
 		"-dir="+m.Config.DataDir,
 		fmt.Sprintf("-s3.port=%d", s3Port),
 		fmt.Sprintf("-master.port=%d", masterPort),
@@ -68,8 +78,20 @@ func (m *Manager) Stop() error {
 	if m.cmd == nil || m.cmd.Process == nil {
 		return nil
 	}
+	if runtime.GOOS == "windows" {
+		if err := m.cmd.Process.Kill(); err != nil {
+			return err
+		}
+		_, _ = m.cmd.Process.Wait()
+		return nil
+	}
+
 	if err := m.cmd.Process.Signal(os.Interrupt); err != nil {
-		return m.cmd.Process.Kill()
+		if killErr := m.cmd.Process.Kill(); killErr != nil {
+			return killErr
+		}
+		_, _ = m.cmd.Process.Wait()
+		return nil
 	}
 	done := make(chan error, 1)
 	go func() { done <- m.cmd.Wait() }()
@@ -98,6 +120,17 @@ func (m *Manager) waitForHealth(timeout time.Duration) error {
 		time.Sleep(500 * time.Millisecond)
 	}
 	return fmt.Errorf("timed out after %v", timeout)
+}
+
+func ensurePortsAvailable(ports ...int) error {
+	for _, port := range ports {
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			return fmt.Errorf("required SeaweedFS port %d is unavailable: %w", port, err)
+		}
+		_ = ln.Close()
+	}
+	return nil
 }
 
 func parsePort(endpoint string) (int, error) {

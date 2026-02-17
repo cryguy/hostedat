@@ -48,10 +48,17 @@ worker:
 
 # S3-compatible object storage (backed by SeaweedFS)
 # Provides S3 API at storage.<domain> and R2-compatible env.BUCKET_NAME in workers
+# Security model: storage.<domain> only accepts SigV4-signed requests by default.
 object_storage:
   enabled: false
   managed: true                              # hostedat manages SeaweedFS lifecycle
   data_dir: ./data/seaweedfs                 # SeaweedFS data directory
+  binary_path: ./weed.exe                    # SeaweedFS binary path (managed mode)
+  region: us-east-1
+  auth:
+    require_sigv4: true                      # Reject unsigned proxy requests
+    access_key_id: ""                        # Optional static S3 credentials
+    secret_access_key: ""                    # Optional static S3 credentials
   # Override for external SeaweedFS instance:
   # managed: false
   # s3_endpoint: http://127.0.0.1:8333
