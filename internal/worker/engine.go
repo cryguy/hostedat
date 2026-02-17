@@ -186,13 +186,27 @@ func (e *Engine) GetOrCreatePool(siteID string, version int, env *Env) (*qjs.Poo
 	pool := qjs.NewPool(cfg.PoolSize, option,
 		// Setup function 1: Web APIs (Headers, Request, Response, URL, etc.)
 		setupWebAPIs,
-		// Setup function 2: console capture
+		// Setup function 2: globals (structuredClone, performance, navigator, queueMicrotask)
+		setupGlobals,
+		// Setup function 3: encoding (atob, btoa)
+		setupEncoding,
+		// Setup function 4: timers (setTimeout, setInterval, clearTimeout, clearInterval)
+		setupTimers,
+		// Setup function 5: abort (AbortController, AbortSignal, Event, EventTarget, DOMException)
+		setupAbort,
+		// Setup function 6: crypto (crypto.getRandomValues, crypto.subtle, crypto.randomUUID)
+		setupCrypto,
+		// Setup function 7: streams (ReadableStream, WritableStream, TransformStream)
+		setupStreams,
+		// Setup function 8: formdata (FormData, Blob, File)
+		setupFormData,
+		// Setup function 9: console capture
 		setupConsole,
-		// Setup function 3: fetch()
+		// Setup function 10: fetch()
 		func(rt *qjs.Runtime) error {
 			return setupFetch(rt, cfg)
 		},
-		// Setup function 4: load worker module and extract default export
+		// Setup function 11: load worker module and extract default export
 		func(rt *qjs.Runtime) error {
 			// Load registers the compiled module in the runtime.
 			if _, err := rt.Load("worker.js", qjs.Bytecode(bytecode)); err != nil {
