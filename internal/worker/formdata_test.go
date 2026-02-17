@@ -35,7 +35,9 @@ func TestFormData_AppendAndGet(t *testing.T) {
 		Has      bool     `json:"has"`
 		Missing  bool     `json:"missing"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data.Name != "alice" {
 		t.Errorf("name = %q, want alice (first value)", data.Name)
@@ -78,7 +80,9 @@ func TestFormData_SetAndDelete(t *testing.T) {
 		AfterSet    []string `json:"afterSet"`
 		AfterDelete bool     `json:"afterDelete"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if len(data.AfterSet) != 1 || data.AfterSet[0] != "v3" {
 		t.Errorf("afterSet = %v, want [v3]", data.AfterSet)
@@ -116,7 +120,9 @@ func TestFormData_Iteration(t *testing.T) {
 		Keys   []string `json:"keys"`
 		Values []string `json:"values"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if len(data.Keys) != 3 {
 		t.Errorf("keys length = %d, want 3", len(data.Keys))
@@ -150,7 +156,9 @@ func TestFormData_BlobBasics(t *testing.T) {
 		Size int    `json:"size"`
 		Type string `json:"type"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data.Text != "hello world" {
 		t.Errorf("text = %q", data.Text)
@@ -182,7 +190,9 @@ func TestFormData_BlobSlice(t *testing.T) {
 	var data struct {
 		Text string `json:"text"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data.Text != "234" {
 		t.Errorf("sliced text = %q, want '234'", data.Text)
@@ -217,7 +227,9 @@ func TestFormData_FileBasics(t *testing.T) {
 		Type            string `json:"type"`
 		HasLastModified bool   `json:"hasLastModified"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data.Text != "file content" {
 		t.Errorf("text = %q", data.Text)

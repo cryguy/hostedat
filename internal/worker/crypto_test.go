@@ -29,7 +29,9 @@ func TestCrypto_GetRandomValues(t *testing.T) {
 		Length  int  `json:"length"`
 		NonZero bool `json:"nonZero"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data.Length != 16 {
 		t.Errorf("length = %d, want 16", data.Length)
@@ -66,7 +68,9 @@ func TestCrypto_RandomUUID(t *testing.T) {
 		Parts   int    `json:"parts"`
 		Version string `json:"version"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data.Length != 36 {
 		t.Errorf("UUID length = %d, want 36", data.Length)
@@ -103,7 +107,9 @@ func TestCrypto_SubtleDigestSHA256(t *testing.T) {
 		Hex    string `json:"hex"`
 		Length int    `json:"length"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	// SHA-256 of "hello" = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
 	expected := "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
@@ -139,7 +145,9 @@ func TestCrypto_SubtleDigestSHA1(t *testing.T) {
 		Hex    string `json:"hex"`
 		Length int    `json:"length"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	// SHA-1 of "hello" = aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d
 	expected := "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
@@ -178,7 +186,9 @@ func TestCrypto_SubtleHMACSignVerify(t *testing.T) {
 		Invalid   bool `json:"invalid"`
 		SigLength int  `json:"sigLength"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if !data.Valid {
 		t.Error("HMAC verify should return true for correct data")
@@ -188,6 +198,49 @@ func TestCrypto_SubtleHMACSignVerify(t *testing.T) {
 	}
 	if data.SigLength != 32 {
 		t.Errorf("HMAC-SHA256 signature length = %d, want 32", data.SigLength)
+	}
+}
+
+func TestCrypto_SubtleHMACSHA512(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const keyData = new TextEncoder().encode("my-secret-key-0123456789abcdef");
+    const key = await crypto.subtle.importKey(
+      "raw", keyData, { name: "HMAC", hash: "SHA-512" }, true, ["sign", "verify"]
+    );
+    const data = new TextEncoder().encode("message to sign");
+    const signature = await crypto.subtle.sign("HMAC", key, data);
+    const valid = await crypto.subtle.verify("HMAC", key, signature, data);
+    const tampered = new TextEncoder().encode("tampered message");
+    const invalid = await crypto.subtle.verify("HMAC", key, signature, tampered);
+    return Response.json({ valid, invalid, sigLength: new Uint8Array(signature).length });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Valid     bool `json:"valid"`
+		Invalid   bool `json:"invalid"`
+		SigLength int  `json:"sigLength"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if !data.Valid {
+		t.Error("HMAC-SHA512 verify should return true for correct data")
+	}
+	if data.Invalid {
+		t.Error("HMAC-SHA512 verify should return false for tampered data")
+	}
+	// SHA-512 produces 64-byte signatures, not 32.
+	if data.SigLength != 64 {
+		t.Errorf("HMAC-SHA512 signature length = %d, want 64", data.SigLength)
 	}
 }
 
@@ -228,7 +281,9 @@ func TestCrypto_SubtleAESGCMEncryptDecrypt(t *testing.T) {
 		Match    bool `json:"match"`
 		CtLength int  `json:"ctLength"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if !data.Match {
 		t.Error("AES-GCM decrypt should return original plaintext")
@@ -236,5 +291,93 @@ func TestCrypto_SubtleAESGCMEncryptDecrypt(t *testing.T) {
 	// AES-GCM adds a 16-byte auth tag. Input is 16 bytes, output should be 32.
 	if data.CtLength != 32 {
 		t.Errorf("ciphertext length = %d, want 32 (16 data + 16 tag)", data.CtLength)
+	}
+}
+
+func TestCrypto_AESGCMRejectsInvalidIVLength(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const keyData = new Uint8Array(16);
+    crypto.getRandomValues(keyData);
+    const key = await crypto.subtle.importKey(
+      "raw", keyData, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]
+    );
+    // Wrong IV length: 8 bytes instead of 12.
+    const badIV = new Uint8Array(8);
+    crypto.getRandomValues(badIV);
+    try {
+      await crypto.subtle.encrypt({ name: "AES-GCM", iv: badIV }, key, new Uint8Array([1,2,3]));
+      return Response.json({ error: false });
+    } catch(e) {
+      return Response.json({ error: true, message: String(e) });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Error   bool   `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if !data.Error {
+		t.Error("AES-GCM encrypt should reject non-12-byte IV")
+	}
+}
+
+func TestCrypto_KeysIsolatedPerRequest(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// First request imports a key and signs.
+	source1 := `export default {
+  async fetch(request, env) {
+    const keyData = new TextEncoder().encode("request-one-secret-key!!");
+    const key = await crypto.subtle.importKey(
+      "raw", keyData, { name: "HMAC", hash: "SHA-256" }, true, ["sign"]
+    );
+    const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode("msg"));
+    return Response.json({ sigLen: new Uint8Array(sig).length });
+  },
+};`
+
+	r1 := execJS(t, e, source1, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r1)
+
+	// Second request tries to use key ID 1 (same ID the first request used)
+	// but should fail because keys are scoped per-request.
+	source2 := `export default {
+  async fetch(request, env) {
+    try {
+      // Try to export key ID 1 from a previous request — should fail.
+      const b64 = __cryptoExportKey(1);
+      return Response.json({ leaked: true });
+    } catch(e) {
+      return Response.json({ leaked: false, error: String(e) });
+    }
+  },
+};`
+
+	r2 := execJS(t, e, source2, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r2)
+
+	var data struct {
+		Leaked bool   `json:"leaked"`
+		Error  string `json:"error"`
+	}
+	if err := json.Unmarshal(r2.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if data.Leaked {
+		t.Error("key material from a previous request should not be accessible")
 	}
 }

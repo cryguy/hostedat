@@ -21,7 +21,9 @@ func TestEncoding_BtoaAtobRoundTrip(t *testing.T) {
 	assertOK(t, r)
 
 	var data map[string]string
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if data["encoded"] != "SGVsbG8sIFdvcmxkIQ==" {
 		t.Errorf("encoded = %q, want SGVsbG8sIFdvcmxkIQ==", data["encoded"])
 	}
@@ -53,7 +55,9 @@ func TestEncoding_BtoaBinaryString(t *testing.T) {
 		Len   int  `json:"len"`
 		Match bool `json:"match"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if data.Len != 255 {
 		t.Errorf("len = %d, want 255", data.Len)
 	}
@@ -100,7 +104,9 @@ func TestEncoding_BtoaEmptyString(t *testing.T) {
 	assertOK(t, r)
 
 	var data map[string]string
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if data["encoded"] != "" {
 		t.Errorf("encoded = %q, want empty", data["encoded"])
 	}

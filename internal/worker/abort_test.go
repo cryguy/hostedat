@@ -26,7 +26,9 @@ func TestAbort_ControllerAbortSetsSignal(t *testing.T) {
 		Before bool `json:"before"`
 		After  bool `json:"after"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data.Before {
 		t.Error("signal.aborted should be false before abort()")
@@ -56,7 +58,9 @@ func TestAbort_ListenerFires(t *testing.T) {
 	var data struct {
 		Fired bool `json:"fired"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if !data.Fired {
 		t.Error("abort event listener should have fired")
@@ -85,7 +89,9 @@ func TestAbort_AbortReason(t *testing.T) {
 		Reason  string `json:"reason"`
 		Aborted bool   `json:"aborted"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data.Reason != "custom reason" {
 		t.Errorf("reason = %q, want 'custom reason'", data.Reason)
@@ -116,7 +122,9 @@ func TestAbort_SignalAbortStatic(t *testing.T) {
 		Aborted bool   `json:"aborted"`
 		Reason  string `json:"reason"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if !data.Aborted {
 		t.Error("AbortSignal.abort() should return aborted signal")
@@ -149,7 +157,9 @@ func TestAbort_ThrowIfAborted(t *testing.T) {
 	var data struct {
 		Caught bool `json:"caught"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if !data.Caught {
 		t.Error("throwIfAborted should throw when signal is aborted")
@@ -180,7 +190,9 @@ func TestAbort_EventTargetBasics(t *testing.T) {
 	var data struct {
 		Count int `json:"count"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data.Count != 2 {
 		t.Errorf("count = %d, want 2 (listener removed before 3rd dispatch)", data.Count)
@@ -210,7 +222,9 @@ func TestAbort_DOMException(t *testing.T) {
 		Name    string `json:"name"`
 		IsError bool   `json:"isError"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data.Message != "test message" {
 		t.Errorf("message = %q", data.Message)

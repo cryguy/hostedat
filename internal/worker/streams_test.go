@@ -63,7 +63,9 @@ func TestStreams_ReadableStreamLocked(t *testing.T) {
 		Error  string `json:"error"`
 		Locked bool   `json:"locked"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if !data.Locked {
 		t.Error("stream should be locked after getReader()")
@@ -97,7 +99,9 @@ func TestStreams_WritableStreamBasic(t *testing.T) {
 		Chunks []string `json:"chunks"`
 		Count  int      `json:"count"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data.Count != 2 {
 		t.Errorf("count = %d, want 2", data.Count)
@@ -201,9 +205,47 @@ func TestStreams_ReadableStreamCancel(t *testing.T) {
 	var data struct {
 		CancelReason string `json:"cancelReason"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data.CancelReason != "done reading" {
 		t.Errorf("cancelReason = %q", data.CancelReason)
+	}
+}
+
+func TestStreams_ReaderClosedPromiseIdentity(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue("data");
+        controller.close();
+      }
+    });
+    const reader = stream.getReader();
+    const p1 = reader.closed;
+    const p2 = reader.closed;
+    const same = p1 === p2;
+    await p1;
+    return Response.json({ same });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Same bool `json:"same"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if !data.Same {
+		t.Error("reader.closed should return the same promise on each access")
 	}
 }

@@ -18,6 +18,9 @@ import (
 // cryptoJS wires up the global crypto object with getRandomValues and randomUUID
 // backed by Go helper functions, plus a crypto.subtle proxy that delegates
 // digest/sign/verify/encrypt/decrypt/importKey/exportKey to Go-backed functions.
+//
+// Key material is scoped per-request via __requestID — no global key store.
+// Key IDs are allocated by Go (not JS) to prevent cross-request collisions.
 const cryptoJS = `
 (function() {
 	const crypto = {};
@@ -45,15 +48,8 @@ const cryptoJS = `
 		const algo = typeof algorithm === 'string' ? algorithm : algorithm.name;
 		const b64 = __bufferSourceToB64(data);
 		const resultB64 = __cryptoDigest(algo, b64);
-		const raw = atob(resultB64);
-		const buf = new ArrayBuffer(raw.length);
-		const view = new Uint8Array(buf);
-		for (let i = 0; i < raw.length; i++) view[i] = raw.charCodeAt(i);
-		return buf;
+		return __b64ToBuffer(resultB64);
 	};
-
-	// Internal key store: CryptoKey objects hold an ID that maps to Go-side key material.
-	let __keyID = 0;
 
 	class CryptoKey {
 		constructor(id, algorithm, type, extractable, usages) {
@@ -71,8 +67,8 @@ const cryptoJS = `
 			throw new TypeError('importKey: only raw format is supported');
 		}
 		const b64 = __bufferSourceToB64(keyData);
-		const id = ++__keyID;
-		__cryptoImportKey(id, algo.name, b64);
+		const hashName = algo.hash ? (typeof algo.hash === 'string' ? algo.hash : algo.hash.name) : '';
+		const id = __cryptoImportKey(algo.name, hashName, b64);
 		const keyType = 'secret';
 		return new CryptoKey(id, algo, keyType, extractable, usages);
 	};
@@ -81,33 +77,29 @@ const cryptoJS = `
 		if (format !== 'raw') throw new TypeError('exportKey: only raw format is supported');
 		if (!key.extractable) throw new DOMException('key is not extractable', 'InvalidAccessError');
 		const b64 = __cryptoExportKey(key._id);
-		const raw = atob(b64);
-		const buf = new ArrayBuffer(raw.length);
-		const view = new Uint8Array(buf);
-		for (let i = 0; i < raw.length; i++) view[i] = raw.charCodeAt(i);
-		return buf;
+		return __b64ToBuffer(b64);
 	};
 
 	subtle.sign = async function(algorithm, key, data) {
 		const algo = typeof algorithm === 'string' ? { name: algorithm } : algorithm;
-		const dataB64 = __bufferToB64(data);
+		const dataB64 = __bufferSourceToB64(data);
 		const resultB64 = __cryptoSign(algo.name, key._id, dataB64);
 		return __b64ToBuffer(resultB64);
 	};
 
 	subtle.verify = async function(algorithm, key, signature, data) {
 		const algo = typeof algorithm === 'string' ? { name: algorithm } : algorithm;
-		const sigB64 = __bufferToB64(signature);
-		const dataB64 = __bufferToB64(data);
+		const sigB64 = __bufferSourceToB64(signature);
+		const dataB64 = __bufferSourceToB64(data);
 		return __cryptoVerify(algo.name, key._id, sigB64, dataB64);
 	};
 
 	subtle.encrypt = async function(algorithm, key, data) {
 		const algo = typeof algorithm === 'string' ? { name: algorithm } : algorithm;
-		const dataB64 = __bufferToB64(data);
+		const dataB64 = __bufferSourceToB64(data);
 		let ivB64 = '';
 		if (algo.iv) {
-			ivB64 = __bufferToB64(algo.iv);
+			ivB64 = __bufferSourceToB64(algo.iv);
 		}
 		const resultB64 = __cryptoEncrypt(algo.name, key._id, dataB64, ivB64);
 		return __b64ToBuffer(resultB64);
@@ -115,43 +107,39 @@ const cryptoJS = `
 
 	subtle.decrypt = async function(algorithm, key, data) {
 		const algo = typeof algorithm === 'string' ? { name: algorithm } : algorithm;
-		const dataB64 = __bufferToB64(data);
+		const dataB64 = __bufferSourceToB64(data);
 		let ivB64 = '';
 		if (algo.iv) {
-			ivB64 = __bufferToB64(algo.iv);
+			ivB64 = __bufferSourceToB64(algo.iv);
 		}
 		const resultB64 = __cryptoDecrypt(algo.name, key._id, dataB64, ivB64);
 		return __b64ToBuffer(resultB64);
 	};
 
-	// Helper: robustly convert any BufferSource or TypedArray to base64.
+	// Helper: convert any BufferSource or TypedArray to base64.
 	// Uses duck-typing (data.buffer, data.length) instead of ArrayBuffer.isView
 	// for QuickJS WASM compatibility.
+	// Chunked conversion avoids O(n^2) string concatenation for large buffers.
 	function __bufferSourceToB64(data) {
 		let arr;
 		if (data instanceof ArrayBuffer) {
 			arr = new Uint8Array(data);
 		} else if (data && data.buffer instanceof ArrayBuffer) {
-			// TypedArray (Uint8Array, etc.)
 			arr = new Uint8Array(data.buffer, data.byteOffset || 0, data.byteLength || data.length);
 		} else if (data && typeof data.length === 'number') {
-			// Array-like (e.g. plain Uint8Array without .buffer in some engines)
 			arr = new Uint8Array(data.length);
 			for (let i = 0; i < data.length; i++) arr[i] = data[i];
-		} else if (typeof data === 'string') {
-			const enc = new TextEncoder();
-			arr = enc.encode(data);
 		} else {
 			throw new TypeError('expected BufferSource');
 		}
+		const CHUNK = 1024;
 		let s = '';
-		for (let i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]);
+		for (let i = 0; i < arr.length; i += CHUNK) {
+			const end = Math.min(i + CHUNK, arr.length);
+			s += String.fromCharCode.apply(null, arr.subarray(i, end));
+		}
 		return btoa(s);
 	}
-
-	// Alias for backward compat.
-	function __bufferToB64(data) { return __bufferSourceToB64(data); }
-	globalThis.__bufferToB64 = __bufferToB64;
 
 	// Helper: convert base64 to ArrayBuffer.
 	function __b64ToBuffer(b64) {
@@ -168,29 +156,19 @@ const cryptoJS = `
 })();
 `
 
-// cryptoKeys stores imported key material by ID (per-runtime).
-// Since QuickJS is single-threaded and each runtime serves one request at a
-// time, a global map keyed by runtime pointer would work, but it's simpler
-// to use the JS global's __requestID pattern. Instead, we store keys in a
-// package-level map keyed by a counter ID that the JS side manages.
-var (
-	cryptoKeyStore     = make(map[int64][]byte)
-	cryptoKeyStoreLock = make(chan struct{}, 1)
-)
+const gcmStandardNonceSize = 12
 
-func init() {
-	cryptoKeyStoreLock <- struct{}{} // Initialize the semaphore.
-}
-
-func withKeyStore(fn func()) {
-	<-cryptoKeyStoreLock
-	defer func() { cryptoKeyStoreLock <- struct{}{} }()
-	fn()
+// getReqIDFromJS reads the __requestID global from the JS context.
+func getReqIDFromJS(c *qjs.Context) uint64 {
+	v := c.Global().GetPropertyStr("__requestID")
+	id := uint64(v.Int64())
+	v.Free()
+	return id
 }
 
 // setupCrypto registers Go-backed crypto helpers and evaluates the JS wrapper
 // that builds the crypto global object with getRandomValues, randomUUID,
-// and crypto.subtle methods.
+// and crypto.subtle methods. Key material is scoped per-request.
 func setupCrypto(rt *qjs.Runtime) error {
 	ctx := rt.Context()
 
@@ -261,14 +239,15 @@ func setupCrypto(rt *qjs.Runtime) error {
 		return c.NewString(base64.StdEncoding.EncodeToString(result)), nil
 	})
 
-	// __cryptoImportKey(id, algorithm, dataBase64)
+	// __cryptoImportKey(algoName, hashAlgo, dataBase64) -> keyID
+	// Key material is stored in the per-request state, not in a global map.
 	ctx.SetFunc("__cryptoImportKey", func(this *qjs.This) (*qjs.Value, error) {
 		c := this.Context()
 		args := this.Args()
 		if len(args) < 3 {
 			return nil, errMissingArg("importKey", 3)
 		}
-		id := args[0].Int64()
+		hashAlgo := args[1].String()
 		dataB64 := args[2].String()
 
 		keyData, err := base64.StdEncoding.DecodeString(dataB64)
@@ -276,34 +255,35 @@ func setupCrypto(rt *qjs.Runtime) error {
 			return nil, fmt.Errorf("importKey: invalid base64")
 		}
 
-		withKeyStore(func() {
-			cryptoKeyStore[id] = keyData
-		})
+		reqID := getReqIDFromJS(c)
+		id := importCryptoKey(reqID, hashAlgo, keyData)
+		if id < 0 {
+			return nil, fmt.Errorf("importKey: no active request state")
+		}
 
-		return c.NewUndefined(), nil
+		return c.NewInt64(id), nil
 	})
 
-	// __cryptoExportKey(id) -> base64
+	// __cryptoExportKey(keyID) -> base64
 	ctx.SetFunc("__cryptoExportKey", func(this *qjs.This) (*qjs.Value, error) {
 		c := this.Context()
 		args := this.Args()
 		if len(args) < 1 {
 			return nil, errMissingArg("exportKey", 1)
 		}
-		id := args[0].Int64()
+		keyID := args[0].Int64()
 
-		var keyData []byte
-		withKeyStore(func() {
-			keyData = cryptoKeyStore[id]
-		})
-		if keyData == nil {
+		reqID := getReqIDFromJS(c)
+		entry := getCryptoKey(reqID, keyID)
+		if entry == nil {
 			return nil, fmt.Errorf("exportKey: key not found")
 		}
 
-		return c.NewString(base64.StdEncoding.EncodeToString(keyData)), nil
+		return c.NewString(base64.StdEncoding.EncodeToString(entry.data)), nil
 	})
 
 	// __cryptoSign(algorithm, keyID, dataBase64) -> signatureBase64
+	// Uses the hash algorithm stored at importKey time.
 	ctx.SetFunc("__cryptoSign", func(this *qjs.This) (*qjs.Value, error) {
 		c := this.Context()
 		args := this.Args()
@@ -319,18 +299,19 @@ func setupCrypto(rt *qjs.Runtime) error {
 			return nil, fmt.Errorf("sign: invalid base64")
 		}
 
-		var keyData []byte
-		withKeyStore(func() {
-			keyData = cryptoKeyStore[keyID]
-		})
-		if keyData == nil {
+		reqID := getReqIDFromJS(c)
+		entry := getCryptoKey(reqID, keyID)
+		if entry == nil {
 			return nil, fmt.Errorf("sign: key not found")
 		}
 
 		switch normalizeAlgo(algo) {
 		case "HMAC":
-			// Default to SHA-256 for HMAC (most common usage).
-			mac := hmac.New(sha256.New, keyData)
+			hashFn := hashFuncFromAlgo(entry.hashAlgo)
+			if hashFn == nil {
+				return nil, fmt.Errorf("sign: unsupported HMAC hash %q", entry.hashAlgo)
+			}
+			mac := hmac.New(hashFn, entry.data)
 			mac.Write(data)
 			sig := mac.Sum(nil)
 			return c.NewString(base64.StdEncoding.EncodeToString(sig)), nil
@@ -340,6 +321,7 @@ func setupCrypto(rt *qjs.Runtime) error {
 	})
 
 	// __cryptoVerify(algorithm, keyID, signatureBase64, dataBase64) -> bool
+	// Uses the hash algorithm stored at importKey time.
 	ctx.SetFunc("__cryptoVerify", func(this *qjs.This) (*qjs.Value, error) {
 		c := this.Context()
 		args := this.Args()
@@ -360,24 +342,22 @@ func setupCrypto(rt *qjs.Runtime) error {
 			return nil, fmt.Errorf("verify: invalid data base64")
 		}
 
-		var keyData []byte
-		withKeyStore(func() {
-			keyData = cryptoKeyStore[keyID]
-		})
-		if keyData == nil {
+		reqID := getReqIDFromJS(c)
+		entry := getCryptoKey(reqID, keyID)
+		if entry == nil {
 			return nil, fmt.Errorf("verify: key not found")
 		}
 
 		switch normalizeAlgo(algo) {
 		case "HMAC":
-			mac := hmac.New(sha256.New, keyData)
+			hashFn := hashFuncFromAlgo(entry.hashAlgo)
+			if hashFn == nil {
+				return nil, fmt.Errorf("verify: unsupported HMAC hash %q", entry.hashAlgo)
+			}
+			mac := hmac.New(hashFn, entry.data)
 			mac.Write(data)
 			expected := mac.Sum(nil)
-			match := hmac.Equal(sig, expected)
-			if match {
-				return c.NewBool(true), nil
-			}
-			return c.NewBool(false), nil
+			return c.NewBool(hmac.Equal(sig, expected)), nil
 		default:
 			return nil, fmt.Errorf("verify: unsupported algorithm %q", algo)
 		}
@@ -400,11 +380,9 @@ func setupCrypto(rt *qjs.Runtime) error {
 			return nil, fmt.Errorf("encrypt: invalid base64 data")
 		}
 
-		var keyData []byte
-		withKeyStore(func() {
-			keyData = cryptoKeyStore[keyID]
-		})
-		if keyData == nil {
+		reqID := getReqIDFromJS(c)
+		entry := getCryptoKey(reqID, keyID)
+		if entry == nil {
 			return nil, fmt.Errorf("encrypt: key not found")
 		}
 
@@ -414,7 +392,10 @@ func setupCrypto(rt *qjs.Runtime) error {
 			if err != nil {
 				return nil, fmt.Errorf("encrypt: invalid IV base64")
 			}
-			block, err := aes.NewCipher(keyData)
+			if len(iv) != gcmStandardNonceSize {
+				return nil, fmt.Errorf("encrypt: AES-GCM IV must be exactly %d bytes, got %d", gcmStandardNonceSize, len(iv))
+			}
+			block, err := aes.NewCipher(entry.data)
 			if err != nil {
 				return nil, fmt.Errorf("encrypt: %w", err)
 			}
@@ -446,11 +427,9 @@ func setupCrypto(rt *qjs.Runtime) error {
 			return nil, fmt.Errorf("decrypt: invalid base64 data")
 		}
 
-		var keyData []byte
-		withKeyStore(func() {
-			keyData = cryptoKeyStore[keyID]
-		})
-		if keyData == nil {
+		reqID := getReqIDFromJS(c)
+		entry := getCryptoKey(reqID, keyID)
+		if entry == nil {
 			return nil, fmt.Errorf("decrypt: key not found")
 		}
 
@@ -460,7 +439,10 @@ func setupCrypto(rt *qjs.Runtime) error {
 			if err != nil {
 				return nil, fmt.Errorf("decrypt: invalid IV base64")
 			}
-			block, err := aes.NewCipher(keyData)
+			if len(iv) != gcmStandardNonceSize {
+				return nil, fmt.Errorf("decrypt: AES-GCM IV must be exactly %d bytes, got %d", gcmStandardNonceSize, len(iv))
+			}
+			block, err := aes.NewCipher(entry.data)
 			if err != nil {
 				return nil, fmt.Errorf("decrypt: %w", err)
 			}
@@ -484,6 +466,26 @@ func setupCrypto(rt *qjs.Runtime) error {
 	}
 
 	return nil
+}
+
+// hashFuncFromAlgo returns the hash.Hash constructor for the given algorithm name.
+func hashFuncFromAlgo(algo string) func() hash.Hash {
+	switch normalizeAlgo(algo) {
+	case "SHA-1":
+		return sha1.New
+	case "SHA-256":
+		return sha256.New
+	case "SHA-384":
+		return sha512.New384
+	case "SHA-512":
+		return sha512.New
+	default:
+		// Default to SHA-256 for backward compatibility when no hash is specified.
+		if algo == "" {
+			return sha256.New
+		}
+		return nil
+	}
 }
 
 // normalizeAlgo normalizes algorithm names to their canonical form.

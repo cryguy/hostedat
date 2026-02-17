@@ -382,7 +382,9 @@ func TestIntegration_HonoStyleRouter(t *testing.T) {
 			CloneWorks bool     `json:"cloneWorks"`
 			Elapsed    float64  `json:"elapsed"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
 		if data.Status != "ok" {
 			t.Errorf("status = %q", data.Status)
 		}
@@ -409,7 +411,9 @@ func TestIntegration_HonoStyleRouter(t *testing.T) {
 			SHA256 string `json:"sha256"`
 			Bytes  int    `json:"bytes"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
 		expected := "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
 		if data.SHA256 != expected {
 			t.Errorf("sha256 = %q, want %q", data.SHA256, expected)
@@ -427,7 +431,9 @@ func TestIntegration_HonoStyleRouter(t *testing.T) {
 			UUID  string `json:"uuid"`
 			Valid bool   `json:"valid"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
 		if !data.Valid {
 			t.Errorf("UUID %q did not match v4 pattern", data.UUID)
 		}
@@ -446,7 +452,9 @@ func TestIntegration_HonoStyleRouter(t *testing.T) {
 			SignatureBytes int  `json:"signatureBytes"`
 			Verified       bool `json:"verified"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
 		if data.SignatureBytes != 32 {
 			t.Errorf("signatureBytes = %d, want 32", data.SignatureBytes)
 		}
@@ -469,7 +477,9 @@ func TestIntegration_HonoStyleRouter(t *testing.T) {
 			Decrypted string `json:"decrypted"`
 			Match     bool   `json:"match"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
 		if !data.Match {
 			t.Errorf("AES round-trip failed: original=%q decrypted=%q", data.Original, data.Decrypted)
 		}
@@ -485,7 +495,9 @@ func TestIntegration_HonoStyleRouter(t *testing.T) {
 			Decoded string `json:"decoded"`
 			Match   bool   `json:"match"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
 		if !data.Match {
 			t.Errorf("encoding round-trip mismatch: input=%q decoded=%q", data.Input, data.Decoded)
 		}
@@ -498,7 +510,9 @@ func TestIntegration_HonoStyleRouter(t *testing.T) {
 		var data struct {
 			Events []string `json:"events"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
 		expected := []string{"before:false", "abort-fired", "after:true", "reason:test-reason", "static:true", "threw"}
 		if len(data.Events) != len(expected) {
 			t.Fatalf("events = %v, want %v", data.Events, expected)
@@ -541,7 +555,9 @@ func TestIntegration_HonoStyleRouter(t *testing.T) {
 			FdDelete  bool     `json:"fdDelete"`
 			FdSet     string   `json:"fdSet"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
 		if len(data.Names) != 2 || data.Names[0] != "Alice" || data.Names[1] != "Bob" {
 			t.Errorf("names = %v", data.Names)
 		}
@@ -584,7 +600,9 @@ func TestIntegration_HonoStyleRouter(t *testing.T) {
 		var data struct {
 			Events []string `json:"events"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
 		if len(data.Events) != 3 {
 			t.Fatalf("events = %v, want 3 entries", data.Events)
 		}
@@ -606,7 +624,9 @@ func TestIntegration_HonoStyleRouter(t *testing.T) {
 		var data struct {
 			Events []string `json:"events"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
 		// First dispatch: handler + once handler = 2 events
 		// Second dispatch: handler only (once removed) = 1 event
 		// Third dispatch: handler removed = 0 events
@@ -631,7 +651,9 @@ func TestIntegration_HonoStyleRouter(t *testing.T) {
 			Message string `json:"message"`
 			IsError bool   `json:"isError"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
 		if data.Name != "AbortError" {
 			t.Errorf("name = %q", data.Name)
 		}
@@ -652,7 +674,9 @@ func TestIntegration_HonoStyleRouter(t *testing.T) {
 			Checks    map[string]bool `json:"checks"`
 			Count     int             `json:"count"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
 
 		if !data.AllPassed {
 			failed := []string{}

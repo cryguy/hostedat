@@ -212,7 +212,9 @@ func TestBasic_URLAndSearchParams(t *testing.T) {
 	assertOK(t, r)
 
 	var data map[string]interface{}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data["pathname"] != "/foo" {
 		t.Errorf("pathname = %v", data["pathname"])
@@ -244,7 +246,9 @@ func TestBasic_URLNoQueryParams(t *testing.T) {
 	assertOK(t, r)
 
 	var data map[string]interface{}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data["pathname"] != "/plain" {
 		t.Errorf("pathname = %v", data["pathname"])
@@ -363,7 +367,9 @@ func TestBasic_RequestBodyJSON(t *testing.T) {
 	assertOK(t, r)
 
 	var data map[string]string
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if data["got"] != "alice" {
 		t.Errorf("got = %q", data["got"])
 	}
@@ -508,7 +514,9 @@ func TestKV_GetNonexistent(t *testing.T) {
 	assertOK(t, r)
 
 	var data map[string]interface{}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if data["val"] != nil {
 		t.Errorf("val = %v, want null", data["val"])
 	}
@@ -549,7 +557,9 @@ func TestKV_Delete(t *testing.T) {
 	assertOK(t, r)
 
 	var data map[string]interface{}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if data["val"] != nil {
 		t.Errorf("val = %v, want null", data["val"])
 	}
@@ -576,7 +586,9 @@ func TestKV_ListWithPrefix(t *testing.T) {
 		Count int      `json:"count"`
 		Keys  []string `json:"keys"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if data.Count != 3 {
 		t.Errorf("count = %d, want 3", data.Count)
 	}
@@ -601,7 +613,9 @@ func TestKV_ListWithLimit(t *testing.T) {
 	var data struct {
 		Count int `json:"count"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if data.Count != 2 {
 		t.Errorf("count = %d, want 2", data.Count)
 	}
@@ -623,7 +637,9 @@ func TestKV_Metadata(t *testing.T) {
 	assertOK(t, r)
 
 	var data map[string]interface{}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if data["name"] != "k" {
 		t.Errorf("name = %v", data["name"])
 	}
@@ -661,7 +677,9 @@ func TestKV_ExpirationTTL(t *testing.T) {
 	assertOK(t, r2)
 
 	var data map[string]interface{}
-	json.Unmarshal(r2.Response.Body, &data)
+	if err := json.Unmarshal(r2.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if data["val"] != nil {
 		t.Errorf("expired value should be nil, got %v", data["val"])
 	}
@@ -689,7 +707,9 @@ func TestKV_LargeValue(t *testing.T) {
 		Match bool `json:"match"`
 		Len   int  `json:"len"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if !data.Match {
 		t.Error("large value mismatch")
 	}
@@ -727,7 +747,9 @@ func TestKV_MultipleNamespaces(t *testing.T) {
 	assertOK(t, r)
 
 	var data map[string]string
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if data["v1"] != "from-ns1" {
 		t.Errorf("v1 = %q", data["v1"])
 	}
@@ -828,7 +850,9 @@ func TestAssets_ConditionalFallback(t *testing.T) {
 	rAPI := execJS(t, e, source, env, getReq("http://localhost/api/users"))
 	assertOK(t, rAPI)
 	var data map[string]interface{}
-	json.Unmarshal(rAPI.Response.Body, &data)
+	if err := json.Unmarshal(rAPI.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if data["api"] != true {
 		t.Errorf("api handler not triggered")
 	}
@@ -962,7 +986,9 @@ func TestEnv_MultipleVarsAndSecrets(t *testing.T) {
 	assertOK(t, r)
 
 	var data map[string]string
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if data["a"] != "1" || data["b"] != "2" || data["secret"] != "s3cret" {
 		t.Errorf("env vars: %v", data)
 	}

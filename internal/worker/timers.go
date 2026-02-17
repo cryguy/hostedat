@@ -19,6 +19,7 @@ const timersJS = `
 (function() {
 	let __timerID = 0;
 	const __timers = new Map();
+	const __MAX_INTERVAL_TICKS = 1000;
 
 	function __scheduleCallback(fn, delay) {
 		if (delay <= 0) {
@@ -59,9 +60,15 @@ const timersJS = `
 		if (typeof fn !== 'function') return 0;
 		const id = ++__timerID;
 		let cancelled = false;
+		let count = 0;
 		__timers.set(id, { cancel: function() { cancelled = true; } });
 		function tick() {
 			if (cancelled) return;
+			if (++count > __MAX_INTERVAL_TICKS) {
+				cancelled = true;
+				__timers.delete(id);
+				return;
+			}
 			fn();
 			if (!cancelled) {
 				__scheduleCallback(tick, delay || 0);

@@ -10,7 +10,31 @@ import (
 // globalsJS defines pure-JS polyfills for simple global APIs.
 const globalsJS = `
 globalThis.structuredClone = function(value) {
-	return JSON.parse(JSON.stringify(value));
+	if (value === undefined) {
+		throw new DOMException('value could not be cloned', 'DataCloneError');
+	}
+	if (typeof value === 'function' || typeof value === 'symbol') {
+		throw new DOMException('value could not be cloned', 'DataCloneError');
+	}
+	if (value !== null && typeof value === 'object') {
+		if (typeof Map !== 'undefined' && value instanceof Map) {
+			throw new DOMException('Map cannot be cloned', 'DataCloneError');
+		}
+		if (typeof Set !== 'undefined' && value instanceof Set) {
+			throw new DOMException('Set cannot be cloned', 'DataCloneError');
+		}
+		if (typeof WeakMap !== 'undefined' && value instanceof WeakMap) {
+			throw new DOMException('WeakMap cannot be cloned', 'DataCloneError');
+		}
+		if (typeof WeakSet !== 'undefined' && value instanceof WeakSet) {
+			throw new DOMException('WeakSet cannot be cloned', 'DataCloneError');
+		}
+	}
+	try {
+		return JSON.parse(JSON.stringify(value));
+	} catch(e) {
+		throw new DOMException('value could not be cloned: ' + e.message, 'DataCloneError');
+	}
 };
 
 globalThis.queueMicrotask = function(fn) {

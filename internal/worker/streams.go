@@ -44,6 +44,15 @@ class ReadableStreamDefaultReader {
 		stream._locked = true;
 		stream._reader = this;
 		this._closed = false;
+		// Cache the closed promise and its resolver (spec requires same identity).
+		const self = this;
+		this._closedPromise = new Promise(function(resolve, reject) {
+			self._closedResolve = resolve;
+			self._closedReject = reject;
+		});
+		if (stream._closed) {
+			this._closedResolve();
+		}
 	}
 	async read() {
 		const stream = this._stream;
@@ -76,10 +85,7 @@ class ReadableStreamDefaultReader {
 		}
 	}
 	get closed() {
-		if (this._stream._closed || this._closed) return Promise.resolve();
-		return new Promise((resolve) => {
-			this._closedResolve = resolve;
-		});
+		return this._closedPromise;
 	}
 	cancel(reason) {
 		return this._stream.cancel(reason);
@@ -152,6 +158,9 @@ class ReadableStream {
 			reject(e);
 		}
 		this._pendingReads = [];
+		if (this._reader && this._reader._closedReject) {
+			this._reader._closedReject(e);
+		}
 	}
 
 	_drainPending() {
@@ -196,6 +205,15 @@ class WritableStreamDefaultWriter {
 		if (stream._locked) throw new TypeError('WritableStream is already locked');
 		this._stream = stream;
 		stream._locked = true;
+		// Cache the closed promise and its resolver (spec requires same identity).
+		const self = this;
+		this._closedPromise = new Promise(function(resolve, reject) {
+			self._closedResolve = resolve;
+			self._closedReject = reject;
+		});
+		if (stream._closed) {
+			this._closedResolve();
+		}
 	}
 	write(chunk) {
 		if (this._stream._closed) throw new TypeError('Cannot write to a closed stream');
@@ -207,30 +225,40 @@ class WritableStreamDefaultWriter {
 		return Promise.resolve();
 	}
 	close() {
+		const self = this;
 		if (this._stream._closeFn) {
 			const result = this._stream._closeFn();
 			if (result && typeof result.then === 'function') {
-				return result.then(() => { this._stream._closed = true; });
+				return result.then(function() {
+					self._stream._closed = true;
+					if (self._closedResolve) self._closedResolve();
+				});
 			}
 		}
 		this._stream._closed = true;
+		if (this._closedResolve) this._closedResolve();
 		return Promise.resolve();
 	}
 	abort(reason) {
+		const self = this;
 		if (this._stream._abortFn) {
 			const result = this._stream._abortFn(reason);
 			if (result && typeof result.then === 'function') {
-				return result.then(() => { this._stream._closed = true; });
+				return result.then(function() {
+					self._stream._closed = true;
+					if (self._closedResolve) self._closedResolve();
+				});
 			}
 		}
 		this._stream._closed = true;
+		if (this._closedResolve) this._closedResolve();
 		return Promise.resolve();
 	}
 	releaseLock() {
 		this._stream._locked = false;
 	}
 	get closed() {
-		return this._stream._closed ? Promise.resolve() : new Promise(() => {});
+		return this._closedPromise;
 	}
 	get ready() { return Promise.resolve(); }
 }
@@ -309,9 +337,9 @@ class TransformStream {
 					readableController.enqueue(chunk);
 				}
 			},
-			close() {
+			async close() {
 				if (flushFn) {
-					flushFn(transformController);
+					await flushFn(transformController);
 				}
 				readableController.close();
 			}

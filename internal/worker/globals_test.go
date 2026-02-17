@@ -31,7 +31,9 @@ func TestGlobals_StructuredClone(t *testing.T) {
 		ClonedLen int `json:"clonedLen"`
 		ClonedA   int `json:"clonedA"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data.OrigLen != 3 {
 		t.Errorf("origLen = %d, want 3", data.OrigLen)
@@ -41,6 +43,71 @@ func TestGlobals_StructuredClone(t *testing.T) {
 	}
 	if data.ClonedA != 1 {
 		t.Errorf("clonedA = %d, want 1", data.ClonedA)
+	}
+}
+
+func TestGlobals_StructuredCloneRejectsMap(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    try {
+      structuredClone(new Map([["k", "v"]]));
+      return Response.json({ threw: false });
+    } catch(e) {
+      return Response.json({ threw: true, name: e.name });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw bool   `json:"threw"`
+		Name  string `json:"name"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if !data.Threw {
+		t.Error("structuredClone(Map) should throw DataCloneError")
+	}
+	if data.Name != "DataCloneError" {
+		t.Errorf("error name = %q, want DataCloneError", data.Name)
+	}
+}
+
+func TestGlobals_StructuredCloneRejectsFunction(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    try {
+      structuredClone(function() {});
+      return Response.json({ threw: false });
+    } catch(e) {
+      return Response.json({ threw: true, name: e.name });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw bool   `json:"threw"`
+		Name  string `json:"name"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if !data.Threw {
+		t.Error("structuredClone(function) should throw DataCloneError")
 	}
 }
 
@@ -73,7 +140,9 @@ func TestGlobals_PerformanceNow(t *testing.T) {
 		Pos     bool   `json:"positive"`
 		Elapsed bool   `json:"elapsed"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data.T1Type != "number" {
 		t.Errorf("t1Type = %q, want number", data.T1Type)
@@ -106,7 +175,9 @@ func TestGlobals_Navigator(t *testing.T) {
 		UA  string `json:"ua"`
 		Has bool   `json:"hasNavigator"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if !data.Has {
 		t.Error("navigator should be an object")
@@ -136,7 +207,9 @@ func TestGlobals_QueueMicrotask(t *testing.T) {
 	var data struct {
 		Called bool `json:"called"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if !data.Called {
 		t.Error("queueMicrotask callback was not called")

@@ -25,7 +25,9 @@ func TestTimers_SetTimeoutZero(t *testing.T) {
 	var data struct {
 		Called bool `json:"called"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if !data.Called {
 		t.Error("setTimeout(fn, 0) callback was not called")
@@ -52,7 +54,9 @@ func TestTimers_ClearTimeout(t *testing.T) {
 	var data struct {
 		Called bool `json:"called"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data.Called {
 		t.Error("clearTimeout should prevent callback from firing")
@@ -81,7 +85,9 @@ func TestTimers_SetTimeoutReturnsID(t *testing.T) {
 		IsNumber  bool `json:"isNumber"`
 		Different bool `json:"different"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if !data.IsNumber {
 		t.Error("setTimeout should return a number")
@@ -117,7 +123,9 @@ func TestTimers_SetIntervalAndClear(t *testing.T) {
 		AfterClear int `json:"afterClear"`
 		AfterWait  int `json:"afterWait"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 
 	if data.AfterClear < 1 {
 		t.Errorf("interval should have fired at least once, count = %d", data.AfterClear)

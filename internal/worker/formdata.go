@@ -19,38 +19,48 @@ class Blob {
 		options = options || {};
 		this.type = options.type || '';
 		this._parts = [];
+		this._size = 0;
 
 		if (parts) {
+			const enc = new TextEncoder();
 			for (const part of parts) {
 				if (typeof part === 'string') {
 					this._parts.push(part);
+					this._size += enc.encode(part).length;
 				} else if (part instanceof Blob) {
 					this._parts.push(...part._parts);
+					this._size += part._size;
 				} else if (part instanceof ArrayBuffer) {
 					const arr = new Uint8Array(part);
+					const CHUNK = 1024;
 					let s = '';
-					for (let i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]);
+					for (let i = 0; i < arr.length; i += CHUNK) {
+						const end = Math.min(i + CHUNK, arr.length);
+						s += String.fromCharCode.apply(null, arr.subarray(i, end));
+					}
 					this._parts.push(s);
+					this._size += arr.length;
 				} else if (ArrayBuffer.isView(part)) {
 					const arr = new Uint8Array(part.buffer, part.byteOffset, part.byteLength);
+					const CHUNK = 1024;
 					let s = '';
-					for (let i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]);
+					for (let i = 0; i < arr.length; i += CHUNK) {
+						const end = Math.min(i + CHUNK, arr.length);
+						s += String.fromCharCode.apply(null, arr.subarray(i, end));
+					}
 					this._parts.push(s);
+					this._size += arr.length;
 				} else {
-					this._parts.push(String(part));
+					const str = String(part);
+					this._parts.push(str);
+					this._size += enc.encode(str).length;
 				}
 			}
 		}
 	}
 
 	get size() {
-		let total = 0;
-		for (const part of this._parts) {
-			// Use TextEncoder for accurate byte count.
-			const enc = new TextEncoder();
-			total += enc.encode(part).length;
-		}
-		return total;
+		return this._size;
 	}
 
 	slice(start, end, contentType) {

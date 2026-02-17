@@ -6,13 +6,21 @@ import (
 	"time"
 )
 
-// requestState holds per-request mutable state (logs, fetch counter, env).
+// cryptoKeyEntry holds imported key material and its associated hash algorithm.
+type cryptoKeyEntry struct {
+	data     []byte
+	hashAlgo string
+}
+
+// requestState holds per-request mutable state (logs, fetch counter, env, crypto keys).
 // The engine sets it before calling into JS and clears it after.
 type requestState struct {
 	logs       []LogEntry
 	fetchCount int
 	maxFetches int
 	env        *Env
+	cryptoKeys map[int64]*cryptoKeyEntry
+	nextKeyID  int64
 }
 
 var (
@@ -46,6 +54,33 @@ func clearRequestState(id uint64) *requestState {
 		return nil
 	}
 	return v.(*requestState)
+}
+
+// importCryptoKey stores key material scoped to the request and returns its ID.
+func importCryptoKey(reqID uint64, hashAlgo string, data []byte) int64 {
+	state := getRequestState(reqID)
+	if state == nil {
+		return -1
+	}
+	state.nextKeyID++
+	id := state.nextKeyID
+	if state.cryptoKeys == nil {
+		state.cryptoKeys = make(map[int64]*cryptoKeyEntry)
+	}
+	state.cryptoKeys[id] = &cryptoKeyEntry{data: data, hashAlgo: hashAlgo}
+	return id
+}
+
+// getCryptoKey retrieves key material scoped to the request.
+func getCryptoKey(reqID uint64, keyID int64) *cryptoKeyEntry {
+	state := getRequestState(reqID)
+	if state == nil {
+		return nil
+	}
+	if state.cryptoKeys == nil {
+		return nil
+	}
+	return state.cryptoKeys[keyID]
 }
 
 // addLog appends a log entry to the request state identified by id.
