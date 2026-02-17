@@ -8,15 +8,24 @@ import (
 )
 
 type Config struct {
-	Domain        string       `yaml:"domain"`
-	Listen        string       `yaml:"listen"`
-	StoragePath   string       `yaml:"storage_path"`
-	JWTSecret     string       `yaml:"jwt_secret"`
-	MinCLIVersion string       `yaml:"min_cli_version"`
-	Database      DBConfig     `yaml:"database"`
-	Registration  RegConfig    `yaml:"registration"`
-	Cloudflare    CFConfig     `yaml:"cloudflare"`
-	Worker        WorkerConfig `yaml:"worker"`
+	Domain        string              `yaml:"domain"`
+	Listen        string              `yaml:"listen"`
+	StoragePath   string              `yaml:"storage_path"`
+	JWTSecret     string              `yaml:"jwt_secret"`
+	MinCLIVersion string              `yaml:"min_cli_version"`
+	Database      DBConfig            `yaml:"database"`
+	Registration  RegConfig           `yaml:"registration"`
+	Cloudflare    CFConfig            `yaml:"cloudflare"`
+	Worker        WorkerConfig        `yaml:"worker"`
+	ObjectStorage ObjectStorageConfig `yaml:"object_storage"`
+}
+
+type ObjectStorageConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	Managed    bool   `yaml:"managed"`
+	DataDir    string `yaml:"data_dir"`
+	S3Endpoint string `yaml:"s3_endpoint"`
+	Region     string `yaml:"region"`
 }
 
 type WorkerConfig struct {
@@ -88,6 +97,19 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Worker.MaxScriptSizeKB == 0 {
 		cfg.Worker.MaxScriptSizeKB = 1024
+	}
+
+	// Object storage defaults
+	if cfg.ObjectStorage.Enabled {
+		if cfg.ObjectStorage.S3Endpoint == "" {
+			cfg.ObjectStorage.S3Endpoint = "http://127.0.0.1:8333"
+		}
+		if cfg.ObjectStorage.Managed && cfg.ObjectStorage.DataDir == "" {
+			cfg.ObjectStorage.DataDir = "./data/seaweedfs"
+		}
+		if cfg.ObjectStorage.Region == "" {
+			cfg.ObjectStorage.Region = "us-east-1"
+		}
 	}
 
 	// Validation

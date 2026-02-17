@@ -420,3 +420,84 @@ func TestInvite_BeforeCreate_SetsID(t *testing.T) {
 		t.Errorf("ID length = %d, want %d", len(inv.ID), nanoidLength)
 	}
 }
+
+// Storage model tests
+
+func TestStorageBucket_BeforeCreate_SetsID(t *testing.T) {
+	db := setupTestDB(t)
+	u := User{Email: "u@t.com", PasswordHash: "h"}
+	db.Create(&u)
+	s := Site{UserID: u.ID, SubdomainSlug: "storage-test", Name: "Test"}
+	db.Create(&s)
+
+	bucket := StorageBucket{
+		SiteID:     s.ID,
+		Name:       "IMAGES",
+		BucketName: "my-images",
+	}
+	if err := db.Create(&bucket).Error; err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if bucket.ID == "" {
+		t.Error("expected auto-generated ID")
+	}
+	if len(bucket.ID) != nanoidLength {
+		t.Errorf("ID length = %d, want %d", len(bucket.ID), nanoidLength)
+	}
+}
+
+func TestStorageBucket_UniqueBucketName(t *testing.T) {
+	db := setupTestDB(t)
+	u := User{Email: "u@t.com", PasswordHash: "h"}
+	db.Create(&u)
+	s := Site{UserID: u.ID, SubdomainSlug: "storage-test", Name: "Test"}
+	db.Create(&s)
+
+	db.Create(&StorageBucket{
+		SiteID: s.ID, Name: "B1", BucketName: "unique-name",
+	})
+	err := db.Create(&StorageBucket{
+		SiteID: s.ID, Name: "B2", BucketName: "unique-name",
+	}).Error
+	if err == nil {
+		t.Fatal("expected unique constraint error for duplicate bucket_name")
+	}
+}
+
+func TestS3Credential_BeforeCreate_SetsID(t *testing.T) {
+	db := setupTestDB(t)
+	u := User{Email: "u@t.com", PasswordHash: "h"}
+	db.Create(&u)
+
+	cred := S3Credential{
+		UserID:        u.ID,
+		ExternalKeyID: "user-1",
+		AccessKeyID:   "AK123456",
+		Name:          "my-key",
+	}
+	if err := db.Create(&cred).Error; err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if cred.ID == "" {
+		t.Error("expected auto-generated ID")
+	}
+	if len(cred.ID) != nanoidLength {
+		t.Errorf("ID length = %d, want %d", len(cred.ID), nanoidLength)
+	}
+}
+
+func TestS3Credential_UniqueAccessKeyID(t *testing.T) {
+	db := setupTestDB(t)
+	u := User{Email: "u@t.com", PasswordHash: "h"}
+	db.Create(&u)
+
+	db.Create(&S3Credential{
+		UserID: u.ID, ExternalKeyID: "ek1", AccessKeyID: "same-ak", Name: "k1",
+	})
+	err := db.Create(&S3Credential{
+		UserID: u.ID, ExternalKeyID: "ek2", AccessKeyID: "same-ak", Name: "k2",
+	}).Error
+	if err == nil {
+		t.Fatal("expected unique constraint error for duplicate access_key_id")
+	}
+}

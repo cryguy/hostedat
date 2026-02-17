@@ -65,7 +65,7 @@ func isAllowedRedirectTarget(target, domain string) bool {
 
 // SubdomainRouter inspects the Host header and routes subdomain requests
 // to the static site handler. Bare-domain requests pass through to the API.
-func SubdomainRouter(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, domain string, workerEngine *worker.Engine) echo.MiddlewareFunc {
+func SubdomainRouter(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, domain string, workerEngine *worker.Engine, s3Proxy http.Handler) echo.MiddlewareFunc {
 	handler := staticSiteHandler(db, store, cache, domain, workerEngine)
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -86,6 +86,14 @@ func SubdomainRouter(db *gorm.DB, store *storage.Manager, cache *storage.SiteRul
 			if strings.HasSuffix(host, suffix) {
 				subdomain := strings.TrimSuffix(host, suffix)
 				if subdomain != "" && !strings.Contains(subdomain, ".") {
+					// Intercept storage subdomain → S3 proxy
+					if subdomain == "storage" {
+						if s3Proxy != nil {
+							s3Proxy.ServeHTTP(c.Response().Writer, c.Request())
+							return nil
+						}
+						return echo.ErrNotFound
+					}
 					c.Set("subdomain", subdomain)
 					return handler(c)
 				}
@@ -95,6 +103,14 @@ func SubdomainRouter(db *gorm.DB, store *storage.Manager, cache *storage.SiteRul
 			if strings.HasSuffix(host, ".localhost") {
 				subdomain := strings.TrimSuffix(host, ".localhost")
 				if subdomain != "" {
+					// Intercept storage.localhost → S3 proxy
+					if subdomain == "storage" {
+						if s3Proxy != nil {
+							s3Proxy.ServeHTTP(c.Response().Writer, c.Request())
+							return nil
+						}
+						return echo.ErrNotFound
+					}
 					c.Set("subdomain", subdomain)
 					return handler(c)
 				}

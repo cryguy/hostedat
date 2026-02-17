@@ -18,7 +18,7 @@ var slugRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`)
 var reservedSlugs = map[string]bool{
 	"www": true, "api": true, "admin": true, "mail": true,
 	"smtp": true, "ftp": true, "ns1": true, "ns2": true,
-	"app": true, "dashboard": true, "status": true,
+	"app": true, "dashboard": true, "status": true, "storage": true,
 }
 
 type SiteHandler struct {

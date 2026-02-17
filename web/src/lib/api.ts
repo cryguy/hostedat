@@ -12,6 +12,8 @@ import type {
   KVNamespace,
   CronSchedule,
   WorkerLog,
+  StorageBucket,
+  S3Credential,
 } from "@/types/api"
 
 const TOKEN_KEY = "hostedat_token"
@@ -250,5 +252,35 @@ export const workers = {
   },
   getLogs(siteId: string) {
     return request<WorkerLog[]>(`/sites/${siteId}/worker/logs`)
+  },
+}
+
+export const storage = {
+  listBuckets(siteId: string) {
+    return request<StorageBucket[]>(`/sites/${siteId}/storage/buckets`)
+  },
+  createBucket(siteId: string, data: { name: string; bucket_name: string }) {
+    return request<StorageBucket>(`/sites/${siteId}/storage/buckets`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  },
+  deleteBucket(siteId: string, bucketId: string) {
+    return request<void>(`/sites/${siteId}/storage/buckets/${bucketId}`, { method: "DELETE" })
+  },
+}
+
+export const s3Credentials = {
+  list() {
+    return request<S3Credential[]>("/s3-credentials")
+  },
+  create(name: string) {
+    return request<S3Credential & { secret_access_key: string }>("/s3-credentials", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    })
+  },
+  delete(id: string) {
+    return request<void>(`/s3-credentials/${id}`, { method: "DELETE" })
   },
 }

@@ -4,15 +4,17 @@ import (
 	"net/http"
 
 	"github.com/cryguy/hostedat/internal/config"
+	"github.com/cryguy/hostedat/internal/seaweedfs"
 	"github.com/cryguy/hostedat/internal/storage"
 	"github.com/cryguy/hostedat/internal/worker"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	minio "github.com/minio/minio-go/v7"
 	"golang.org/x/time/rate"
 	"gorm.io/gorm"
 )
 
-func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storage.Manager, serverVersion string, workerEngine *worker.Engine) {
+func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storage.Manager, serverVersion string, workerEngine *worker.Engine, s3Client *minio.Client, iamClient *seaweedfs.Client, region string) {
 	api := e.Group("/api/v1")
 
 	// Public version endpoint
@@ -79,6 +81,19 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	keys.POST("", apiKeyHandler.Create)
 	keys.GET("", apiKeyHandler.List)
 	keys.DELETE("/:id", apiKeyHandler.Delete)
+
+	// Storage routes (object storage buckets per site, S3 credentials per user)
+	if s3Client != nil && iamClient != nil {
+		storageHandler := &StorageHandler{DB: db, S3Client: s3Client, IAMClient: iamClient, Region: region}
+		sites.POST("/:id/storage/buckets", storageHandler.CreateBucket)
+		sites.GET("/:id/storage/buckets", storageHandler.ListBuckets)
+		sites.DELETE("/:id/storage/buckets/:bucketId", storageHandler.DeleteBucket)
+
+		s3creds := protected.Group("/s3-credentials")
+		s3creds.POST("", storageHandler.CreateS3Credential)
+		s3creds.GET("", storageHandler.ListS3Credentials)
+		s3creds.DELETE("/:id", storageHandler.DeleteS3Credential)
+	}
 
 	// Admin routes
 	admin := protected.Group("/admin", RequireAdmin())

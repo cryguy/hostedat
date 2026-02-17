@@ -13,11 +13,13 @@ import (
 	"github.com/cryguy/hostedat/internal/certs"
 	"github.com/cryguy/hostedat/internal/config"
 	"github.com/cryguy/hostedat/internal/models"
+	"github.com/cryguy/hostedat/internal/seaweedfs"
 	"github.com/cryguy/hostedat/internal/storage"
 	"github.com/cryguy/hostedat/internal/worker"
 	"github.com/cryguy/hostedat/web"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	minio "github.com/minio/minio-go/v7"
 	"golang.org/x/time/rate"
 )
 
@@ -63,6 +65,39 @@ func main() {
 
 	store := storage.NewManager(cfg.StoragePath)
 	workerEngine.SetStore(store)
+
+	// Object storage (SeaweedFS)
+	var s3Client *minio.Client
+	var iamClient *seaweedfs.Client
+	var s3Proxy http.Handler
+	if cfg.ObjectStorage.Enabled {
+		if cfg.ObjectStorage.Managed {
+			mgr := seaweedfs.NewManager(cfg.ObjectStorage)
+			if err := mgr.Start(); err != nil {
+				log.Fatalf("Failed to start SeaweedFS: %v", err)
+			}
+			defer mgr.Stop()
+			iamClient = mgr.Client
+		} else {
+			iamClient = seaweedfs.NewClient(cfg.ObjectStorage.S3Endpoint)
+		}
+		s3Proxy = api.NewS3Proxy(cfg.ObjectStorage.S3Endpoint)
+
+		// Create minio-go client for S3 bucket ops and worker bindings.
+		s3Host := strings.TrimPrefix(cfg.ObjectStorage.S3Endpoint, "http://")
+		s3Host = strings.TrimPrefix(s3Host, "https://")
+		useSSL := strings.HasPrefix(cfg.ObjectStorage.S3Endpoint, "https://")
+		minioClient, err := minio.New(s3Host, &minio.Options{
+			Secure: useSSL,
+			Region: cfg.ObjectStorage.Region,
+		})
+		if err != nil {
+			log.Printf("Warning: failed to create S3 client: %v", err)
+		} else {
+			s3Client = minioClient
+			workerEngine.SetMinioClient(minioClient)
+		}
+	}
 
 	// Start cron runner
 	cronRunner := worker.NewCronRunner(db, workerEngine)
@@ -110,9 +145,9 @@ func main() {
 	rulesCache := storage.NewSiteRulesCache()
 
 	// Subdomain router must come before API routes
-	e.Use(api.SubdomainRouter(db, store, rulesCache, cfg.Domain, workerEngine))
+	e.Use(api.SubdomainRouter(db, store, rulesCache, cfg.Domain, workerEngine, s3Proxy))
 
-	api.RegisterRoutes(e, db, cfg, store, version, workerEngine)
+	api.RegisterRoutes(e, db, cfg, store, version, workerEngine, s3Client, iamClient, cfg.ObjectStorage.Region)
 
 	// Serve embedded frontend (SPA fallback)
 	distFS, err := fs.Sub(web.DistFS, "dist")

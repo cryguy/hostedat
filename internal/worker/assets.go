@@ -10,6 +10,7 @@ import (
 
 	"github.com/cryguy/hostedat/internal/storage"
 	"github.com/fastschema/qjs"
+	minio "github.com/minio/minio-go/v7"
 	"gorm.io/gorm"
 )
 
@@ -282,7 +283,7 @@ func buildAssetsBinding(ctx *qjs.Context, fetcher AssetsFetcher) *qjs.Value {
 
 // buildEnvObject creates the full env JS object passed to the worker's
 // fetch handler as the second argument.
-func buildEnvObject(ctx *qjs.Context, env *Env, db *gorm.DB) *qjs.Value {
+func buildEnvObject(ctx *qjs.Context, env *Env, db *gorm.DB, minioClient interface{}) *qjs.Value {
 	envObj := ctx.NewObject()
 
 	// Plain environment variables.
@@ -304,6 +305,16 @@ func buildEnvObject(ctx *qjs.Context, env *Env, db *gorm.DB) *qjs.Value {
 		for name, nsID := range env.KVBindings {
 			bridge := &KVBridge{DB: db, NamespaceID: nsID}
 			envObj.SetPropertyStr(name, buildKVBinding(ctx, bridge))
+		}
+	}
+
+	// Storage bucket bindings (R2-compatible).
+	if env.StorageBindings != nil && minioClient != nil {
+		if mc, ok := minioClient.(*minio.Client); ok {
+			for name, bucketName := range env.StorageBindings {
+				bridge := &StorageBridge{Client: mc, BucketName: bucketName}
+				envObj.SetPropertyStr(name, buildStorageBinding(ctx, bridge))
+			}
 		}
 	}
 

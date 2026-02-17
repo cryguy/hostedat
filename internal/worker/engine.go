@@ -45,12 +45,13 @@ func (sp *sitePool) markInvalid() {
 
 // Engine manages per-site worker pools and executes JS worker scripts.
 type Engine struct {
-	pools     sync.Map // poolKey -> *sitePool
-	bytecodes sync.Map // poolKey -> []byte
-	config    config.WorkerConfig
-	db        *gorm.DB
-	store     *storage.Manager
-	logDone   chan struct{}
+	pools       sync.Map // poolKey -> *sitePool
+	bytecodes   sync.Map // poolKey -> []byte
+	config      config.WorkerConfig
+	db          *gorm.DB
+	store       *storage.Manager
+	minioClient interface{} // *minio.Client, stored as interface to avoid import cycle
+	logDone     chan struct{}
 }
 
 // NewEngine creates an Engine with the given configuration and database handle.
@@ -68,6 +69,11 @@ func NewEngine(cfg config.WorkerConfig, db *gorm.DB) *Engine {
 // SetStore sets the storage manager for bytecode reload on server restart.
 func (e *Engine) SetStore(store *storage.Manager) {
 	e.store = store
+}
+
+// SetMinioClient sets the minio-go client for R2-compatible storage bindings.
+func (e *Engine) SetMinioClient(client interface{}) {
+	e.minioClient = client
 }
 
 // logRetentionLoop deletes worker logs older than max_log_retention days.
@@ -305,7 +311,7 @@ func (e *Engine) Execute(siteID string, version int, env *Env, req *WorkerReques
 		return result
 	}
 
-	jsEnv := buildEnvObject(ctx, env, e.db)
+	jsEnv := buildEnvObject(ctx, env, e.db, e.minioClient)
 	jsCtx := buildExecContext(ctx)
 
 	// Call __worker_module__.fetch(request, env, ctx).
@@ -432,7 +438,7 @@ func (e *Engine) ExecuteScheduled(siteID string, version int, env *Env, cron str
 	event.SetPropertyStr("scheduledTime", ctx.NewFloat64(float64(time.Now().UnixMilli())))
 	event.SetPropertyStr("cron", ctx.NewString(cron))
 
-	jsEnv := buildEnvObject(ctx, env, e.db)
+	jsEnv := buildEnvObject(ctx, env, e.db, e.minioClient)
 	jsCtx := buildExecContext(ctx)
 
 	// Call __worker_module__.scheduled(event, env, ctx).
@@ -539,6 +545,13 @@ func BuildEnvFromDB(db *gorm.DB, siteID string, assets AssetsFetcher) *Env {
 	db.Where("site_id = ?", siteID).Find(&kvNamespaces)
 	for _, ns := range kvNamespaces {
 		env.KVBindings[ns.Name] = ns.ID
+	}
+
+	env.StorageBindings = make(map[string]string)
+	var storageBuckets []models.StorageBucket
+	db.Where("site_id = ?", siteID).Find(&storageBuckets)
+	for _, b := range storageBuckets {
+		env.StorageBindings[b.Name] = b.BucketName
 	}
 
 	return env

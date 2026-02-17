@@ -34,10 +34,11 @@ type LogEntry struct {
 
 // Env holds all bindings passed to the worker as the second argument.
 type Env struct {
-	Vars       map[string]string
-	Secrets    map[string]string
-	KVBindings map[string]string // binding name -> namespace ID
-	Assets     AssetsFetcher
+	Vars            map[string]string
+	Secrets         map[string]string
+	KVBindings      map[string]string // binding name -> namespace ID
+	StorageBindings map[string]string // binding name -> S3 bucket name
+	Assets          AssetsFetcher
 }
 
 // AssetsFetcher is implemented by the static pipeline to handle env.ASSETS.fetch().

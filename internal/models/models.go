@@ -226,3 +226,41 @@ func (wl *WorkerLog) BeforeCreate(tx *gorm.DB) error {
 	}
 	return nil
 }
+
+// Storage-related models
+
+type StorageBucket struct {
+	ID         string    `gorm:"primaryKey;size:20" json:"id"`
+	SiteID     string    `gorm:"index;not null" json:"site_id"`
+	Name       string    `gorm:"not null" json:"name"`
+	BucketName string    `gorm:"uniqueIndex;not null" json:"bucket_name"`
+	CreatedAt  time.Time `json:"created_at"`
+
+	Site Site `gorm:"foreignKey:SiteID" json:"-"`
+}
+
+func (sb *StorageBucket) BeforeCreate(tx *gorm.DB) error {
+	if sb.ID == "" {
+		sb.ID = generateID()
+	}
+	return nil
+}
+
+type S3Credential struct {
+	ID            string     `gorm:"primaryKey;size:20" json:"id"`
+	UserID        string     `gorm:"index;not null" json:"user_id"`
+	ExternalKeyID string     `gorm:"uniqueIndex;not null" json:"external_key_id"`
+	AccessKeyID   string     `gorm:"uniqueIndex;not null" json:"access_key_id"`
+	Name          string     `gorm:"not null" json:"name"`
+	LastUsedAt    *time.Time `json:"last_used_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+
+	User User `gorm:"foreignKey:UserID" json:"-"`
+}
+
+func (sc *S3Credential) BeforeCreate(tx *gorm.DB) error {
+	if sc.ID == "" {
+		sc.ID = generateID()
+	}
+	return nil
+}

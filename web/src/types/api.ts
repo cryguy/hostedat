@@ -98,3 +98,23 @@ export interface WorkerLog {
   message: string
   created_at: string
 }
+
+export interface StorageBucket {
+  id: string
+  site_id: string
+  name: string
+  bucket_name: string
+  garage_bucket_id: string
+  created_at: string
+}
+
+export interface S3Credential {
+  id: string
+  user_id: string
+  access_key_id: string
+  secret_access_key?: string
+  garage_key_id: string
+  name: string
+  last_used_at?: string
+  created_at: string
+}

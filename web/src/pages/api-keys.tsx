@@ -1,16 +1,19 @@
 import { useEffect, useState, useCallback } from "react"
 import { toast } from "sonner"
 import { Plus, Loader2, Key } from "lucide-react"
-import { apiKeys as keysApi } from "@/lib/api"
+import { apiKeys as keysApi, s3Credentials } from "@/lib/api"
 import { Button } from "@/components/ui/button"
+import { Separator } from "@/components/ui/separator"
 import { PageHeader } from "@/components/shared/page-header"
 import { EmptyState } from "@/components/shared/empty-state"
 import { KeyList } from "@/components/api-keys/key-list"
+import { S3CredentialList } from "@/components/api-keys/s3-credentials"
 import { CreateKeyDialog } from "@/components/api-keys/create-key-dialog"
-import type { APIKey } from "@/types/api"
+import type { APIKey, S3Credential } from "@/types/api"
 
 export default function APIKeysPage() {
   const [keys, setKeys] = useState<APIKey[]>([])
+  const [credentials, setCredentials] = useState<S3Credential[]>([])
   const [loading, setLoading] = useState(true)
   const [createOpen, setCreateOpen] = useState(false)
 
@@ -25,7 +28,17 @@ export default function APIKeysPage() {
     }
   }, [])
 
+  const loadCredentials = useCallback(async () => {
+    try {
+      const data = await s3Credentials.list()
+      setCredentials(data)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load S3 credentials")
+    }
+  }, [])
+
   useEffect(() => { load() }, [load])
+  useEffect(() => { loadCredentials() }, [loadCredentials])
 
   if (loading) {
     return (
@@ -63,6 +76,18 @@ export default function APIKeysPage() {
       ) : (
         <KeyList items={keys} onDeleted={load} />
       )}
+
+      <Separator className="my-8" />
+
+      <div className="space-y-4">
+        <div>
+          <h2 className="text-2xl font-semibold">S3 Credentials</h2>
+          <p className="text-sm text-muted-foreground">
+            Manage S3-compatible storage credentials for object storage access
+          </p>
+        </div>
+        <S3CredentialList items={credentials} onDeleted={loadCredentials} />
+      </div>
 
       <CreateKeyDialog
         open={createOpen}

@@ -41,6 +41,8 @@ func InitDB(cfg config.DBConfig) (*gorm.DB, error) {
 		&KVEntry{},
 		&CronSchedule{},
 		&WorkerLog{},
+		&StorageBucket{},
+		&S3Credential{},
 	); err != nil {
 		return nil, fmt.Errorf("auto-migrating: %w", err)
 	}
