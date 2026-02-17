@@ -15,7 +15,8 @@ MANIFEST="$ROOT_DIR/docs/public/downloads.json"
 
 # Get version from git
 VERSION=$(cat "$ROOT_DIR/VERSION" 2>/dev/null | tr -d '[:space:]' || echo "dev")
-DATE=$(date -u +%Y-%m-%d)
+# Use git commit date for reproducibility (falls back to current date)
+DATE=$(git -C "$ROOT_DIR" log -1 --format=%cd --date=short 2>/dev/null || date -u +%Y-%m-%d)
 
 SKIP_BUILD=false
 for arg in "$@"; do

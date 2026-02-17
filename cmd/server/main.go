@@ -21,7 +21,10 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var version = "dev"
+var (
+	version = "dev"
+	commit  = "unknown"
+)
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
@@ -133,7 +136,7 @@ func main() {
 
 	// Start with TLS if Cloudflare token is configured, otherwise plain HTTP
 	if cfg.Cloudflare.APIToken != "" {
-		log.Printf("Starting hostedat %s with TLS on %s for domain %s", version, cfg.Listen, cfg.Domain)
+		log.Printf("Starting hostedat %s (%s) with TLS on %s for domain %s", version, commit, cfg.Listen, cfg.Domain)
 
 		certsDir := filepath.Join(filepath.Dir(cfg.Database.DSN), "certs")
 		tlsCfg, err := certs.SetupTLS(certs.Config{
@@ -155,7 +158,7 @@ func main() {
 			log.Fatalf("Server failed: %v", err)
 		}
 	} else {
-		log.Printf("Starting hostedat %s (no TLS) on %s for domain %s", version, cfg.Listen, cfg.Domain)
+		log.Printf("Starting hostedat %s (%s) (no TLS) on %s for domain %s", version, commit, cfg.Listen, cfg.Domain)
 		if err := e.Start(cfg.Listen); err != nil {
 			log.Fatalf("Server failed: %v", err)
 		}

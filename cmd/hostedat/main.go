@@ -15,6 +15,7 @@ import (
 
 var (
 	version       = "dev"
+	commit        = "unknown"
 	defaultServer = "" // set via -ldflags at build time
 )
 
@@ -288,7 +289,7 @@ func versionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print the CLI version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("hostedat %s\n", version)
+			fmt.Printf("hostedat %s (%s)\n", version, commit)
 			if defaultServer != "" {
 				fmt.Printf("server:  %s\n", defaultServer)
 			}
