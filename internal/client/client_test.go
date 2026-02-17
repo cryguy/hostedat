@@ -752,11 +752,11 @@ func TestDeploy_NestedDirectories(t *testing.T) {
 		}
 	}
 	files := map[string]string{
-		filepath.Join(tmpDir, "root.txt"):              "root",
-		filepath.Join(tmpDir, "a", "a.txt"):            "a",
-		filepath.Join(tmpDir, "a", "b", "b.txt"):       "b",
-		filepath.Join(tmpDir, "a", "b", "c", "c.txt"):  "c",
-		filepath.Join(tmpDir, "x", "y", "y.txt"):       "y",
+		filepath.Join(tmpDir, "root.txt"):             "root",
+		filepath.Join(tmpDir, "a", "a.txt"):           "a",
+		filepath.Join(tmpDir, "a", "b", "b.txt"):      "b",
+		filepath.Join(tmpDir, "a", "b", "c", "c.txt"): "c",
+		filepath.Join(tmpDir, "x", "y", "y.txt"):      "y",
 	}
 	for path, content := range files {
 		if err := os.WriteFile(path, []byte(content), 0644); err != nil {

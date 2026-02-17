@@ -81,9 +81,9 @@ func TestSemverAtLeast(t *testing.T) {
 		{"1.0.0", "1.0.0", true},
 		{"1.0.1", "1.0.0", true},
 		{"0.9.0", "1.0.0", false},
-		{"dev", "1.0.0", true},     // dev builds pass
-		{"1.0.0", "dev", true},     // unparseable minimum passes
-		{"abc", "1.0.0", true},     // unparseable version passes
+		{"dev", "1.0.0", true}, // dev builds pass
+		{"1.0.0", "dev", true}, // unparseable minimum passes
+		{"abc", "1.0.0", true}, // unparseable version passes
 		{"0.1.0", "0.1.0", true},
 		{"0.2.0", "0.1.0", true},
 		{"0.0.9", "0.1.0", false},

@@ -28,9 +28,9 @@ func NewClient(endpoint string) *Client {
 
 // AccessKeyResult holds the credentials returned by CreateAccessKey.
 type AccessKeyResult struct {
-	AccessKeyID    string
+	AccessKeyID     string
 	SecretAccessKey string
-	UserName       string
+	UserName        string
 }
 
 // createAccessKeyResponse is the XML envelope for IAM CreateAccessKey responses.
@@ -98,9 +98,9 @@ func (c *Client) CreateAccessKey(userName string) (*AccessKeyResult, error) {
 	}
 
 	return &AccessKeyResult{
-		AccessKeyID:    resp.Result.AccessKey.AccessKeyId,
+		AccessKeyID:     resp.Result.AccessKey.AccessKeyId,
 		SecretAccessKey: resp.Result.AccessKey.SecretAccessKey,
-		UserName:       resp.Result.AccessKey.UserName,
+		UserName:        resp.Result.AccessKey.UserName,
 	}, nil
 }
 

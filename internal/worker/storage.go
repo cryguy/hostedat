@@ -281,10 +281,10 @@ func buildStorageBinding(ctx *qjs.Context, bridge *StorageBridge) *qjs.Value {
 		}
 
 		result := map[string]interface{}{
-			"objects":            objects,
-			"truncated":          truncated,
-			"cursor":             nextCursor,
-			"delimitedPrefixes":  delimitedPrefixes,
+			"objects":           objects,
+			"truncated":         truncated,
+			"cursor":            nextCursor,
+			"delimitedPrefixes": delimitedPrefixes,
 		}
 		data, _ := json.Marshal(result)
 		promise.Resolve(c.ParseJSON(string(data)))

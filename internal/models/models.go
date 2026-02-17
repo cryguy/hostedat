@@ -159,9 +159,9 @@ func (w *WorkerEnvVar) BeforeCreate(tx *gorm.DB) error {
 }
 
 type KVNamespace struct {
-	ID     string    `gorm:"primaryKey;size:20" json:"id"`
-	SiteID string    `gorm:"index;not null" json:"site_id"`
-	Name   string    `gorm:"not null" json:"name"`
+	ID        string    `gorm:"primaryKey;size:20" json:"id"`
+	SiteID    string    `gorm:"index;not null" json:"site_id"`
+	Name      string    `gorm:"not null" json:"name"`
 	CreatedAt time.Time `json:"created_at"`
 
 	Site Site `gorm:"foreignKey:SiteID" json:"-"`

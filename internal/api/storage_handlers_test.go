@@ -18,10 +18,10 @@ import (
 )
 
 type fakeBucketClient struct {
-	makeErr error
+	makeErr   error
 	removeErr error
-	made []string
-	removed []string
+	made      []string
+	removed   []string
 }
 
 func (f *fakeBucketClient) MakeBucket(_ context.Context, bucketName string, _ minio.MakeBucketOptions) error {

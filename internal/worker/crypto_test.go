@@ -408,8 +408,8 @@ func TestCrypto_HMACWithNullBytesInKey(t *testing.T) {
 
 	var data struct {
 		Valid    bool `json:"valid"`
-		SigLen  int  `json:"sigLen"`
-		KeyLen  int  `json:"keyLen"`
+		SigLen   int  `json:"sigLen"`
+		KeyLen   int  `json:"keyLen"`
 		KeyMatch bool `json:"keyMatch"`
 	}
 	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
@@ -702,9 +702,9 @@ func TestCrypto_ImportExportKeyWithNullBytes(t *testing.T) {
 	assertOK(t, r)
 
 	var data struct {
-		Match      bool `json:"match"`
+		Match       bool `json:"match"`
 		ExportedLen int  `json:"exportedLen"`
-		Diffs      []struct {
+		Diffs       []struct {
 			I    int `json:"i"`
 			Got  int `json:"got"`
 			Want int `json:"want"`

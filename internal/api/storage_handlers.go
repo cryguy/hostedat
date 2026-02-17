@@ -66,7 +66,7 @@ func (h *StorageHandler) CreateBucket(c echo.Context) error {
 
 	var req struct {
 		Name       string `json:"name"`        // binding name (e.g. "IMAGES")
-		BucketName string `json:"bucket_name"`  // S3 bucket name
+		BucketName string `json:"bucket_name"` // S3 bucket name
 	}
 	if err := c.Bind(&req); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "invalid request")

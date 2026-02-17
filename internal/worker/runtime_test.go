@@ -169,7 +169,7 @@ func TestHashFuncFromAlgo(t *testing.T) {
 		{"sha-384", false, 48},
 		{"SHA-512", false, 64},
 		{"sha512", false, 64},
-		{"", false, 32},          // empty defaults to SHA-256
+		{"", false, 32},           // empty defaults to SHA-256
 		{"unknown-algo", true, 0}, // unsupported returns nil
 	}
 
