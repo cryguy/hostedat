@@ -667,3 +667,148 @@ func TestClient_CreateAPIKey(t *testing.T) {
 		t.Errorf("unexpected response: %+v", resp)
 	}
 }
+
+func TestCreateAPIKey_ErrorResponse(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+	}{
+		{"401 Unauthorized", 401, `{"error":"unauthorized"}`},
+		{"500 Internal Server Error", 500, `{"error":"internal error"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+
+			c := New(srv.URL, "test-token")
+			_, err := c.CreateAPIKey("test-key")
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			apiErr, ok := err.(*APIError)
+			if !ok {
+				t.Fatalf("expected *APIError, got %T", err)
+			}
+			if apiErr.StatusCode != tt.statusCode {
+				t.Errorf("expected StatusCode %d, got %d", tt.statusCode, apiErr.StatusCode)
+			}
+		})
+	}
+}
+
+func TestDeploy_EmptyDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			t.Fatalf("failed to parse multipart form: %v", err)
+		}
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			t.Fatalf("failed to get form file: %v", err)
+		}
+		defer file.Close()
+
+		zipBytes, _ := io.ReadAll(file)
+		zipReader, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+		if err != nil {
+			t.Fatalf("failed to read zip: %v", err)
+		}
+		if len(zipReader.File) != 0 {
+			t.Errorf("expected 0 files in zip, got %d", len(zipReader.File))
+		}
+
+		w.WriteHeader(201)
+		json.NewEncoder(w).Encode(Deployment{ID: "dep1", SiteID: "abc"})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "test-token")
+	dep, err := c.Deploy("abc", tmpDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dep.ID != "dep1" {
+		t.Errorf("unexpected deployment: %+v", dep)
+	}
+}
+
+func TestDeploy_NestedDirectories(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create deeply nested directory structure.
+	dirs := []string{
+		filepath.Join(tmpDir, "a", "b", "c"),
+		filepath.Join(tmpDir, "x", "y"),
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatalf("failed to create dir %s: %v", d, err)
+		}
+	}
+	files := map[string]string{
+		filepath.Join(tmpDir, "root.txt"):              "root",
+		filepath.Join(tmpDir, "a", "a.txt"):            "a",
+		filepath.Join(tmpDir, "a", "b", "b.txt"):       "b",
+		filepath.Join(tmpDir, "a", "b", "c", "c.txt"):  "c",
+		filepath.Join(tmpDir, "x", "y", "y.txt"):       "y",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("failed to write %s: %v", path, err)
+		}
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			t.Fatalf("failed to parse multipart form: %v", err)
+		}
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			t.Fatalf("failed to get form file: %v", err)
+		}
+		defer file.Close()
+
+		zipBytes, _ := io.ReadAll(file)
+		zipReader, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+		if err != nil {
+			t.Fatalf("failed to read zip: %v", err)
+		}
+
+		expectedPaths := map[string]bool{
+			"root.txt":    true,
+			"a/a.txt":     true,
+			"a/b/b.txt":   true,
+			"a/b/c/c.txt": true,
+			"x/y/y.txt":   true,
+		}
+
+		for _, f := range zipReader.File {
+			if !expectedPaths[f.Name] {
+				t.Errorf("unexpected file in zip: %s", f.Name)
+			}
+			delete(expectedPaths, f.Name)
+		}
+		for missing := range expectedPaths {
+			t.Errorf("missing file in zip: %s", missing)
+		}
+
+		w.WriteHeader(201)
+		json.NewEncoder(w).Encode(Deployment{ID: "dep1", SiteID: "abc", Version: 1})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "test-token")
+	dep, err := c.Deploy("abc", tmpDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dep.ID != "dep1" || dep.SiteID != "abc" || dep.Version != 1 {
+		t.Errorf("unexpected deployment: %+v", dep)
+	}
+}

@@ -1,69 +1,118 @@
 package worker
 
 import (
-	"encoding/base64"
+	"fmt"
 
 	"github.com/fastschema/qjs"
 )
 
-// setupEncoding registers global atob() and btoa() functions matching the
-// Web API specification. These are Go-backed for correctness and performance.
-func setupEncoding(rt *qjs.Runtime) error {
-	ctx := rt.Context()
-
-	// atob(data) — decodes a base64-encoded string to a binary (Latin-1) string.
-	// Each decoded byte becomes a Unicode code point 0-255 in the result.
-	ctx.SetFunc("atob", func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
-		if len(args) < 1 {
-			return nil, errMissingArg("atob", 1)
-		}
-
-		encoded := args[0].String()
-		decoded, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			// Try with padding tolerance (matches browser behavior).
-			decoded, err = base64.RawStdEncoding.DecodeString(encoded)
-			if err != nil {
-				return nil, errInvalidArg("atob", "invalid base64 string")
-			}
-		}
-
-		// Convert raw bytes to a string of Latin-1 code points.
-		// Each byte 0-255 becomes a single Unicode code point, NOT a UTF-8
-		// multi-byte sequence. This matches browser atob() behavior.
-		runes := make([]rune, len(decoded))
-		for i, b := range decoded {
-			runes[i] = rune(b)
-		}
-		return c.NewString(string(runes)), nil
-	})
+// encodingJS implements global atob() and btoa() as pure JavaScript.
+//
+// These MUST be JS-only (no Go-backed functions) because binary strings
+// containing null bytes (0x00) get truncated when crossing the QJS ↔ Go
+// boundary: QJS's JS_ToCString returns a null-terminated C string, so Go's
+// String() method sees a shorter value. By keeping encode/decode entirely
+// in the JS engine, binary strings are handled correctly regardless of
+// content.
+const encodingJS = `
+(function() {
+	const _e = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+	const _d = new Uint8Array(128);
+	for (let i = 0; i < _e.length; i++) _d[_e.charCodeAt(i)] = i;
+	const _v = new Uint8Array(128);
+	for (let i = 0; i < _e.length; i++) _v[_e.charCodeAt(i)] = 1;
+	_v[61] = 1; // '='
 
 	// btoa(data) — encodes a binary (Latin-1) string to base64.
-	// Each character's Unicode code point (must be 0-255) becomes one byte.
-	ctx.SetFunc("btoa", func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
-		if len(args) < 1 {
-			return nil, errMissingArg("btoa", 1)
+	// Matches the Web API: each char must have code point 0-255.
+	globalThis.btoa = function(data) {
+		if (arguments.length < 1) throw new TypeError("btoa requires at least 1 argument(s)");
+		const s = String(data);
+		const len = s.length;
+		if (len === 0) return '';
+		// Validate Latin-1 range and collect bytes in one pass.
+		const bytes = new Uint8Array(len);
+		for (let i = 0; i < len; i++) {
+			const ch = s.charCodeAt(i);
+			if (ch > 255) throw new Error("btoa: string contains characters outside of the Latin1 range");
+			bytes[i] = ch;
 		}
+		// Base64 encode using array + join to avoid O(n^2) concatenation.
+		const out = [];
+		for (let i = 0; i < len; i += 3) {
+			const a = bytes[i];
+			const b = i + 1 < len ? bytes[i + 1] : 0;
+			const c = i + 2 < len ? bytes[i + 2] : 0;
+			out.push(
+				_e[a >> 2],
+				_e[((a & 3) << 4) | (b >> 4)],
+				i + 1 < len ? _e[((b & 15) << 2) | (c >> 6)] : '=',
+				i + 2 < len ? _e[c & 63] : '='
+			);
+		}
+		return out.join('');
+	};
 
-		input := args[0].String()
-		// Extract Latin-1 byte values from the rune sequence.
-		// Go's String() from QJS returns UTF-8, but the JS string contains
-		// code points 0-255 (Latin-1). We must iterate runes, not bytes.
-		bytes := make([]byte, 0, len(input))
-		for _, r := range input {
-			if r > 255 {
-				return nil, errInvalidArg("btoa", "string contains characters outside of the Latin1 range")
+	// atob(data) — decodes a base64-encoded string to a binary (Latin-1) string.
+	// Matches the Web API: tolerates missing padding and ASCII whitespace.
+	globalThis.atob = function(data) {
+		if (arguments.length < 1) throw new TypeError("atob requires at least 1 argument(s)");
+		let b64 = String(data);
+		// Strip ASCII whitespace (matches browser behavior).
+		b64 = b64.replace(/[\t\n\f\r ]/g, '');
+		if (b64.length === 0) return '';
+		// Per the HTML spec: if length is divisible by 4, strip trailing '=' or '=='.
+		// Then reject if length mod 4 is 1 (no valid encoding produces this).
+		if (b64.length % 4 === 0) {
+			if (b64[b64.length - 1] === '=') {
+				b64 = b64.slice(0, b64[b64.length - 2] === '=' ? -2 : -1);
 			}
-			bytes = append(bytes, byte(r))
 		}
+		if (b64.length % 4 === 1) {
+			throw new Error("atob: invalid base64 string");
+		}
+		// Validate: only base64 alphabet allowed (no '=' at this point).
+		for (let i = 0; i < b64.length; i++) {
+			const ch = b64.charCodeAt(i);
+			if (ch >= 128 || !_v[ch] || ch === 61) {
+				throw new Error("atob: invalid base64 string");
+			}
+		}
+		// Re-add padding for the decoder.
+		while (b64.length % 4 !== 0) b64 += '=';
+		// Decode to byte array.
+		let pad = 0;
+		if (b64[b64.length - 1] === '=') pad++;
+		if (b64[b64.length - 2] === '=') pad++;
+		const outLen = (b64.length / 4) * 3 - pad;
+		const bytes = new Uint8Array(outLen);
+		let j = 0;
+		for (let i = 0; i < b64.length; i += 4) {
+			const a = _d[b64.charCodeAt(i)];
+			const b = _d[b64.charCodeAt(i + 1)];
+			const c = _d[b64.charCodeAt(i + 2)];
+			const d = _d[b64.charCodeAt(i + 3)];
+			bytes[j++] = (a << 2) | (b >> 4);
+			if (j < outLen) bytes[j++] = ((b & 15) << 4) | (c >> 2);
+			if (j < outLen) bytes[j++] = ((c & 3) << 6) | d;
+		}
+		// Convert bytes to Latin-1 string. Chunked String.fromCharCode.apply
+		// avoids stack overflow on large buffers and is efficient.
+		const CHUNK = 4096;
+		let result = '';
+		for (let i = 0; i < outLen; i += CHUNK) {
+			const end = Math.min(i + CHUNK, outLen);
+			result += String.fromCharCode.apply(null, bytes.subarray(i, end));
+		}
+		return result;
+	};
+})();
+`
 
-		encoded := base64.StdEncoding.EncodeToString(bytes)
-		return c.NewString(encoded), nil
-	})
-
+// setupEncoding evaluates the pure-JS atob/btoa implementations.
+func setupEncoding(rt *qjs.Runtime) error {
+	if _, err := rt.Eval("encoding.js", qjs.Code(encodingJS)); err != nil {
+		return fmt.Errorf("evaluating encoding.js: %w", err)
+	}
 	return nil
 }

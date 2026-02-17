@@ -1,11 +1,14 @@
 # hostedat
 
-Self-hosted static site hosting platform. Upload a zip of your built site and get a live subdomain — like Cloudflare Pages, but on your own server with single-command deploys.
+Self-hosted static site hosting platform with server-side JavaScript workers. Upload a zip of your built site and get a live subdomain — like Cloudflare Pages, but on your own server with single-command deploys.
 
 ## Features
 
 - **Subdomain routing** — each site gets `<name>.yourdomain.com`, served instantly
 - **Single-command deploys** — `hostedat deploy my-site ./dist` from your terminal or CI
+- **Server-side workers** — deploy `_worker.js` for dynamic request handling (Cloudflare Workers-compatible API)
+- **KV storage** — per-site key-value namespaces accessible from workers
+- **Cron triggers** — schedule worker execution with standard cron expressions
 - **Netlify-compatible `_redirects`** — redirects, rewrites, and SPA fallback rules
 - **Custom `_headers`** — per-path response headers
 - **Custom `404.html`** — drop one in your upload and it just works
@@ -14,6 +17,7 @@ Self-hosted static site hosting platform. Upload a zip of your built site and ge
 - **User management** — roles (superadmin, admin, user), invite system, API keys
 - **Dashboard** — React frontend for managing sites, deployments, users, and settings
 - **CLI client** — deploy from anywhere, integrates with CI/CD
+- **Reproducible builds** — deterministic binaries with `-trimpath` and zero build IDs
 - **Portable** — single binary, SQLite by default, swap to Postgres/MySQL via config
 
 ## Quick Start
@@ -76,7 +80,7 @@ Your site is live at `my-site.yourdomain.com`.
 ## CLI Usage
 
 ```
-hostedat login                     # Authenticate with the server
+hostedat login                     # Authenticate via browser
 hostedat sites list                # List your sites
 hostedat sites create <name>       # Create a new site
 hostedat sites delete <name>       # Delete a site
@@ -84,7 +88,7 @@ hostedat deploy <site> <dir>       # Deploy a directory
 hostedat version                   # Print version info
 ```
 
-The CLI auto-detects SPA projects (single `index.html` with scripts, few HTML files) and enables SPA mode automatically. Override with `--spa` or `--no-spa`.
+The CLI auto-detects SPA projects (single `index.html` with scripts, few HTML files) and suggests enabling SPA mode. Override with `--spa`.
 
 ## Static Site Features
 
@@ -116,6 +120,114 @@ Custom response headers per path pattern:
 
 Include a `404.html` in your upload and it will be served for requests that don't match any file or rewrite rule.
 
+## Workers
+
+Workers let you run server-side JavaScript on your site. Include a `_worker.js` file in your upload to handle requests dynamically — the API is compatible with Cloudflare Workers.
+
+Workers run in a sandboxed QuickJS (ES2023) runtime compiled to WASM via Wazero — pure Go, zero CGO dependencies.
+
+### Basic Worker
+
+```js
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/api/hello") {
+      return Response.json({ message: "Hello from the edge!" });
+    }
+
+    // Fall through to static assets
+    return env.ASSETS.fetch(request);
+  },
+};
+```
+
+### Available Web APIs
+
+Workers have access to standard Web APIs:
+
+- `fetch()` — outbound HTTP requests
+- `Request`, `Response`, `Headers`, `URL`
+- `crypto.getRandomValues()`, `crypto.subtle`, `crypto.randomUUID()`
+- `ReadableStream`, `WritableStream`, `TransformStream`
+- `FormData`, `Blob`, `File`
+- `AbortController`, `AbortSignal`
+- `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`
+- `atob`, `btoa`
+- `structuredClone`
+- `console.log/warn/error` (captured to worker logs)
+
+### Environment Variables & Secrets
+
+Set environment variables and secrets via the API. They're available on the `env` object in your worker:
+
+```js
+export default {
+  async fetch(request, env) {
+    const apiKey = env.MY_SECRET;
+    // ...
+  },
+};
+```
+
+### KV Storage
+
+KV namespaces provide per-site key-value storage accessible from workers:
+
+```js
+export default {
+  async fetch(request, env) {
+    // Read
+    const value = await env.MY_KV.get("key");
+
+    // Write (with optional TTL in seconds)
+    await env.MY_KV.put("key", "value", { expirationTtl: 3600 });
+
+    // Delete
+    await env.MY_KV.delete("key");
+
+    // List keys (with optional prefix filter)
+    const { keys } = await env.MY_KV.list({ prefix: "user:" });
+
+    return new Response("OK");
+  },
+};
+```
+
+### Cron Triggers
+
+Schedule periodic worker execution with standard 5-field cron expressions:
+
+```js
+export default {
+  async fetch(request, env) {
+    return new Response("OK");
+  },
+
+  async scheduled(event, env, ctx) {
+    console.log(`Cron fired: ${event.cron} at ${event.scheduledTime}`);
+    // Run background tasks, cleanup, etc.
+  },
+};
+```
+
+### Worker Configuration
+
+Configure worker resource limits in `config.yaml`:
+
+```yaml
+worker:
+  pool_size: 4               # Pre-warmed JS runtimes per site
+  memory_limit_mb: 128       # Max memory per runtime
+  execution_timeout: 30000   # Max execution time in ms
+  max_fetch_requests: 50     # Max outbound fetch() calls per invocation
+  fetch_timeout_sec: 10      # Timeout per fetch() call
+  max_response_bytes: 10485760  # 10 MB max response body
+  max_log_retention: 7       # Days to keep worker logs
+  max_script_size_kb: 1024   # Max _worker.js file size
+```
+
 ## Building
 
 ```bash
@@ -142,8 +254,10 @@ internal/auth/     Authentication (JWT, API keys)
 internal/config/   Configuration loading
 internal/client/   API client (used by CLI)
 internal/certs/    TLS certificate management
+internal/worker/   Server-side JS engine (QuickJS/WASM)
 web/               React + Vite frontend
 docs/              Documentation site (Astro)
+scripts/           Build and release scripts
 ```
 
 ## Documentation

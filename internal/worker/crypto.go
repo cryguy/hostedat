@@ -23,6 +23,16 @@ import (
 // Key IDs are allocated by Go (not JS) to prevent cross-request collisions.
 const cryptoJS = `
 (function() {
+	// Pure-JS base64 encode/decode for the crypto internals.
+	// We intentionally avoid atob/btoa here because binary strings containing
+	// null bytes (0x00) get truncated when crossing the QJS/Go C-string boundary
+	// (JS_ToCString and JS_NewString are null-terminated). By encoding/decoding
+	// base64 directly from byte arrays we never create an intermediate binary
+	// string, eliminating the corruption entirely.
+	const _b64e = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+	const _b64d = new Uint8Array(128);
+	for (let i = 0; i < _b64e.length; i++) _b64d[_b64e.charCodeAt(i)] = i;
+
 	const crypto = {};
 
 	crypto.getRandomValues = function(typedArray) {
@@ -30,9 +40,16 @@ const cryptoJS = `
 			throw new TypeError('getRandomValues requires a TypedArray');
 		}
 		const b64 = __cryptoGetRandomBytes(typedArray.length);
-		const raw = atob(b64);
-		for (let i = 0; i < typedArray.length; i++) {
-			typedArray[i] = raw.charCodeAt(i);
+		// Decode base64 directly to byte values — no atob binary string.
+		let j = 0;
+		for (let i = 0; i < b64.length; i += 4) {
+			const a = _b64d[b64.charCodeAt(i)];
+			const b = _b64d[b64.charCodeAt(i + 1)];
+			const c = _b64d[b64.charCodeAt(i + 2)];
+			const d = _b64d[b64.charCodeAt(i + 3)];
+			if (j < typedArray.length) typedArray[j++] = (a << 2) | (b >> 4);
+			if (j < typedArray.length) typedArray[j++] = ((b & 15) << 4) | (c >> 2);
+			if (j < typedArray.length) typedArray[j++] = ((c & 3) << 6) | d;
 		}
 		return typedArray;
 	};
@@ -117,9 +134,8 @@ const cryptoJS = `
 	};
 
 	// Helper: convert any BufferSource or TypedArray to base64.
-	// Uses duck-typing (data.buffer, data.length) instead of ArrayBuffer.isView
-	// for QuickJS WASM compatibility.
-	// Chunked conversion avoids O(n^2) string concatenation for large buffers.
+	// Uses pure JS base64 encoding directly from byte values to avoid
+	// the String.fromCharCode + btoa path that corrupts null bytes.
 	function __bufferSourceToB64(data) {
 		let arr;
 		if (data instanceof ArrayBuffer) {
@@ -132,21 +148,40 @@ const cryptoJS = `
 		} else {
 			throw new TypeError('expected BufferSource');
 		}
-		const CHUNK = 1024;
-		let s = '';
-		for (let i = 0; i < arr.length; i += CHUNK) {
-			const end = Math.min(i + CHUNK, arr.length);
-			s += String.fromCharCode.apply(null, arr.subarray(i, end));
+		const len = arr.length;
+		let r = '';
+		for (let i = 0; i < len; i += 3) {
+			const a = arr[i];
+			const b = i + 1 < len ? arr[i + 1] : 0;
+			const c = i + 2 < len ? arr[i + 2] : 0;
+			r += _b64e[a >> 2];
+			r += _b64e[((a & 3) << 4) | (b >> 4)];
+			r += i + 1 < len ? _b64e[((b & 15) << 2) | (c >> 6)] : '=';
+			r += i + 2 < len ? _b64e[c & 63] : '=';
 		}
-		return btoa(s);
+		return r;
 	}
 
 	// Helper: convert base64 to ArrayBuffer.
+	// Uses pure JS base64 decoding directly to byte values to avoid
+	// the atob path that corrupts null bytes.
 	function __b64ToBuffer(b64) {
-		const raw = atob(b64);
-		const buf = new ArrayBuffer(raw.length);
-		const view = new Uint8Array(buf);
-		for (let i = 0; i < raw.length; i++) view[i] = raw.charCodeAt(i);
+		let pad = 0;
+		if (b64.length > 0 && b64[b64.length - 1] === '=') pad++;
+		if (b64.length > 1 && b64[b64.length - 2] === '=') pad++;
+		const outLen = (b64.length * 3 / 4) - pad;
+		const buf = new ArrayBuffer(outLen);
+		const out = new Uint8Array(buf);
+		let j = 0;
+		for (let i = 0; i < b64.length; i += 4) {
+			const a = _b64d[b64.charCodeAt(i)];
+			const b = _b64d[b64.charCodeAt(i + 1)];
+			const c = _b64d[b64.charCodeAt(i + 2)];
+			const d = _b64d[b64.charCodeAt(i + 3)];
+			out[j++] = (a << 2) | (b >> 4);
+			if (j < outLen) out[j++] = ((b & 15) << 4) | (c >> 2);
+			if (j < outLen) out[j++] = ((c & 3) << 6) | d;
+		}
 		return buf;
 	}
 
