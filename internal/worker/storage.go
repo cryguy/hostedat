@@ -357,8 +357,8 @@ func buildR2ObjectBody(c *qjs.Context, key string, data []byte, stat *minio.Obje
 			p.Reject(cc.NewError(fmt.Errorf("body already consumed")))
 			return cc.NewUndefined(), nil
 		}
-		// P0 contract: fail explicitly until real binary support is implemented.
-		p.Reject(cc.NewError(fmt.Errorf("arrayBuffer() is not implemented for storage objects")))
+		markBodyUsed()
+		p.Resolve(cc.NewArrayBuffer(data))
 		return cc.NewUndefined(), nil
 	}, true)
 	obj.SetPropertyStr("arrayBuffer", abFn)
