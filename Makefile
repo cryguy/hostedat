@@ -86,7 +86,7 @@ release:
 	bash scripts/build-release.sh
 
 # Deploy docs site to hostedat (reads credentials from deploy.env)
-deploy-docs: docs
+deploy-docs:
 	set -a && . ./deploy.env && set +a && bin/$(CLI_NAME) deploy $(DOCS_SITE) docs/dist
 
 full-release: release deploy-docs

@@ -1,44 +1,50 @@
+import { lazy, Suspense } from "react"
 import { createBrowserRouter, RouterProvider } from "react-router-dom"
 import { AuthProvider } from "@/contexts/auth-context"
 import { Toaster } from "@/components/ui/sonner"
 import { AppLayout } from "@/components/layout/app-layout"
 import { ProtectedRoute } from "@/components/shared/protected-route"
 import { AdminRoute } from "@/components/shared/admin-route"
-import LoginPage from "@/pages/login"
-import RegisterPage from "@/pages/register"
-import DashboardPage from "@/pages/dashboard"
-import SiteDetailPage from "@/pages/site-detail"
-import APIKeysPage from "@/pages/api-keys"
-import AdminUsersPage from "@/pages/admin/users"
-import AdminSettingsPage from "@/pages/admin/settings"
-import AdminInvitesPage from "@/pages/admin/invites"
-import NotFoundPage from "@/pages/not-found"
+
+const LoginPage = lazy(() => import("@/pages/login"))
+const RegisterPage = lazy(() => import("@/pages/register"))
+const DashboardPage = lazy(() => import("@/pages/dashboard"))
+const SiteDetailPage = lazy(() => import("@/pages/site-detail"))
+const APIKeysPage = lazy(() => import("@/pages/api-keys"))
+const AdminUsersPage = lazy(() => import("@/pages/admin/users"))
+const AdminSettingsPage = lazy(() => import("@/pages/admin/settings"))
+const AdminInvitesPage = lazy(() => import("@/pages/admin/invites"))
+const NotFoundPage = lazy(() => import("@/pages/not-found"))
+
+function LazyPage({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={null}>{children}</Suspense>
+}
 
 const router = createBrowserRouter([
-  { path: "/login", element: <LoginPage /> },
-  { path: "/register", element: <RegisterPage /> },
+  { path: "/login", element: <LazyPage><LoginPage /></LazyPage> },
+  { path: "/register", element: <LazyPage><RegisterPage /></LazyPage> },
   {
     element: <ProtectedRoute />,
     children: [
       {
         element: <AppLayout />,
         children: [
-          { path: "/", element: <DashboardPage /> },
-          { path: "/sites/:id", element: <SiteDetailPage /> },
-          { path: "/keys", element: <APIKeysPage /> },
+          { path: "/", element: <LazyPage><DashboardPage /></LazyPage> },
+          { path: "/sites/:id", element: <LazyPage><SiteDetailPage /></LazyPage> },
+          { path: "/keys", element: <LazyPage><APIKeysPage /></LazyPage> },
           {
             element: <AdminRoute />,
             children: [
-              { path: "/admin/users", element: <AdminUsersPage /> },
-              { path: "/admin/settings", element: <AdminSettingsPage /> },
-              { path: "/admin/invites", element: <AdminInvitesPage /> },
+              { path: "/admin/users", element: <LazyPage><AdminUsersPage /></LazyPage> },
+              { path: "/admin/settings", element: <LazyPage><AdminSettingsPage /></LazyPage> },
+              { path: "/admin/invites", element: <LazyPage><AdminInvitesPage /></LazyPage> },
             ],
           },
         ],
       },
     ],
   },
-  { path: "*", element: <NotFoundPage /> },
+  { path: "*", element: <LazyPage><NotFoundPage /></LazyPage> },
 ])
 
 export default function App() {
