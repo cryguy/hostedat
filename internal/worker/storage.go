@@ -15,9 +15,10 @@ import (
 
 // StorageBridge backs a single R2-compatible bucket binding.
 type StorageBridge struct {
-	Client      *minio.Client
-	BucketName  string
-	PublicS3URL string // public-facing S3 URL (e.g. https://storage.example.com) for presigned URLs
+	Client        *minio.Client
+	PresignClient *minio.Client // optional client configured with public S3 host for presigning
+	BucketName    string
+	PublicS3URL   string // public-facing S3 URL (e.g. https://storage.example.com) for direct object URLs
 }
 
 // buildStorageBinding creates a JS object with R2-compatible get/put/delete/head/list
@@ -297,7 +298,7 @@ func buildStorageBinding(ctx *qjs.Context, bridge *StorageBridge) *qjs.Value {
 
 	// createSignedUrl(key, opts?) -> Promise<string>
 	// opts: { expiresIn?: number } (seconds, default 3600, max 604800)
-	if bridge.PublicS3URL != "" {
+	if bridge.Client != nil || bridge.PresignClient != nil {
 		signFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
 			c := this.Context()
 			args := this.Args()
@@ -323,7 +324,20 @@ func buildStorageBinding(ctx *qjs.Context, bridge *StorageBridge) *qjs.Value {
 				expiry = 604800 // cap at 7 days
 			}
 
-			presigned, err := bridge.Client.PresignedGetObject(
+			signClient := bridge.PresignClient
+			if signClient == nil {
+				if bridge.PublicS3URL != "" {
+					promise.Reject(c.NewError(fmt.Errorf("creating signed URL: presign client not configured for public S3 host")))
+					return c.NewUndefined(), nil
+				}
+				signClient = bridge.Client
+			}
+			if signClient == nil {
+				promise.Reject(c.NewError(fmt.Errorf("creating signed URL: storage client not configured")))
+				return c.NewUndefined(), nil
+			}
+
+			presigned, err := signClient.PresignedGetObject(
 				context.Background(),
 				bridge.BucketName,
 				key,
@@ -335,26 +349,66 @@ func buildStorageBinding(ctx *qjs.Context, bridge *StorageBridge) *qjs.Value {
 				return c.NewUndefined(), nil
 			}
 
-			// Rewrite internal S3 URL to public-facing storage URL.
-			publicURL := rewritePresignedURL(presigned, bridge.PublicS3URL)
-			promise.Resolve(c.NewString(publicURL))
+			promise.Resolve(c.NewString(presigned.String()))
 			return c.NewUndefined(), nil
 		}, true)
 		bucket.SetPropertyStr("createSignedUrl", signFn)
 	}
 
+	// publicUrl(key) -> string
+	// Returns a direct object URL at {publicS3URL}/{bucket}/{key}. This is
+	// intended for buckets with public-read enabled.
+	if bridge.PublicS3URL != "" {
+		publicURLFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
+			c := this.Context()
+			args := this.Args()
+			if len(args) == 0 {
+				return nil, fmt.Errorf("BUCKET.publicUrl requires a key argument")
+			}
+			key := args[0].String()
+
+			objectURL, err := buildPublicObjectURL(bridge.PublicS3URL, bridge.BucketName, key)
+			if err != nil {
+				return nil, fmt.Errorf("creating public object URL: %w", err)
+			}
+
+			return c.NewString(objectURL), nil
+		}, false)
+		bucket.SetPropertyStr("publicUrl", publicURLFn)
+	}
+
 	return bucket
 }
 
-// rewritePresignedURL replaces the scheme+host of a presigned URL with the public S3 URL.
-func rewritePresignedURL(presigned *url.URL, publicBase string) string {
+// buildPublicObjectURL returns an object URL using the configured public S3 base.
+func buildPublicObjectURL(publicBase string, bucket string, key string) (string, error) {
 	pub, err := url.Parse(publicBase)
 	if err != nil {
-		return presigned.String()
+		return "", err
 	}
-	presigned.Scheme = pub.Scheme
-	presigned.Host = pub.Host
-	return presigned.String()
+	if pub.Scheme == "" || pub.Host == "" {
+		return "", fmt.Errorf("public S3 URL must include scheme and host")
+	}
+
+	cleanBucket := strings.Trim(bucket, "/")
+	cleanKey := strings.TrimPrefix(key, "/")
+	pub.Path = strings.TrimRight(pub.Path, "/") + "/" + url.PathEscape(cleanBucket) + "/" + escapePathSegments(cleanKey)
+	pub.RawPath = ""
+	pub.RawQuery = ""
+	pub.Fragment = ""
+
+	return pub.String(), nil
+}
+
+func escapePathSegments(path string) string {
+	if path == "" {
+		return ""
+	}
+	parts := strings.Split(path, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return strings.Join(parts, "/")
 }
 
 // buildR2Object creates a JS object matching the Cloudflare R2Object shape.

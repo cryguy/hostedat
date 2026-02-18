@@ -50,14 +50,15 @@ type S3Client interface {
 
 // Engine manages per-site worker pools and executes JS worker scripts.
 type Engine struct {
-	pools       sync.Map // poolKey -> *sitePool
-	bytecodes   sync.Map // poolKey -> []byte
-	config      config.WorkerConfig
-	db          *gorm.DB
-	store       *storage.Manager
-	minioClient interface{} // *minio.Client; stored as interface{} because the minio package is only imported by cmd/server
-	publicS3URL string     // public-facing S3 URL for presigned URLs (e.g. https://storage.example.com)
-	logDone     chan struct{}
+	pools              sync.Map // poolKey -> *sitePool
+	bytecodes          sync.Map // poolKey -> []byte
+	config             config.WorkerConfig
+	db                 *gorm.DB
+	store              *storage.Manager
+	minioClient        interface{} // *minio.Client; stored as interface{} because the minio package is only imported by cmd/server
+	presignMinioClient interface{} // *minio.Client configured with the public S3 endpoint for presigned URL generation
+	publicS3URL        string      // public-facing S3 URL for object URLs (e.g. https://storage.example.com)
+	logDone            chan struct{}
 }
 
 // NewEngine creates an Engine with the given configuration and database handle.
@@ -82,7 +83,14 @@ func (e *Engine) SetMinioClient(client interface{}) {
 	e.minioClient = client
 }
 
-// SetPublicS3URL sets the public-facing S3 URL used for presigned URLs.
+// SetPresignMinioClient sets the minio-go client used for presigned URL generation.
+// This client should be configured with the public S3 endpoint so SigV4 signatures
+// are generated for the externally reachable Host.
+func (e *Engine) SetPresignMinioClient(client interface{}) {
+	e.presignMinioClient = client
+}
+
+// SetPublicS3URL sets the public-facing S3 URL used for direct object URLs.
 func (e *Engine) SetPublicS3URL(u string) {
 	e.publicS3URL = u
 }
@@ -331,7 +339,7 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 		return result
 	}
 
-	jsEnv := buildEnvObject(ctx, env, e.db, e.minioClient, e.publicS3URL)
+	jsEnv := buildEnvObject(ctx, env, e.db, e.minioClient, e.presignMinioClient, e.publicS3URL)
 	jsCtx := buildExecContext(ctx)
 
 	// Call __worker_module__.fetch(request, env, ctx).
@@ -468,7 +476,7 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 	event.SetPropertyStr("scheduledTime", ctx.NewFloat64(float64(time.Now().UnixMilli())))
 	event.SetPropertyStr("cron", ctx.NewString(cron))
 
-	jsEnv := buildEnvObject(ctx, env, e.db, e.minioClient, e.publicS3URL)
+	jsEnv := buildEnvObject(ctx, env, e.db, e.minioClient, e.presignMinioClient, e.publicS3URL)
 	jsCtx := buildExecContext(ctx)
 
 	// Call __worker_module__.scheduled(event, env, ctx).

@@ -3,7 +3,7 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // Intercept binary download requests and serve from S3 via presigned URL.
+    // Intercept binary download requests and redirect to public object URLs.
     if (path.startsWith("/downloads/") && path !== "/downloads/" && !path.endsWith(".json")) {
       const filename = path.replace("/downloads/", "");
 
@@ -19,10 +19,8 @@ export default {
           return new Response("File not found", { status: 404 });
         }
 
-        // dirty hack... i know...
-        const signedUrl = (await env.DOWNLOADS.createSignedUrl(filename, { expiresIn: 3600 })).split("?")[0];
-
-        return Response.redirect(signedUrl, 302);
+        const objectUrl = env.DOWNLOADS.publicUrl(filename);
+        return Response.redirect(objectUrl, 302);
       }
     }
 

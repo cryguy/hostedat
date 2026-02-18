@@ -422,3 +422,21 @@ func TestStorageBinding_JSON_InvalidJSONRejects(t *testing.T) {
 		t.Fatalf("expected invalid JSON rejection, got %v", err)
 	}
 }
+
+func TestBuildPublicObjectURL_PathEscaping(t *testing.T) {
+	u, err := buildPublicObjectURL("https://storage.example.com", "downloads", "releases/v1.0/file name+plus?.zip")
+	if err != nil {
+		t.Fatalf("buildPublicObjectURL returned error: %v", err)
+	}
+
+	want := "https://storage.example.com/downloads/releases/v1.0/file%20name+plus%3F.zip"
+	if u != want {
+		t.Fatalf("public URL = %q, want %q", u, want)
+	}
+}
+
+func TestBuildPublicObjectURL_InvalidBase(t *testing.T) {
+	if _, err := buildPublicObjectURL("storage.example.com", "downloads", "artifact"); err == nil {
+		t.Fatalf("expected error for invalid public base URL")
+	}
+}

@@ -283,7 +283,7 @@ func buildAssetsBinding(ctx *qjs.Context, fetcher AssetsFetcher) *qjs.Value {
 
 // buildEnvObject creates the full env JS object passed to the worker's
 // fetch handler as the second argument.
-func buildEnvObject(ctx *qjs.Context, env *Env, db *gorm.DB, minioClient interface{}, publicS3URL ...string) *qjs.Value {
+func buildEnvObject(ctx *qjs.Context, env *Env, db *gorm.DB, minioClient interface{}, presignClient interface{}, publicS3URL string) *qjs.Value {
 	envObj := ctx.NewObject()
 
 	// Plain environment variables.
@@ -310,13 +310,19 @@ func buildEnvObject(ctx *qjs.Context, env *Env, db *gorm.DB, minioClient interfa
 
 	// Storage bucket bindings (R2-compatible).
 	if env.StorageBindings != nil && minioClient != nil {
-		if mc, ok := minioClient.(*minio.Client); ok {
-			var pubURL string
-			if len(publicS3URL) > 0 {
-				pubURL = publicS3URL[0]
+		mc, ok := minioClient.(*minio.Client)
+		if ok {
+			var pc *minio.Client
+			if presignClient != nil {
+				pc, _ = presignClient.(*minio.Client)
 			}
 			for name, bucketName := range env.StorageBindings {
-				bridge := &StorageBridge{Client: mc, BucketName: bucketName, PublicS3URL: pubURL}
+				bridge := &StorageBridge{
+					Client:        mc,
+					PresignClient: pc,
+					BucketName:    bucketName,
+					PublicS3URL:   publicS3URL,
+				}
 				envObj.SetPropertyStr(name, buildStorageBinding(ctx, bridge))
 			}
 		}

@@ -143,6 +143,7 @@ func main() {
 				log.Printf("Warning: failed to create presign S3 client: %v", err)
 			} else {
 				presignClient = pc
+				workerEngine.SetPresignMinioClient(pc)
 			}
 
 			// Wrap S3 proxy to serve public bucket objects without auth.
