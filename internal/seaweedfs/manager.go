@@ -87,6 +87,7 @@ func (m *Manager) Start() error {
 		fmt.Sprintf("-s3.port=%d", s3Port),
 		fmt.Sprintf("-master.port=%d", masterPort),
 		fmt.Sprintf("-volume.port=%d", volumePort),
+		"-volume.max=0",
 		"-ip=127.0.0.1",
 		"-s3.config="+s3ConfigPath,
 	)
