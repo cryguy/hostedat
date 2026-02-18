@@ -7,9 +7,10 @@ import { PageHeader } from "@/components/shared/page-header"
 import { EmptyState } from "@/components/shared/empty-state"
 import { SiteCard } from "@/components/sites/site-card"
 import { CreateSiteDialog } from "@/components/sites/create-site-dialog"
+import { getInstanceDomain } from "@/lib/config"
 import type { Site } from "@/types/api"
 
-const DOMAIN = "hostedat.ditto.moe"
+const DOMAIN = getInstanceDomain()
 
 export default function DashboardPage() {
   const [sites, setSites] = useState<Site[]>([])

@@ -11,6 +11,11 @@ const nanoidAlphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
 const nanoidLength = 12
 
 func generateID() string {
+	return GenerateID()
+}
+
+// GenerateID creates a new nanoid suitable for use as a primary key or deploy path key.
+func GenerateID() string {
 	id, err := gonanoid.Generate(nanoidAlphabet, nanoidLength)
 	if err != nil {
 		panic("nanoid generation failed: " + err.Error())
@@ -38,14 +43,15 @@ func (u *User) BeforeCreate(tx *gorm.DB) error {
 }
 
 type Site struct {
-	ID            string    `gorm:"primaryKey;size:20" json:"id"`
-	UserID        string    `gorm:"index;not null" json:"user_id"`
-	SubdomainSlug string    `gorm:"uniqueIndex;not null" json:"subdomain_slug"`
-	Name          string    `gorm:"not null" json:"name"`
-	SPAMode       bool      `gorm:"default:false" json:"spa_mode"`
-	HasWorker     bool      `gorm:"default:false" json:"has_worker"`
-	ActiveVersion *int      `json:"active_version"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID              string    `gorm:"primaryKey;size:20" json:"id"`
+	UserID          string    `gorm:"index;not null" json:"user_id"`
+	SubdomainSlug   string    `gorm:"uniqueIndex;not null" json:"subdomain_slug"`
+	Name            string    `gorm:"not null" json:"name"`
+	SPAMode         bool      `gorm:"default:false" json:"spa_mode"`
+	HasWorker       bool      `gorm:"default:false" json:"has_worker"`
+	ActiveVersion   *int      `json:"active_version"`
+	ActiveDeployID  *string   `gorm:"size:20" json:"active_deploy_id,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 
 	User        User         `gorm:"foreignKey:UserID" json:"-"`
 	Deployments []Deployment `gorm:"foreignKey:SiteID" json:"deployments,omitempty"`
@@ -60,8 +66,8 @@ func (s *Site) BeforeCreate(tx *gorm.DB) error {
 
 type Deployment struct {
 	ID         string    `gorm:"primaryKey;size:20" json:"id"`
-	SiteID     string    `gorm:"index;not null" json:"site_id"`
-	Version    int       `gorm:"not null" json:"version"`
+	SiteID     string    `gorm:"not null;uniqueIndex:idx_deployments_site_version,priority:1" json:"site_id"`
+	Version    int       `gorm:"not null;uniqueIndex:idx_deployments_site_version,priority:2" json:"version"`
 	FileHash   string    `gorm:"not null" json:"file_hash"`
 	HasWorker  bool      `gorm:"default:false" json:"has_worker"`
 	UploadedAt time.Time `json:"uploaded_at"`

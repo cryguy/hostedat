@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os/exec"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/cryguy/hostedat/internal/auth"
@@ -56,20 +57,21 @@ func BrowserLogin(serverURL, cliVersion string) (apiKey string, err error) {
 	var code string
 	var callbackErr error
 	done := make(chan struct{})
+	var closeOnce sync.Once
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("state") != state {
 			callbackErr = fmt.Errorf("state mismatch (possible CSRF)")
 			http.Error(w, "State mismatch", http.StatusBadRequest)
-			close(done)
+			closeOnce.Do(func() { close(done) })
 			return
 		}
 		code = r.URL.Query().Get("code")
 		if code == "" {
 			callbackErr = fmt.Errorf("no authorization code in callback")
 			http.Error(w, "Missing code", http.StatusBadRequest)
-			close(done)
+			closeOnce.Do(func() { close(done) })
 			return
 		}
 
@@ -79,7 +81,7 @@ body{font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;align-i
 .card{background:#171717;border:1px solid #262626;border-radius:12px;padding:2rem;text-align:center}
 </style></head><body><div class="card"><h2>Authenticated!</h2><p>You can close this tab.</p></div></body></html>`)
 
-		close(done)
+		closeOnce.Do(func() { close(done) })
 	})
 
 	srv := &http.Server{Handler: mux}
@@ -111,7 +113,8 @@ body{font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;align-i
 		"code":          code,
 		"code_verifier": codeVerifier,
 	})
-	tokenResp, err := http.Post(serverURL+"/api/v1/auth/token", "application/json", bytes.NewReader(tokenReqBody))
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	tokenResp, err := httpClient.Post(serverURL+"/api/v1/auth/token", "application/json", bytes.NewReader(tokenReqBody))
 	if err != nil {
 		return "", fmt.Errorf("failed to exchange code for token: %w", err)
 	}

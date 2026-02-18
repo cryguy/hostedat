@@ -11,10 +11,10 @@ import (
 func TestAssetsFetcher_StaticFile(t *testing.T) {
 	dir := t.TempDir()
 	siteID := "test-site"
-	version := 1
+	deployKey := "deploy1"
 
-	// Create the deployment directory structure (basePath/siteID/version)
-	deployPath := filepath.Join(dir, siteID, "1")
+	// Create the deployment directory structure (basePath/siteID/deployKey)
+	deployPath := filepath.Join(dir, siteID, deployKey)
 	if err := os.MkdirAll(deployPath, 0755); err != nil {
 		t.Fatalf("creating deploy path: %v", err)
 	}
@@ -26,12 +26,12 @@ func TestAssetsFetcher_StaticFile(t *testing.T) {
 	cache := storage.NewSiteRulesCache()
 
 	fetcher := &StaticAssetsFetcher{
-		Store:   store,
-		Cache:   cache,
-		SiteID:  siteID,
-		Version: version,
-		SPAMode: false,
-		Domain:  "test.local",
+		Store:     store,
+		Cache:     cache,
+		SiteID:    siteID,
+		DeployKey: deployKey,
+		SPAMode:   false,
+		Domain:    "test.local",
 	}
 
 	req := &WorkerRequest{Method: "GET", URL: "http://test.local/index.html", Headers: map[string]string{}}
@@ -53,21 +53,21 @@ func TestAssetsFetcher_StaticFile(t *testing.T) {
 func TestAssetsFetcher_FileNotFound(t *testing.T) {
 	dir := t.TempDir()
 	siteID := "test-site-404"
-	version := 1
+	deployKey := "deploy1"
 
-	deployPath := filepath.Join(dir, siteID, "1")
+	deployPath := filepath.Join(dir, siteID, deployKey)
 	os.MkdirAll(deployPath, 0755)
 
 	store := storage.NewManager(dir)
 	cache := storage.NewSiteRulesCache()
 
 	fetcher := &StaticAssetsFetcher{
-		Store:   store,
-		Cache:   cache,
-		SiteID:  siteID,
-		Version: version,
-		SPAMode: false,
-		Domain:  "test.local",
+		Store:     store,
+		Cache:     cache,
+		SiteID:    siteID,
+		DeployKey: deployKey,
+		SPAMode:   false,
+		Domain:    "test.local",
 	}
 
 	req := &WorkerRequest{Method: "GET", URL: "http://test.local/missing.html", Headers: map[string]string{}}
@@ -86,9 +86,9 @@ func TestAssetsFetcher_FileNotFound(t *testing.T) {
 func TestAssetsFetcher_SPAMode(t *testing.T) {
 	dir := t.TempDir()
 	siteID := "test-spa"
-	version := 1
+	deployKey := "deploy1"
 
-	deployPath := filepath.Join(dir, siteID, "1")
+	deployPath := filepath.Join(dir, siteID, deployKey)
 	os.MkdirAll(deployPath, 0755)
 	os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<h1>SPA</h1>"), 0644)
 
@@ -96,12 +96,12 @@ func TestAssetsFetcher_SPAMode(t *testing.T) {
 	cache := storage.NewSiteRulesCache()
 
 	fetcher := &StaticAssetsFetcher{
-		Store:   store,
-		Cache:   cache,
-		SiteID:  siteID,
-		Version: version,
-		SPAMode: true,
-		Domain:  "test.local",
+		Store:     store,
+		Cache:     cache,
+		SiteID:    siteID,
+		DeployKey: deployKey,
+		SPAMode:   true,
+		Domain:    "test.local",
 	}
 
 	// Request a path that doesn't exist — SPA mode should serve index.html
@@ -121,9 +121,9 @@ func TestAssetsFetcher_SPAMode(t *testing.T) {
 func TestAssetsFetcher_Custom404(t *testing.T) {
 	dir := t.TempDir()
 	siteID := "test-404"
-	version := 1
+	deployKey := "deploy1"
 
-	deployPath := filepath.Join(dir, siteID, "1")
+	deployPath := filepath.Join(dir, siteID, deployKey)
 	os.MkdirAll(deployPath, 0755)
 	os.WriteFile(filepath.Join(deployPath, "404.html"), []byte("<h1>Custom 404</h1>"), 0644)
 
@@ -131,12 +131,12 @@ func TestAssetsFetcher_Custom404(t *testing.T) {
 	cache := storage.NewSiteRulesCache()
 
 	fetcher := &StaticAssetsFetcher{
-		Store:   store,
-		Cache:   cache,
-		SiteID:  siteID,
-		Version: version,
-		SPAMode: false,
-		Domain:  "test.local",
+		Store:     store,
+		Cache:     cache,
+		SiteID:    siteID,
+		DeployKey: deployKey,
+		SPAMode:   false,
+		Domain:    "test.local",
 	}
 
 	req := &WorkerRequest{Method: "GET", URL: "http://test.local/nope", Headers: map[string]string{}}
@@ -155,9 +155,9 @@ func TestAssetsFetcher_Custom404(t *testing.T) {
 func TestAssetsFetcher_RedirectRule(t *testing.T) {
 	dir := t.TempDir()
 	siteID := "test-redirect"
-	version := 1
+	deployKey := "deploy1"
 
-	deployPath := filepath.Join(dir, siteID, "1")
+	deployPath := filepath.Join(dir, siteID, deployKey)
 	os.MkdirAll(deployPath, 0755)
 
 	// Create _redirects file with a 301 redirect
@@ -168,12 +168,12 @@ func TestAssetsFetcher_RedirectRule(t *testing.T) {
 	cache := storage.NewSiteRulesCache()
 
 	fetcher := &StaticAssetsFetcher{
-		Store:   store,
-		Cache:   cache,
-		SiteID:  siteID,
-		Version: version,
-		SPAMode: false,
-		Domain:  "test.local",
+		Store:     store,
+		Cache:     cache,
+		SiteID:    siteID,
+		DeployKey: deployKey,
+		SPAMode:   false,
+		Domain:    "test.local",
 	}
 
 	req := &WorkerRequest{Method: "GET", URL: "http://test.local/old", Headers: map[string]string{}}
@@ -192,9 +192,9 @@ func TestAssetsFetcher_RedirectRule(t *testing.T) {
 func TestAssetsFetcher_RewriteRule(t *testing.T) {
 	dir := t.TempDir()
 	siteID := "test-rewrite"
-	version := 1
+	deployKey := "deploy1"
 
-	deployPath := filepath.Join(dir, siteID, "1")
+	deployPath := filepath.Join(dir, siteID, deployKey)
 	os.MkdirAll(deployPath, 0755)
 	os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<h1>Rewritten</h1>"), 0644)
 
@@ -206,12 +206,12 @@ func TestAssetsFetcher_RewriteRule(t *testing.T) {
 	cache := storage.NewSiteRulesCache()
 
 	fetcher := &StaticAssetsFetcher{
-		Store:   store,
-		Cache:   cache,
-		SiteID:  siteID,
-		Version: version,
-		SPAMode: false,
-		Domain:  "test.local",
+		Store:     store,
+		Cache:     cache,
+		SiteID:    siteID,
+		DeployKey: deployKey,
+		SPAMode:   false,
+		Domain:    "test.local",
 	}
 
 	req := &WorkerRequest{Method: "GET", URL: "http://test.local/api/users", Headers: map[string]string{}}

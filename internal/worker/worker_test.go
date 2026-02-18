@@ -67,12 +67,12 @@ func newTestEngine(t *testing.T, db *gorm.DB) *Engine {
 func execJS(t *testing.T, e *Engine, source string, env *Env, req *WorkerRequest) *WorkerResult {
 	t.Helper()
 	siteID := "test-" + t.Name()
-	version := 1
+	deployKey := "deploy1"
 
-	if _, err := e.CompileAndCache(siteID, version, source); err != nil {
+	if _, err := e.CompileAndCache(siteID, deployKey, source); err != nil {
 		t.Fatalf("CompileAndCache: %v", err)
 	}
-	return e.Execute(siteID, version, env, req)
+	return e.Execute(siteID, deployKey, env, req)
 }
 
 func defaultEnv() *Env {
@@ -680,8 +680,8 @@ func TestKV_ExpirationTTL(t *testing.T) {
   },
 };`
 	siteID := "test-" + t.Name() + "-read"
-	e.CompileAndCache(siteID, 1, readSource)
-	r2 := e.Execute(siteID, 1, env, getReq("http://localhost/"))
+	e.CompileAndCache(siteID, "deploy1", readSource)
+	r2 := e.Execute(siteID, "deploy1", env, getReq("http://localhost/"))
 	assertOK(t, r2)
 
 	var data map[string]interface{}
@@ -1121,11 +1121,11 @@ func TestScheduled_BasicInvocation(t *testing.T) {
 };`
 
 	siteID := "test-sched-" + t.Name()
-	if _, err := e.CompileAndCache(siteID, 1, source); err != nil {
+	if _, err := e.CompileAndCache(siteID, "deploy1", source); err != nil {
 		t.Fatalf("compile: %v", err)
 	}
 
-	r := e.ExecuteScheduled(siteID, 1, defaultEnv(), "*/5 * * * *")
+	r := e.ExecuteScheduled(siteID, "deploy1", defaultEnv(), "*/5 * * * *")
 	if r.Error != nil {
 		t.Fatalf("error: %v", r.Error)
 	}
@@ -1161,18 +1161,18 @@ func TestScheduled_WritesToKV(t *testing.T) {
 };`
 
 	siteID := "test-sched-kv"
-	if _, err := e.CompileAndCache(siteID, 1, source); err != nil {
+	if _, err := e.CompileAndCache(siteID, "deploy1", source); err != nil {
 		t.Fatalf("compile: %v", err)
 	}
 
 	// Run scheduled handler — it writes to KV.
-	r := e.ExecuteScheduled(siteID, 1, env, "0 * * * *")
+	r := e.ExecuteScheduled(siteID, "deploy1", env, "0 * * * *")
 	if r.Error != nil {
 		t.Fatalf("scheduled error: %v", r.Error)
 	}
 
 	// Now fetch — should read the value back.
-	r2 := e.Execute(siteID, 1, env, getReq("http://localhost/"))
+	r2 := e.Execute(siteID, "deploy1", env, getReq("http://localhost/"))
 	assertOK(t, r2)
 	if string(r2.Response.Body) == "never" || string(r2.Response.Body) == "" {
 		t.Errorf("KV value not written by scheduled handler, body = %q", r2.Response.Body)
@@ -1191,25 +1191,25 @@ func TestPool_Invalidation(t *testing.T) {
 
 	// Compile and execute v1.
 	srcV1 := `export default { fetch() { return new Response("v1"); } };`
-	if _, err := e.CompileAndCache(siteID, 1, srcV1); err != nil {
+	if _, err := e.CompileAndCache(siteID, "deploy1", srcV1); err != nil {
 		t.Fatalf("compile v1: %v", err)
 	}
-	r1 := e.Execute(siteID, 1, env, getReq("http://localhost/"))
+	r1 := e.Execute(siteID, "deploy1", env, getReq("http://localhost/"))
 	assertOK(t, r1)
 	if string(r1.Response.Body) != "v1" {
 		t.Fatalf("v1 body = %q", r1.Response.Body)
 	}
 
 	// Invalidate and compile v2.
-	e.InvalidatePool(siteID, 1)
+	e.InvalidatePool(siteID, "deploy1")
 	srcV2 := `export default { fetch() { return new Response("v2"); } };`
-	if _, err := e.CompileAndCache(siteID, 1, srcV2); err != nil {
+	if _, err := e.CompileAndCache(siteID, "deploy1", srcV2); err != nil {
 		t.Fatalf("compile v2: %v", err)
 	}
 
 	// All 10 executions should return v2.
 	for i := 0; i < 10; i++ {
-		r := e.Execute(siteID, 1, env, getReq("http://localhost/"))
+		r := e.Execute(siteID, "deploy1", env, getReq("http://localhost/"))
 		assertOK(t, r)
 		if string(r.Response.Body) != "v2" {
 			t.Fatalf("execution %d returned %q, want v2", i, r.Response.Body)
@@ -1224,14 +1224,14 @@ func TestPool_RapidRecompile(t *testing.T) {
 	env := defaultEnv()
 
 	for v := 1; v <= 3; v++ {
-		e.InvalidatePool(siteID, 1)
+		e.InvalidatePool(siteID, "deploy1")
 		src := fmt.Sprintf(`export default { fetch() { return new Response("v%d"); } };`, v)
-		if _, err := e.CompileAndCache(siteID, 1, src); err != nil {
+		if _, err := e.CompileAndCache(siteID, "deploy1", src); err != nil {
 			t.Fatalf("compile v%d: %v", v, err)
 		}
 	}
 
-	r := e.Execute(siteID, 1, env, getReq("http://localhost/"))
+	r := e.Execute(siteID, "deploy1", env, getReq("http://localhost/"))
 	assertOK(t, r)
 	if string(r.Response.Body) != "v3" {
 		t.Errorf("body = %q, want v3", r.Response.Body)
@@ -1247,7 +1247,7 @@ func TestPool_Concurrency(t *testing.T) {
 
 	siteID := "pool-concurrent"
 	src := `export default { fetch() { return new Response("ok"); } };`
-	if _, err := e.CompileAndCache(siteID, 1, src); err != nil {
+	if _, err := e.CompileAndCache(siteID, "deploy1", src); err != nil {
 		t.Fatalf("compile: %v", err)
 	}
 
@@ -1259,7 +1259,7 @@ func TestPool_Concurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r := e.Execute(siteID, 1, env, getReq("http://localhost/"))
+			r := e.Execute(siteID, "deploy1", env, getReq("http://localhost/"))
 			if r.Error != nil {
 				errors <- r.Error
 				return
@@ -1289,7 +1289,7 @@ func TestPool_Exhaustion(t *testing.T) {
 	siteID := "pool-exhaust"
 	// Worker that does some work but completes.
 	src := `export default { fetch() { return new Response("done"); } };`
-	if _, err := e.CompileAndCache(siteID, 1, src); err != nil {
+	if _, err := e.CompileAndCache(siteID, "deploy1", src); err != nil {
 		t.Fatalf("compile: %v", err)
 	}
 
@@ -1301,7 +1301,7 @@ func TestPool_Exhaustion(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r := e.Execute(siteID, 1, env, getReq("http://localhost/"))
+			r := e.Execute(siteID, "deploy1", env, getReq("http://localhost/"))
 			results <- r
 		}()
 	}
@@ -1383,11 +1383,11 @@ func TestEdge_InfiniteLoop(t *testing.T) {
 };`
 
 	siteID := "inf-loop"
-	if _, err := e.CompileAndCache(siteID, 1, source); err != nil {
+	if _, err := e.CompileAndCache(siteID, "deploy1", source); err != nil {
 		t.Fatalf("compile: %v", err)
 	}
 
-	r := e.Execute(siteID, 1, defaultEnv(), getReq("http://localhost/"))
+	r := e.Execute(siteID, "deploy1", defaultEnv(), getReq("http://localhost/"))
 	if r.Error == nil {
 		t.Fatal("expected timeout error for infinite loop")
 	}
@@ -1435,11 +1435,11 @@ func TestEdge_MemoryLimit(t *testing.T) {
 };`
 
 	siteID := "mem-limit"
-	if _, err := e.CompileAndCache(siteID, 1, source); err != nil {
+	if _, err := e.CompileAndCache(siteID, "deploy1", source); err != nil {
 		t.Fatalf("compile: %v", err)
 	}
 
-	r := e.Execute(siteID, 1, defaultEnv(), getReq("http://localhost/"))
+	r := e.Execute(siteID, "deploy1", defaultEnv(), getReq("http://localhost/"))
 	if r.Error == nil {
 		t.Fatal("expected error for memory limit, got nil")
 	}
@@ -1454,11 +1454,11 @@ func TestEdge_NoDefaultExport(t *testing.T) {
 	source := `export const handler = { fetch() { return new Response("nope"); } };`
 
 	siteID := "no-default"
-	if _, err := e.CompileAndCache(siteID, 1, source); err != nil {
+	if _, err := e.CompileAndCache(siteID, "deploy1", source); err != nil {
 		t.Fatalf("compile: %v", err)
 	}
 
-	r := e.Execute(siteID, 1, defaultEnv(), getReq("http://localhost/"))
+	r := e.Execute(siteID, "deploy1", defaultEnv(), getReq("http://localhost/"))
 	if r.Error == nil {
 		t.Fatal("expected error for missing default export")
 	}
@@ -1472,7 +1472,7 @@ func TestEdge_SyntaxError(t *testing.T) {
 	source := `export default { fetch() { return new Response("ok" };`
 
 	siteID := "syntax-err"
-	_, err := e.CompileAndCache(siteID, 1, source)
+	_, err := e.CompileAndCache(siteID, "deploy1", source)
 	if err == nil {
 		t.Fatal("expected compile error for syntax error, got nil")
 	}

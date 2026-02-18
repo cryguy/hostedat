@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"fmt"
 	"sync"
 )
 
@@ -21,25 +20,25 @@ func NewSiteRulesCache() *SiteRulesCache {
 	}
 }
 
-func cacheKey(siteID string, version int) string {
-	return fmt.Sprintf("%s:%d", siteID, version)
+func cacheKey(siteID string, deployKey string) string {
+	return siteID + ":" + deployKey
 }
 
-func (c *SiteRulesCache) Get(siteID string, version int) (*SiteRules, bool) {
+func (c *SiteRulesCache) Get(siteID string, deployKey string) (*SiteRules, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	r, ok := c.rules[cacheKey(siteID, version)]
+	r, ok := c.rules[cacheKey(siteID, deployKey)]
 	return r, ok
 }
 
-func (c *SiteRulesCache) Set(siteID string, version int, rules *SiteRules) {
+func (c *SiteRulesCache) Set(siteID string, deployKey string, rules *SiteRules) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.rules[cacheKey(siteID, version)] = rules
+	c.rules[cacheKey(siteID, deployKey)] = rules
 }
 
-func (c *SiteRulesCache) Invalidate(siteID string, version int) {
+func (c *SiteRulesCache) Invalidate(siteID string, deployKey string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.rules, cacheKey(siteID, version))
+	delete(c.rules, cacheKey(siteID, deployKey))
 }

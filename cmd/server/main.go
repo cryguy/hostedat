@@ -67,6 +67,11 @@ func main() {
 	store := storage.NewManager(cfg.StoragePath)
 	workerEngine.SetStore(store)
 
+	// One-time migration: backfill ActiveDeployID and rename deploy directories.
+	if err := storage.MigrateDeployPaths(db, store); err != nil {
+		log.Printf("Warning: deploy path migration failed: %v", err)
+	}
+
 	// Object storage (SeaweedFS)
 	var s3Client *minio.Client
 	var iamClient *seaweedfs.Client

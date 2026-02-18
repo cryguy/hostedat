@@ -9,6 +9,7 @@ import type { InstanceSettings } from "@/types/api"
 export function SettingsPanel() {
   const [settings, setSettings] = useState<InstanceSettings | null>(null)
   const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
 
   async function load() {
     try {
@@ -24,12 +25,16 @@ export function SettingsPanel() {
   useEffect(() => { load() }, [])
 
   async function toggle(key: keyof InstanceSettings, value: boolean) {
+    if (saving) return
+    setSaving(true)
     try {
       const updated = await admin.updateSettings({ [key]: value })
       setSettings(updated)
       toast.success("Settings updated")
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to update")
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -56,6 +61,7 @@ export function SettingsPanel() {
           id="reg-enabled"
           checked={settings.registration_enabled}
           onCheckedChange={(v) => toggle("registration_enabled", v)}
+          disabled={saving}
         />
       </div>
 
@@ -70,7 +76,7 @@ export function SettingsPanel() {
           id="invite-req"
           checked={settings.invite_required}
           onCheckedChange={(v) => toggle("invite_required", v)}
-          disabled={!settings.registration_enabled}
+          disabled={!settings.registration_enabled || saving}
         />
       </div>
     </div>

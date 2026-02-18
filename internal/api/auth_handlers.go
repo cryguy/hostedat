@@ -93,28 +93,46 @@ func (h *AuthHandler) Register(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "failed to hash password")
 	}
 
-	// First user becomes superadmin
-	var userCount int64
-	h.DB.Model(&models.User{}).Count(&userCount)
-	role := "user"
-	if userCount == 0 {
-		role = "superadmin"
-	}
+	// Create user inside a transaction to prevent superadmin race and
+	// atomically increment invite use-count.
+	var user models.User
+	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		// First user becomes superadmin — check inside transaction
+		var userCount int64
+		tx.Model(&models.User{}).Count(&userCount)
+		role := "user"
+		if userCount == 0 {
+			role = "superadmin"
+		}
 
-	user := models.User{
-		Email:        req.Email,
-		PasswordHash: hash,
-		Role:         role,
-		InvitedBy:    inviteID,
-	}
+		user = models.User{
+			Email:        req.Email,
+			PasswordHash: hash,
+			Role:         role,
+			InvitedBy:    inviteID,
+		}
 
-	if err := h.DB.Create(&user).Error; err != nil {
+		if err := tx.Create(&user).Error; err != nil {
+			return err
+		}
+
+		// Atomically increment invite use count, checking max_uses constraint
+		if inviteID != nil {
+			result := tx.Model(&models.Invite{}).
+				Where("id = ? AND (max_uses IS NULL OR use_count < max_uses)", *inviteID).
+				UpdateColumn("use_count", gorm.Expr("use_count + 1"))
+			if result.RowsAffected == 0 {
+				return fmt.Errorf("invite code has reached max uses")
+			}
+		}
+
+		return nil
+	})
+	if txErr != nil {
+		if txErr.Error() == "invite code has reached max uses" {
+			return errorJSON(c, http.StatusBadRequest, txErr.Error())
+		}
 		return errorJSON(c, http.StatusInternalServerError, "failed to create user")
-	}
-
-	// Increment invite use count
-	if inviteID != nil {
-		h.DB.Model(&models.Invite{}).Where("id = ?", *inviteID).UpdateColumn("use_count", gorm.Expr("use_count + 1"))
 	}
 
 	token, err := auth.GenerateToken(user.ID, user.Email, user.Role, h.JWTSecret)

@@ -70,31 +70,31 @@ func (cr *CronRunner) tick(now time.Time) {
 		if err := cr.db.First(&site, "id = ?", sched.SiteID).Error; err != nil {
 			continue
 		}
-		if site.ActiveVersion == nil || !site.HasWorker {
+		if site.ActiveDeployID == nil || !site.HasWorker {
 			continue
 		}
 
-		version := *site.ActiveVersion
+		deployID := *site.ActiveDeployID
 
 		// Load bytecode if not cached (server restart scenario).
-		cr.ensureBytecode(site.ID, version)
+		cr.ensureBytecode(site.ID, deployID)
 
 		// Build env.
 		env := BuildEnvFromDB(cr.db, site.ID, nil)
 
 		// Dispatch in goroutine.
-		go cr.dispatch(sched, site.ID, version, env)
+		go cr.dispatch(sched, site.ID, deployID, env)
 	}
 }
 
-func (cr *CronRunner) ensureBytecode(siteID string, version int) {
-	if err := cr.engine.EnsureBytecode(siteID, version); err != nil {
-		log.Printf("cron: failed to ensure bytecode for site %s v%d: %v", siteID, version, err)
+func (cr *CronRunner) ensureBytecode(siteID string, deployKey string) {
+	if err := cr.engine.EnsureBytecode(siteID, deployKey); err != nil {
+		log.Printf("cron: failed to ensure bytecode for site %s deploy %s: %v", siteID, deployKey, err)
 	}
 }
 
-func (cr *CronRunner) dispatch(sched models.CronSchedule, siteID string, version int, env *Env) {
-	result := cr.engine.ExecuteScheduled(siteID, version, env, sched.Cron)
+func (cr *CronRunner) dispatch(sched models.CronSchedule, siteID string, deployKey string, env *Env) {
+	result := cr.engine.ExecuteScheduled(siteID, deployKey, env, sched.Cron)
 
 	// Update last_run_at.
 	cr.db.Model(&sched).Update("last_run_at", time.Now())

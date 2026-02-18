@@ -154,7 +154,19 @@ func setupFetch(rt *qjs.Runtime, cfg config.WorkerConfig) error {
 			httpReq.Header.Set(k, v)
 		}
 
-		client := &http.Client{Timeout: timeout}
+		client := &http.Client{
+			Timeout: timeout,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return fmt.Errorf("too many redirects")
+				}
+				// Re-validate each redirect target against private IPs
+				if isPrivateURL(req.URL.String()) {
+					return fmt.Errorf("redirect to private IP address is not allowed")
+				}
+				return nil
+			},
+		}
 		resp, err := client.Do(httpReq)
 		if err != nil {
 			promise.Reject(c.NewError(fmt.Errorf("fetch: %w", err)))
@@ -162,10 +174,14 @@ func setupFetch(rt *qjs.Runtime, cfg config.WorkerConfig) error {
 		}
 		defer resp.Body.Close()
 
-		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
+		limitedReader := io.LimitReader(resp.Body, maxBytes+1)
+		respBody, err := io.ReadAll(limitedReader)
 		if err != nil {
 			promise.Reject(c.NewError(fmt.Errorf("fetch: reading body: %w", err)))
 			return
+		}
+		if int64(len(respBody)) > maxBytes {
+			respBody = respBody[:maxBytes]
 		}
 
 		// Build Response-compatible JS object via constructor.

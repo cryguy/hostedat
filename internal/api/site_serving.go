@@ -135,22 +135,22 @@ func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteR
 			return errorJSON(c, http.StatusNotFound, "site not found")
 		}
 
-		if site.ActiveVersion == nil {
+		if site.ActiveDeployID == nil || site.ActiveVersion == nil {
 			return errorJSON(c, http.StatusNotFound, "no deployment available")
 		}
 
-		version := *site.ActiveVersion
+		deployID := *site.ActiveDeployID
 
 		// Worker intercept: if site has a worker, execute it before static pipeline
 		if site.HasWorker && workerEngine != nil {
-			return handleWorkerRequest(c, db, store, cache, &site, version, domain, workerEngine)
+			return handleWorkerRequest(c, db, store, cache, &site, deployID, domain, workerEngine)
 		}
 
-		deployPath := store.GetDeploymentPath(site.ID, version)
+		deployPath := store.GetDeploymentPath(site.ID, deployID)
 		reqPath := c.Request().URL.Path
 
 		// Load/cache rules
-		rules := loadRules(store, cache, site.ID, version, deployPath)
+		rules := loadRules(store, cache, site.ID, deployID, deployPath)
 
 		// 1. Apply matching headers (with denylist)
 		if rules != nil {
@@ -209,8 +209,8 @@ func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteR
 	}
 }
 
-func loadRules(store *storage.Manager, cache *storage.SiteRulesCache, siteID string, version int, deployPath string) *storage.SiteRules {
-	if cached, ok := cache.Get(siteID, version); ok {
+func loadRules(store *storage.Manager, cache *storage.SiteRulesCache, siteID string, deployID string, deployPath string) *storage.SiteRules {
+	if cached, ok := cache.Get(siteID, deployID); ok {
 		return cached
 	}
 
@@ -218,11 +218,11 @@ func loadRules(store *storage.Manager, cache *storage.SiteRulesCache, siteID str
 	rules.Redirects, _ = storage.ParseRedirects(filepath.Join(deployPath, "_redirects"))
 	rules.Headers, _ = storage.ParseHeaders(filepath.Join(deployPath, "_headers"))
 
-	cache.Set(siteID, version, rules)
+	cache.Set(siteID, deployID, rules)
 	return rules
 }
 
-func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, site *models.Site, version int, domain string, workerEngine *worker.Engine) error {
+func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, site *models.Site, deployID string, domain string, workerEngine *worker.Engine) error {
 	// Build WorkerRequest from Echo context.
 	req := c.Request()
 	headers := make(map[string]string)
@@ -239,8 +239,12 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 	fullURL := scheme + "://" + req.Host + req.RequestURI
 
 	var body []byte
+	maxBody := int64(workerEngine.MaxResponseBytes())
 	if req.Body != nil {
-		body, _ = io.ReadAll(io.LimitReader(req.Body, int64(workerEngine.MaxResponseBytes())))
+		body, _ = io.ReadAll(io.LimitReader(req.Body, maxBody+1))
+		if int64(len(body)) > maxBody {
+			return errorJSON(c, http.StatusRequestEntityTooLarge, "request body too large")
+		}
 	}
 
 	workerReq := &worker.WorkerRequest{
@@ -251,10 +255,10 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 	}
 
 	// Build Env: load env vars, secrets, KV bindings from DB.
-	env := buildWorkerEnv(db, store, cache, site, version, domain)
+	env := buildWorkerEnv(db, store, cache, site, deployID, domain)
 
 	// Execute worker.
-	result := workerEngine.Execute(site.ID, version, env, workerReq)
+	result := workerEngine.Execute(site.ID, deployID, env, workerReq)
 
 	// Store logs async.
 	if len(result.Logs) > 0 {
@@ -282,14 +286,14 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 	return c.Blob(resp.StatusCode, ct, resp.Body)
 }
 
-func buildWorkerEnv(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, site *models.Site, version int, domain string) *worker.Env {
+func buildWorkerEnv(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, site *models.Site, deployID string, domain string) *worker.Env {
 	return worker.BuildEnvFromDB(db, site.ID, &worker.StaticAssetsFetcher{
-		Store:   store,
-		Cache:   cache,
-		SiteID:  site.ID,
-		Version: version,
-		SPAMode: site.SPAMode,
-		Domain:  domain,
+		Store:     store,
+		Cache:     cache,
+		SiteID:    site.ID,
+		DeployKey: deployID,
+		SPAMode:   site.SPAMode,
+		Domain:    domain,
 	})
 }
 

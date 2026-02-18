@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	maxFileSize  = 100 << 20 // 100 MB per file
-	maxFileCount = 10000
-	MaxZipSize   = 500 << 20 // 500 MB total
+	maxFileSize          = 25 << 20  // 25 MB per file (matches Cloudflare Pages)
+	maxFileCount         = 20000     // 20k files (matches Cloudflare Pages)
+	MaxZipSize           = 25 << 20  // 25 MB compressed upload
+	maxTotalUncompressed = 256 << 20 // 256 MB aggregate uncompressed limit
 )
 
 type Manager struct {
@@ -23,7 +24,7 @@ func NewManager(basePath string) *Manager {
 	return &Manager{BasePath: basePath}
 }
 
-func (m *Manager) ExtractZip(siteID string, version int, reader io.ReaderAt, size int64) error {
+func (m *Manager) ExtractZip(siteID string, deployKey string, reader io.ReaderAt, size int64) (extractErr error) {
 	if size > MaxZipSize {
 		return fmt.Errorf("zip file too large (max %d bytes)", MaxZipSize)
 	}
@@ -37,13 +38,22 @@ func (m *Manager) ExtractZip(siteID string, version int, reader io.ReaderAt, siz
 		return fmt.Errorf("zip contains too many files (max %d)", maxFileCount)
 	}
 
-	destDir := m.GetDeploymentPath(siteID, version)
+	destDir := m.GetDeploymentPath(siteID, deployKey)
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return fmt.Errorf("creating deployment dir: %w", err)
 	}
 
+	// Clean up partially extracted files on any error.
+	defer func() {
+		if extractErr != nil {
+			os.RemoveAll(destDir)
+		}
+	}()
+
 	// Detect single top-level directory to flatten
 	prefix := detectSingleTopDir(zr.File)
+
+	var totalUncompressed uint64
 
 	for _, f := range zr.File {
 		name := f.Name
@@ -75,6 +85,7 @@ func (m *Manager) ExtractZip(siteID string, version int, reader io.ReaderAt, siz
 			continue
 		}
 
+		// Early reject based on header (untrusted, but avoids wasted work)
 		if f.UncompressedSize64 > maxFileSize {
 			return fmt.Errorf("file too large: %s (%d bytes)", name, f.UncompressedSize64)
 		}
@@ -83,8 +94,14 @@ func (m *Manager) ExtractZip(siteID string, version int, reader io.ReaderAt, siz
 			return fmt.Errorf("creating parent dir for %s: %w", name, err)
 		}
 
-		if err := extractFile(f, destPath); err != nil {
+		// Track actual bytes written (not header-reported) for aggregate limit
+		written, err := extractFile(f, destPath)
+		if err != nil {
 			return err
+		}
+		totalUncompressed += uint64(written)
+		if totalUncompressed > maxTotalUncompressed {
+			return fmt.Errorf("zip total uncompressed size exceeds limit (%d bytes)", maxTotalUncompressed)
 		}
 	}
 
@@ -110,28 +127,32 @@ func detectSingleTopDir(files []*zip.File) string {
 	return topDir + "/"
 }
 
-func extractFile(f *zip.File, destPath string) error {
+func extractFile(f *zip.File, destPath string) (int64, error) {
 	rc, err := f.Open()
 	if err != nil {
-		return fmt.Errorf("opening zip entry %s: %w", f.Name, err)
+		return 0, fmt.Errorf("opening zip entry %s: %w", f.Name, err)
 	}
 	defer rc.Close()
 
 	out, err := os.Create(destPath)
 	if err != nil {
-		return fmt.Errorf("creating file %s: %w", destPath, err)
+		return 0, fmt.Errorf("creating file %s: %w", destPath, err)
 	}
 	defer out.Close()
 
-	if _, err := io.Copy(out, io.LimitReader(rc, maxFileSize+1)); err != nil {
-		return fmt.Errorf("writing file %s: %w", destPath, err)
+	written, err := io.Copy(out, io.LimitReader(rc, maxFileSize+1))
+	if err != nil {
+		return 0, fmt.Errorf("writing file %s: %w", destPath, err)
+	}
+	if written > maxFileSize {
+		return 0, fmt.Errorf("file exceeds maximum size during extraction: %s", f.Name)
 	}
 
-	return nil
+	return written, nil
 }
 
-func (m *Manager) GetDeploymentPath(siteID string, version int) string {
-	return filepath.Join(m.BasePath, siteID, fmt.Sprintf("%d", version))
+func (m *Manager) GetDeploymentPath(siteID string, deployKey string) string {
+	return filepath.Join(m.BasePath, siteID, deployKey)
 }
 
 func (m *Manager) DeleteSite(siteID string) error {
@@ -188,14 +209,14 @@ func isFile(path string) bool {
 }
 
 // HasWorkerScript checks if a _worker.js file exists in the deployment.
-func (m *Manager) HasWorkerScript(siteID string, version int) bool {
-	workerPath := filepath.Join(m.GetDeploymentPath(siteID, version), "_worker.js")
+func (m *Manager) HasWorkerScript(siteID string, deployKey string) bool {
+	workerPath := filepath.Join(m.GetDeploymentPath(siteID, deployKey), "_worker.js")
 	return isFile(workerPath)
 }
 
 // GetWorkerScript reads the _worker.js source from a deployment.
-func (m *Manager) GetWorkerScript(siteID string, version int) (string, error) {
-	workerPath := filepath.Join(m.GetDeploymentPath(siteID, version), "_worker.js")
+func (m *Manager) GetWorkerScript(siteID string, deployKey string) (string, error) {
+	workerPath := filepath.Join(m.GetDeploymentPath(siteID, deployKey), "_worker.js")
 	data, err := os.ReadFile(workerPath)
 	if err != nil {
 		return "", err
@@ -204,6 +225,6 @@ func (m *Manager) GetWorkerScript(siteID string, version int) (string, error) {
 }
 
 // GetWorkerBytecodeDir returns the path to the .worker directory for a deployment.
-func (m *Manager) GetWorkerBytecodeDir(siteID string, version int) string {
-	return filepath.Join(m.GetDeploymentPath(siteID, version), ".worker")
+func (m *Manager) GetWorkerBytecodeDir(siteID string, deployKey string) string {
+	return filepath.Join(m.GetDeploymentPath(siteID, deployKey), ".worker")
 }

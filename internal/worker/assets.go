@@ -17,18 +17,18 @@ import (
 // StaticAssetsFetcher implements AssetsFetcher by replicating the static
 // file serving pipeline (redirects, headers, rewrites, SPA fallback, 404).
 type StaticAssetsFetcher struct {
-	Store   *storage.Manager
-	Cache   *storage.SiteRulesCache
-	SiteID  string
-	Version int
-	SPAMode bool
-	Domain  string
+	Store     *storage.Manager
+	Cache     *storage.SiteRulesCache
+	SiteID    string
+	DeployKey string
+	SPAMode   bool
+	Domain    string
 }
 
 // Fetch processes a WorkerRequest through the static pipeline and returns
 // the appropriate response, just as the main server would.
 func (f *StaticAssetsFetcher) Fetch(req *WorkerRequest) (*WorkerResponse, error) {
-	deployPath := f.Store.GetDeploymentPath(f.SiteID, f.Version)
+	deployPath := f.Store.GetDeploymentPath(f.SiteID, f.DeployKey)
 
 	// Load or cache rules.
 	rules := f.loadRules(deployPath)
@@ -143,7 +143,7 @@ func (f *StaticAssetsFetcher) Fetch(req *WorkerRequest) (*WorkerResponse, error)
 
 // loadRules loads redirect and header rules, using the cache when available.
 func (f *StaticAssetsFetcher) loadRules(deployPath string) *storage.SiteRules {
-	if cached, ok := f.Cache.Get(f.SiteID, f.Version); ok {
+	if cached, ok := f.Cache.Get(f.SiteID, f.DeployKey); ok {
 		return cached
 	}
 
@@ -153,7 +153,7 @@ func (f *StaticAssetsFetcher) loadRules(deployPath string) *storage.SiteRules {
 		Redirects: redirects,
 		Headers:   headers,
 	}
-	f.Cache.Set(f.SiteID, f.Version, rules)
+	f.Cache.Set(f.SiteID, f.DeployKey, rules)
 	return rules
 }
 

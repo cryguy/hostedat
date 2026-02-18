@@ -540,12 +540,12 @@ func TestEngine_EnsureBytecode_FromCache(t *testing.T) {
 	e := newTestEngine(t, db)
 
 	siteID := "test-bytecode-cache"
-	version := 1
+	deployKey := "deploy1"
 
 	source := `export default { fetch() { return new Response("ok"); } };`
 
 	// Compile and cache first
-	bytecode, err := e.CompileAndCache(siteID, version, source)
+	bytecode, err := e.CompileAndCache(siteID, deployKey, source)
 	if err != nil {
 		t.Fatalf("CompileAndCache: %v", err)
 	}
@@ -554,14 +554,14 @@ func TestEngine_EnsureBytecode_FromCache(t *testing.T) {
 	}
 
 	// Clear the in-memory cache to simulate server restart
-	key := poolKey{SiteID: siteID, Version: version}
+	key := poolKey{SiteID: siteID, DeployKey: deployKey}
 	e.bytecodes.Delete(key)
 
 	// Manually store it back (simulating it's in memory now)
 	e.bytecodes.Store(key, bytecode)
 
 	// EnsureBytecode should find it in cache and not error
-	err = e.EnsureBytecode(siteID, version)
+	err = e.EnsureBytecode(siteID, deployKey)
 	if err != nil {
 		t.Errorf("EnsureBytecode (from cache): %v", err)
 	}
@@ -573,14 +573,14 @@ func TestEngine_EnsureBytecode_NoStore(t *testing.T) {
 
 	// Don't set a store (e.store == nil)
 	siteID := "test-no-store"
-	version := 1
+	deployKey := "deploy1"
 
 	// Clear bytecode cache
-	key := poolKey{SiteID: siteID, Version: version}
+	key := poolKey{SiteID: siteID, DeployKey: deployKey}
 	e.bytecodes.Delete(key)
 
 	// EnsureBytecode should fail when there's no cached bytecode and no store
-	err := e.EnsureBytecode(siteID, version)
+	err := e.EnsureBytecode(siteID, deployKey)
 	if err == nil {
 		t.Fatal("EnsureBytecode should fail when store is not set")
 	}

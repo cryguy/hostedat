@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react"
 import { toast } from "sonner"
 import { Loader2 } from "lucide-react"
 import { sites } from "@/lib/api"
+import { getInstanceDomain } from "@/lib/config"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -68,7 +69,7 @@ export function CreateSiteDialog({ open, onOpenChange, onCreated }: CreateSiteDi
                 onChange={(e) => setSlug(e.target.value)}
                 className="font-mono text-sm"
               />
-              <span className="text-sm text-muted-foreground whitespace-nowrap">.hostedat.ditto.moe</span>
+              <span className="text-sm text-muted-foreground whitespace-nowrap">.{getInstanceDomain()}</span>
             </div>
             <p className="text-xs text-muted-foreground">
               Leave blank to auto-generate from name

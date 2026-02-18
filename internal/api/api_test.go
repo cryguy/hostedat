@@ -948,10 +948,10 @@ func TestAdmin_Invites(t *testing.T) {
 // Site serving tests
 // ──────────────────────────────────────────────
 
-func deploySite(t *testing.T, env *testEnv, siteID string, version int, files map[string]string) {
+func deploySite(t *testing.T, env *testEnv, siteID string, deployKey string, files map[string]string) {
 	t.Helper()
 	zipBuf := createTestZip(t, files)
-	if err := env.store.ExtractZip(siteID, version, bytes.NewReader(zipBuf.Bytes()), int64(zipBuf.Len())); err != nil {
+	if err := env.store.ExtractZip(siteID, deployKey, bytes.NewReader(zipBuf.Bytes()), int64(zipBuf.Len())); err != nil {
 		t.Fatalf("ExtractZip: %v", err)
 	}
 }
@@ -975,9 +975,11 @@ func TestServing_SubdomainServesStaticFile(t *testing.T) {
 	site := models.Site{UserID: user.ID, SubdomainSlug: "mysite", Name: "My"}
 	env.db.Create(&site)
 	v := 1
+	dk := "deploy1"
 	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
 	env.db.Save(&site)
-	deploySite(t, env, site.ID, 1, map[string]string{"index.html": "<h1>hi</h1>"})
+	deploySite(t, env, site.ID, "deploy1", map[string]string{"index.html": "<h1>hi</h1>"})
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "mysite.test.local"
@@ -997,9 +999,11 @@ func TestServing_LocalhostSubdomain(t *testing.T) {
 	site := models.Site{UserID: user.ID, SubdomainSlug: "localsite", Name: "Local"}
 	env.db.Create(&site)
 	v := 1
+	dk := "deploy1"
 	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
 	env.db.Save(&site)
-	deploySite(t, env, site.ID, 1, map[string]string{"index.html": "local!"})
+	deploySite(t, env, site.ID, "deploy1", map[string]string{"index.html": "local!"})
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localsite.localhost"
@@ -1027,9 +1031,11 @@ func TestServing_RedirectRules(t *testing.T) {
 	site := models.Site{UserID: user.ID, SubdomainSlug: "redir", Name: "Redir"}
 	env.db.Create(&site)
 	v := 1
+	dk := "deploy1"
 	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
 	env.db.Save(&site)
-	deploySite(t, env, site.ID, 1, map[string]string{
+	deploySite(t, env, site.ID, "deploy1", map[string]string{
 		"index.html": "home",
 		"_redirects": "/old /new 301",
 	})
@@ -1052,9 +1058,11 @@ func TestServing_RewriteRules(t *testing.T) {
 	site := models.Site{UserID: user.ID, SubdomainSlug: "rewrite", Name: "Rew"}
 	env.db.Create(&site)
 	v := 1
+	dk := "deploy1"
 	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
 	env.db.Save(&site)
-	deploySite(t, env, site.ID, 1, map[string]string{
+	deploySite(t, env, site.ID, "deploy1", map[string]string{
 		"index.html": "<spa>app</spa>",
 		"_redirects": "/* /index.html 200",
 	})
@@ -1077,9 +1085,11 @@ func TestServing_StaticFilesPrecedeOverRewrites(t *testing.T) {
 	site := models.Site{UserID: user.ID, SubdomainSlug: "precedence", Name: "Prec"}
 	env.db.Create(&site)
 	v := 1
+	dk := "deploy1"
 	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
 	env.db.Save(&site)
-	deploySite(t, env, site.ID, 1, map[string]string{
+	deploySite(t, env, site.ID, "deploy1", map[string]string{
 		"index.html": "home",
 		"about.html": "about page",
 		"_redirects": "/* /index.html 200",
@@ -1103,9 +1113,11 @@ func TestServing_CustomHeaders(t *testing.T) {
 	site := models.Site{UserID: user.ID, SubdomainSlug: "headers", Name: "Hdr"}
 	env.db.Create(&site)
 	v := 1
+	dk := "deploy1"
 	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
 	env.db.Save(&site)
-	deploySite(t, env, site.ID, 1, map[string]string{
+	deploySite(t, env, site.ID, "deploy1", map[string]string{
 		"index.html": "hi",
 		"_headers":   "/*\n  X-Custom: hello",
 	})
@@ -1128,9 +1140,11 @@ func TestServing_Custom404(t *testing.T) {
 	site := models.Site{UserID: user.ID, SubdomainSlug: "custom404", Name: "404"}
 	env.db.Create(&site)
 	v := 1
+	dk := "deploy1"
 	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
 	env.db.Save(&site)
-	deploySite(t, env, site.ID, 1, map[string]string{
+	deploySite(t, env, site.ID, "deploy1", map[string]string{
 		"index.html": "home",
 		"404.html":   "<h1>Custom Not Found</h1>",
 	})
@@ -1153,9 +1167,11 @@ func TestServing_SPAMode(t *testing.T) {
 	site := models.Site{UserID: user.ID, SubdomainSlug: "spa", Name: "SPA", SPAMode: true}
 	env.db.Create(&site)
 	v := 1
+	dk := "deploy1"
 	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
 	env.db.Save(&site)
-	deploySite(t, env, site.ID, 1, map[string]string{
+	deploySite(t, env, site.ID, "deploy1", map[string]string{
 		"index.html": "<spa>app</spa>",
 	})
 
@@ -1259,9 +1275,11 @@ func TestServing_HeaderInjectionBlocked(t *testing.T) {
 	site := models.Site{UserID: user.ID, SubdomainSlug: "hdr-inject", Name: "HdrInj"}
 	env.db.Create(&site)
 	v := 1
+	dk := "deploy1"
 	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
 	env.db.Save(&site)
-	deploySite(t, env, site.ID, 1, map[string]string{
+	deploySite(t, env, site.ID, "deploy1", map[string]string{
 		"index.html": "hi",
 		"_headers":   "/*\n  Set-Cookie: evil=true\n  X-Custom: safe",
 	})
@@ -1318,10 +1336,12 @@ func TestServing_ContentType(t *testing.T) {
 	site := models.Site{UserID: user.ID, SubdomainSlug: "ct-test", Name: "CT"}
 	env.db.Create(&site)
 	v := 1
+	dk := "deploy1"
 	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
 	env.db.Save(&site)
 
-	deployPath := env.store.GetDeploymentPath(site.ID, 1)
+	deployPath := env.store.GetDeploymentPath(site.ID, "deploy1")
 	os.MkdirAll(deployPath, 0755)
 	os.WriteFile(filepath.Join(deployPath, "style.css"), []byte("body{}"), 0644)
 

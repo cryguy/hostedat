@@ -17,10 +17,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// poolKey uniquely identifies a compiled worker version for a site.
+// poolKey uniquely identifies a compiled worker deployment for a site.
 type poolKey struct {
-	SiteID  string
-	Version int
+	SiteID    string
+	DeployKey string
 }
 
 // sitePool wraps a qjs.Pool with an invalidation flag so that stale pools
@@ -97,8 +97,8 @@ func (e *Engine) logRetentionLoop() {
 // EnsureBytecode loads bytecode from disk if not already in memory.
 // This handles the server restart scenario where pools and bytecodes are lost
 // but the compiled bytecode.bin files remain on disk.
-func (e *Engine) EnsureBytecode(siteID string, version int) error {
-	key := poolKey{SiteID: siteID, Version: version}
+func (e *Engine) EnsureBytecode(siteID string, deployKey string) error {
+	key := poolKey{SiteID: siteID, DeployKey: deployKey}
 	if _, ok := e.bytecodes.Load(key); ok {
 		return nil
 	}
@@ -108,7 +108,7 @@ func (e *Engine) EnsureBytecode(siteID string, version int) error {
 	}
 
 	// Try reading cached bytecode from disk.
-	bcPath := filepath.Join(e.store.GetWorkerBytecodeDir(siteID, version), "bytecode.bin")
+	bcPath := filepath.Join(e.store.GetWorkerBytecodeDir(siteID, deployKey), "bytecode.bin")
 	bytecode, err := os.ReadFile(bcPath)
 	if err == nil && len(bytecode) > 0 {
 		e.bytecodes.Store(key, bytecode)
@@ -116,12 +116,12 @@ func (e *Engine) EnsureBytecode(siteID string, version int) error {
 	}
 
 	// Fallback: recompile from source.
-	source, err := e.store.GetWorkerScript(siteID, version)
+	source, err := e.store.GetWorkerScript(siteID, deployKey)
 	if err != nil {
-		return fmt.Errorf("no bytecode or source for site %s version %d: %w", siteID, version, err)
+		return fmt.Errorf("no bytecode or source for site %s deploy %s: %w", siteID, deployKey, err)
 	}
 
-	if _, err := e.CompileAndCache(siteID, version, source); err != nil {
+	if _, err := e.CompileAndCache(siteID, deployKey, source); err != nil {
 		return fmt.Errorf("recompiling worker: %w", err)
 	}
 
@@ -131,8 +131,8 @@ func (e *Engine) EnsureBytecode(siteID string, version int) error {
 // CompileAndCache compiles a worker script into QuickJS bytecode and stores
 // it for later pool creation. The source must be a valid ES module that
 // exports a default object with a fetch() handler.
-func (e *Engine) CompileAndCache(siteID string, version int, source string) ([]byte, error) {
-	key := poolKey{SiteID: siteID, Version: version}
+func (e *Engine) CompileAndCache(siteID string, deployKey string, source string) ([]byte, error) {
+	key := poolKey{SiteID: siteID, DeployKey: deployKey}
 
 	rt, err := qjs.New(qjs.Option{
 		Context:            context.Background(),
@@ -159,8 +159,8 @@ func (e *Engine) CompileAndCache(siteID string, version int, source string) ([]b
 // GetOrCreatePool returns the runtime pool for the given site/version,
 // creating it if necessary. Each runtime in the pool has the Web APIs,
 // console, and fetch injected, and the compiled worker bytecode evaluated.
-func (e *Engine) GetOrCreatePool(siteID string, version int, env *Env) (*qjs.Pool, error) {
-	key := poolKey{SiteID: siteID, Version: version}
+func (e *Engine) GetOrCreatePool(siteID string, deployKey string, env *Env) (*qjs.Pool, error) {
+	key := poolKey{SiteID: siteID, DeployKey: deployKey}
 
 	// Check for a valid existing pool.
 	if val, ok := e.pools.Load(key); ok {
@@ -175,7 +175,7 @@ func (e *Engine) GetOrCreatePool(siteID string, version int, env *Env) (*qjs.Poo
 	// Load bytecode.
 	bcVal, ok := e.bytecodes.Load(key)
 	if !ok {
-		return nil, fmt.Errorf("no compiled bytecode for site %s version %d", siteID, version)
+		return nil, fmt.Errorf("no compiled bytecode for site %s deploy %s", siteID, deployKey)
 	}
 	bytecode := bcVal.([]byte)
 
@@ -238,18 +238,18 @@ func (e *Engine) GetOrCreatePool(siteID string, version int, env *Env) (*qjs.Poo
 
 // Execute runs the worker's fetch handler for the given request and returns
 // the result including the response, captured logs, and any error.
-func (e *Engine) Execute(siteID string, version int, env *Env, req *WorkerRequest) (result *WorkerResult) {
+func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerRequest) (result *WorkerResult) {
 	start := time.Now()
 	result = &WorkerResult{}
 
 	// Ensure bytecode is loaded (handles server restart).
-	if err := e.EnsureBytecode(siteID, version); err != nil {
+	if err := e.EnsureBytecode(siteID, deployKey); err != nil {
 		result.Error = err
 		result.Duration = time.Since(start)
 		return result
 	}
 
-	pool, err := e.GetOrCreatePool(siteID, version, env)
+	pool, err := e.GetOrCreatePool(siteID, deployKey, env)
 	if err != nil {
 		result.Error = err
 		result.Duration = time.Since(start)
@@ -294,6 +294,8 @@ func (e *Engine) Execute(siteID string, version int, env *Env, req *WorkerReques
 			rt.Context().Context = origCtx
 			cancelReq() // Release context resources.
 			pool.Put(rt)
+		} else {
+			log.Printf("worker: discarding runtime for site %s deploy %s (timed out or panicked), pool capacity may be reduced", siteID, deployKey)
 		}
 	}()
 
@@ -380,11 +382,11 @@ func (e *Engine) Execute(siteID string, version int, env *Env, req *WorkerReques
 }
 
 // ExecuteScheduled runs the worker's scheduled handler for cron triggers.
-func (e *Engine) ExecuteScheduled(siteID string, version int, env *Env, cron string) (result *WorkerResult) {
+func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cron string) (result *WorkerResult) {
 	start := time.Now()
 	result = &WorkerResult{}
 
-	pool, err := e.GetOrCreatePool(siteID, version, env)
+	pool, err := e.GetOrCreatePool(siteID, deployKey, env)
 	if err != nil {
 		result.Error = err
 		result.Duration = time.Since(start)
@@ -424,6 +426,8 @@ func (e *Engine) ExecuteScheduled(siteID string, version int, env *Env, cron str
 			rt.Context().Context = origCtx
 			cancelReq()
 			pool.Put(rt)
+		} else {
+			log.Printf("worker: discarding scheduled runtime for site %s deploy %s (timed out or panicked), pool capacity may be reduced", siteID, deployKey)
 		}
 	}()
 
@@ -490,8 +494,8 @@ func (e *Engine) ExecuteScheduled(siteID string, version int, env *Env, cron str
 
 // InvalidatePool marks the pool for the given site/version as invalid.
 // The next Execute call will create a fresh pool.
-func (e *Engine) InvalidatePool(siteID string, version int) {
-	key := poolKey{SiteID: siteID, Version: version}
+func (e *Engine) InvalidatePool(siteID string, deployKey string) {
+	key := poolKey{SiteID: siteID, DeployKey: deployKey}
 	if val, ok := e.pools.LoadAndDelete(key); ok {
 		sp := val.(*sitePool)
 		sp.markInvalid()

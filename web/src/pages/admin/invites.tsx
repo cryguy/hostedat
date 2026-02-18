@@ -7,9 +7,10 @@ import { PageHeader } from "@/components/shared/page-header"
 import { EmptyState } from "@/components/shared/empty-state"
 import { InviteList } from "@/components/admin/invite-list"
 import { CreateInviteDialog } from "@/components/admin/create-invite-dialog"
+import { getInstanceDomain } from "@/lib/config"
 import type { Invite } from "@/types/api"
 
-const DOMAIN = "hostedat.ditto.moe"
+const DOMAIN = getInstanceDomain()
 
 export default function AdminInvitesPage() {
   const [invites, setInvites] = useState<Invite[]>([])

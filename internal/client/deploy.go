@@ -53,6 +53,26 @@ func (c *Client) Deploy(siteID, dirPath string) (*Deployment, error) {
 	return &deployment, nil
 }
 
+// defaultExcludes lists file/directory names that should never be included in
+// deployments. These patterns protect against accidentally shipping secrets,
+// build caches, and version-control internals.
+var defaultExcludes = map[string]bool{
+	".git":         true,
+	".env":         true,
+	".env.local":   true,
+	".env.production": true,
+	".DS_Store":    true,
+	"node_modules": true,
+	".svn":         true,
+	".hg":          true,
+	"__pycache__":  true,
+	".terraform":   true,
+}
+
+func isExcluded(name string) bool {
+	return defaultExcludes[name] || strings.HasPrefix(name, ".env.")
+}
+
 func zipDirectory(dirPath string) ([]byte, error) {
 	dirPath, err := filepath.Abs(dirPath)
 	if err != nil {
@@ -74,6 +94,20 @@ func zipDirectory(dirPath string) ([]byte, error) {
 		if err != nil {
 			return err
 		}
+
+		// Skip excluded files and directories
+		if isExcluded(info.Name()) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Skip symlinks
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+
 		if info.IsDir() {
 			return nil
 		}

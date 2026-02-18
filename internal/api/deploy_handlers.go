@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -15,12 +16,20 @@ import (
 	"gorm.io/gorm"
 )
 
+// clientError wraps errors that should be returned as 400 Bad Request.
+type clientError struct {
+	msg string
+}
+
+func (e *clientError) Error() string { return e.msg }
+
 type DeployHandler struct {
-	DB           *gorm.DB
-	Storage      *storage.Manager
-	WorkerEngine interface {
-		CompileAndCache(siteID string, version int, source string) ([]byte, error)
-		InvalidatePool(siteID string, version int)
+	DB              *gorm.DB
+	Storage         *storage.Manager
+	MaxScriptSizeKB int
+	WorkerEngine    interface {
+		CompileAndCache(siteID string, deployKey string, source string) ([]byte, error)
+		InvalidatePool(siteID string, deployKey string)
 	}
 }
 
@@ -68,72 +77,94 @@ func (h *DeployHandler) Deploy(c echo.Context) error {
 
 	fileHash := hex.EncodeToString(hasher.Sum(nil))
 
-	// Determine next version
-	var maxVersion int
-	h.DB.Model(&models.Deployment{}).Where("site_id = ?", siteID).Select("COALESCE(MAX(version), 0)").Scan(&maxVersion)
-	nextVersion := maxVersion + 1
+	// Pre-generate deployment ID to use as the storage directory key.
+	// This avoids incrementing numeric paths entirely — each deploy gets
+	// a unique, non-sequential directory name.
+	deployID := models.GenerateID()
 
-	// Extract zip — *os.File implements io.ReaderAt
+	// Extract zip before the DB transaction using the deployment ID as path key.
 	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to process uploaded file")
 	}
-	if err := h.Storage.ExtractZip(siteID, nextVersion, tmpFile, written); err != nil {
+	if err := h.Storage.ExtractZip(siteID, deployID, tmpFile, written); err != nil {
 		log.Printf("deploy: failed to extract zip for site %s: %v", siteID, err)
 		return errorJSON(c, http.StatusBadRequest, "invalid zip file")
 	}
 
 	// Check for _worker.js and compile if present
-	hasWorker := h.Storage.HasWorkerScript(siteID, nextVersion)
+	hasWorker := h.Storage.HasWorkerScript(siteID, deployID)
 	if hasWorker && h.WorkerEngine != nil {
-		source, err := h.Storage.GetWorkerScript(siteID, nextVersion)
+		source, err := h.Storage.GetWorkerScript(siteID, deployID)
 		if err != nil {
+			_ = os.RemoveAll(h.Storage.GetDeploymentPath(siteID, deployID))
 			return errorJSON(c, http.StatusBadRequest, "failed to read _worker.js: "+err.Error())
 		}
 
-		// Validate script size
-		if len(source) > 1024*1024 { // 1MB default
-			return errorJSON(c, http.StatusBadRequest, "_worker.js exceeds maximum size")
+		maxScriptBytes := h.MaxScriptSizeKB * 1024
+		if maxScriptBytes <= 0 {
+			maxScriptBytes = 1024 * 1024
+		}
+		if len(source) > maxScriptBytes {
+			_ = os.RemoveAll(h.Storage.GetDeploymentPath(siteID, deployID))
+			return errorJSON(c, http.StatusBadRequest, fmt.Sprintf("_worker.js exceeds maximum size (%d KB)", h.MaxScriptSizeKB))
 		}
 
-		// Compile to bytecode
-		bytecode, err := h.WorkerEngine.CompileAndCache(siteID, nextVersion, source)
+		bytecode, err := h.WorkerEngine.CompileAndCache(siteID, deployID, source)
 		if err != nil {
+			_ = os.RemoveAll(h.Storage.GetDeploymentPath(siteID, deployID))
 			return errorJSON(c, http.StatusBadRequest, "worker compilation failed: "+err.Error())
 		}
 
-		// Save bytecode to disk for persistence across restarts
-		bcDir := h.Storage.GetWorkerBytecodeDir(siteID, nextVersion)
+		bcDir := h.Storage.GetWorkerBytecodeDir(siteID, deployID)
 		if mkErr := os.MkdirAll(bcDir, 0755); mkErr == nil {
 			_ = os.WriteFile(filepath.Join(bcDir, "bytecode.bin"), bytecode, 0644)
 		}
 	}
 
-	// Save the old active version before updating so we can invalidate its pool
-	// AFTER the DB update, avoiding a race where requests see the old version
-	// but find no valid pool for it.
-	oldActiveVersion := site.ActiveVersion
+	// DB transaction: create deployment record and update site atomically.
+	var deployment models.Deployment
+	var oldDeployID *string
 
-	// Create deployment record
-	deployment := models.Deployment{
-		SiteID:    siteID,
-		Version:   nextVersion,
-		FileHash:  fileHash,
-		HasWorker: hasWorker,
-	}
-	if err := h.DB.Create(&deployment).Error; err != nil {
+	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		var maxVersion int
+		tx.Model(&models.Deployment{}).Where("site_id = ?", siteID).Select("COALESCE(MAX(version), 0)").Scan(&maxVersion)
+		nextVersion := maxVersion + 1
+
+		var freshSite models.Site
+		if err := tx.First(&freshSite, "id = ?", siteID).Error; err != nil {
+			return fmt.Errorf("reload site: %w", err)
+		}
+		oldDeployID = freshSite.ActiveDeployID
+
+		deployment = models.Deployment{
+			ID:        deployID,
+			SiteID:    siteID,
+			Version:   nextVersion,
+			FileHash:  fileHash,
+			HasWorker: hasWorker,
+		}
+		if err := tx.Create(&deployment).Error; err != nil {
+			return fmt.Errorf("create deployment: %w", err)
+		}
+
+		if err := tx.Model(&freshSite).Updates(map[string]interface{}{
+			"active_version":   nextVersion,
+			"active_deploy_id": deployID,
+			"has_worker":       hasWorker,
+		}).Error; err != nil {
+			return fmt.Errorf("update site: %w", err)
+		}
+
+		return nil
+	})
+	if txErr != nil {
+		_ = os.RemoveAll(h.Storage.GetDeploymentPath(siteID, deployID))
 		return errorJSON(c, http.StatusInternalServerError, "failed to create deployment")
 	}
 
-	// Update site active version and worker flag
-	h.DB.Model(&site).Updates(map[string]interface{}{
-		"active_version": nextVersion,
-		"has_worker":     hasWorker,
-	})
-
-	// Invalidate old worker pool AFTER DB update. This ensures requests
-	// reading the old version still have a valid pool until the switch.
-	if hasWorker && h.WorkerEngine != nil && oldActiveVersion != nil {
-		h.WorkerEngine.InvalidatePool(siteID, *oldActiveVersion)
+	// Invalidate old worker pool AFTER DB transaction commits.
+	if hasWorker && h.WorkerEngine != nil && oldDeployID != nil {
+		h.WorkerEngine.InvalidatePool(siteID, *oldDeployID)
 	}
 
 	return c.JSON(http.StatusCreated, deployment)
@@ -167,14 +198,15 @@ func (h *DeployHandler) Rollback(c echo.Context) error {
 	}
 
 	// Invalidate old worker pool if applicable
-	if h.WorkerEngine != nil && site.ActiveVersion != nil {
-		h.WorkerEngine.InvalidatePool(siteID, *site.ActiveVersion)
+	if h.WorkerEngine != nil && site.ActiveDeployID != nil {
+		h.WorkerEngine.InvalidatePool(siteID, *site.ActiveDeployID)
 	}
 
 	// Update site to the target version
 	h.DB.Model(&site).Updates(map[string]interface{}{
-		"active_version": version,
-		"has_worker":     dep.HasWorker,
+		"active_version":   version,
+		"active_deploy_id": dep.ID,
+		"has_worker":       dep.HasWorker,
 	})
 
 	return c.JSON(http.StatusOK, map[string]interface{}{

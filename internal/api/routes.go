@@ -27,7 +27,7 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 
 	authHandler := &AuthHandler{DB: db, JWTSecret: cfg.JWTSecret}
 	siteHandler := &SiteHandler{DB: db, Storage: store}
-	deployHandler := &DeployHandler{DB: db, Storage: store}
+	deployHandler := &DeployHandler{DB: db, Storage: store, MaxScriptSizeKB: cfg.Worker.MaxScriptSizeKB}
 	if workerEngine != nil {
 		deployHandler.WorkerEngine = workerEngine
 	}

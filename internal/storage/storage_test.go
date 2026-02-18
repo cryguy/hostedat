@@ -30,8 +30,8 @@ func createTestZip(t *testing.T, files map[string]string) *bytes.Buffer {
 
 func TestGetDeploymentPath(t *testing.T) {
 	m := NewManager("/base")
-	got := m.GetDeploymentPath("site1", 3)
-	want := filepath.Join("/base", "site1", "3")
+	got := m.GetDeploymentPath("site1", "deploy3")
+	want := filepath.Join("/base", "site1", "deploy3")
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -44,11 +44,11 @@ func TestExtractZip_Basic(t *testing.T) {
 		"assets/style.css": "body{}",
 	})
 
-	if err := m.ExtractZip("s1", 1, bytes.NewReader(buf.Bytes()), int64(buf.Len())); err != nil {
+	if err := m.ExtractZip("s1", "deploy1", bytes.NewReader(buf.Bytes()), int64(buf.Len())); err != nil {
 		t.Fatalf("ExtractZip: %v", err)
 	}
 
-	deployPath := m.GetDeploymentPath("s1", 1)
+	deployPath := m.GetDeploymentPath("s1", "deploy1")
 	data, err := os.ReadFile(filepath.Join(deployPath, "index.html"))
 	if err != nil {
 		t.Fatalf("reading index.html: %v", err)
@@ -73,11 +73,11 @@ func TestExtractZip_FlattensTopDir(t *testing.T) {
 		"dist/app.js":     "console.log(1)",
 	})
 
-	if err := m.ExtractZip("s1", 1, bytes.NewReader(buf.Bytes()), int64(buf.Len())); err != nil {
+	if err := m.ExtractZip("s1", "deploy1", bytes.NewReader(buf.Bytes()), int64(buf.Len())); err != nil {
 		t.Fatalf("ExtractZip: %v", err)
 	}
 
-	deployPath := m.GetDeploymentPath("s1", 1)
+	deployPath := m.GetDeploymentPath("s1", "deploy1")
 	if _, err := os.Stat(filepath.Join(deployPath, "index.html")); err != nil {
 		t.Error("expected index.html at root (flattened), not inside dist/")
 	}
@@ -90,11 +90,11 @@ func TestExtractZip_NoFlattenMultipleTopDirs(t *testing.T) {
 		"dir2/b.txt": "b",
 	})
 
-	if err := m.ExtractZip("s1", 1, bytes.NewReader(buf.Bytes()), int64(buf.Len())); err != nil {
+	if err := m.ExtractZip("s1", "deploy1", bytes.NewReader(buf.Bytes()), int64(buf.Len())); err != nil {
 		t.Fatalf("ExtractZip: %v", err)
 	}
 
-	deployPath := m.GetDeploymentPath("s1", 1)
+	deployPath := m.GetDeploymentPath("s1", "deploy1")
 	if _, err := os.Stat(filepath.Join(deployPath, "dir1", "a.txt")); err != nil {
 		t.Error("dir1/a.txt should be preserved")
 	}
@@ -112,7 +112,7 @@ func TestExtractZip_ZipSlipProtection(t *testing.T) {
 	w.Close()
 
 	m := NewManager(t.TempDir())
-	err := m.ExtractZip("s1", 1, bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	err := m.ExtractZip("s1", "deploy1", bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	if err == nil {
 		t.Fatal("expected zip slip error")
 	}
@@ -235,7 +235,7 @@ func TestExtractZip_RejectsSymlinks(t *testing.T) {
 	w.Close()
 
 	m := NewManager(t.TempDir())
-	err = m.ExtractZip("s1", 1, bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	err = m.ExtractZip("s1", "deploy1", bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	if err == nil {
 		t.Fatal("expected error for symlink in zip")
 	}
@@ -263,14 +263,14 @@ func TestDeleteSite(t *testing.T) {
 func TestHasWorkerScript_Present(t *testing.T) {
 	store := NewManager(t.TempDir())
 	siteID := "test-site"
-	version := 1
+	deployKey := "deploy1"
 
 	// Create deployment dir with _worker.js
-	deployPath := store.GetDeploymentPath(siteID, version)
+	deployPath := store.GetDeploymentPath(siteID, deployKey)
 	os.MkdirAll(deployPath, 0755)
 	os.WriteFile(filepath.Join(deployPath, "_worker.js"), []byte("export default {}"), 0644)
 
-	if !store.HasWorkerScript(siteID, version) {
+	if !store.HasWorkerScript(siteID, deployKey) {
 		t.Error("expected HasWorkerScript to return true")
 	}
 }
@@ -278,7 +278,7 @@ func TestHasWorkerScript_Present(t *testing.T) {
 func TestHasWorkerScript_Absent(t *testing.T) {
 	store := NewManager(t.TempDir())
 	// No _worker.js file
-	if store.HasWorkerScript("nonexistent", 1) {
+	if store.HasWorkerScript("nonexistent", "deploy1") {
 		t.Error("expected HasWorkerScript to return false")
 	}
 }
@@ -286,14 +286,14 @@ func TestHasWorkerScript_Absent(t *testing.T) {
 func TestGetWorkerScript(t *testing.T) {
 	store := NewManager(t.TempDir())
 	siteID := "test-site"
-	version := 1
+	deployKey := "deploy1"
 
-	deployPath := store.GetDeploymentPath(siteID, version)
+	deployPath := store.GetDeploymentPath(siteID, deployKey)
 	os.MkdirAll(deployPath, 0755)
 	content := "export default { fetch() { return new Response('hi') } }"
 	os.WriteFile(filepath.Join(deployPath, "_worker.js"), []byte(content), 0644)
 
-	got, err := store.GetWorkerScript(siteID, version)
+	got, err := store.GetWorkerScript(siteID, deployKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func TestGetWorkerScript(t *testing.T) {
 
 func TestGetWorkerScript_NotFound(t *testing.T) {
 	store := NewManager(t.TempDir())
-	_, err := store.GetWorkerScript("nonexistent", 1)
+	_, err := store.GetWorkerScript("nonexistent", "deploy1")
 	if err == nil {
 		t.Fatal("expected error for missing _worker.js")
 	}
@@ -312,8 +312,8 @@ func TestGetWorkerScript_NotFound(t *testing.T) {
 
 func TestGetWorkerBytecodeDir(t *testing.T) {
 	store := NewManager(t.TempDir())
-	dir := store.GetWorkerBytecodeDir("my-site", 3)
-	// Should be a reasonable path containing the site ID and version
+	dir := store.GetWorkerBytecodeDir("my-site", "deploy3")
+	// Should be a reasonable path containing the site ID and deploy key
 	if dir == "" {
 		t.Error("expected non-empty path")
 	}
@@ -321,8 +321,8 @@ func TestGetWorkerBytecodeDir(t *testing.T) {
 	if !strings.Contains(dir, "my-site") {
 		t.Error("expected siteID in path")
 	}
-	if !strings.Contains(dir, "3") {
-		t.Error("expected version in path")
+	if !strings.Contains(dir, "deploy3") {
+		t.Error("expected deployKey in path")
 	}
 	if !strings.HasSuffix(dir, ".worker") {
 		t.Error("expected .worker suffix")
@@ -337,16 +337,16 @@ func TestExtractZip_WithWorkerScript(t *testing.T) {
 		"assets/a.js": "console.log('a')",
 	})
 
-	if err := m.ExtractZip("s1", 1, bytes.NewReader(buf.Bytes()), int64(buf.Len())); err != nil {
+	if err := m.ExtractZip("s1", "deploy1", bytes.NewReader(buf.Bytes()), int64(buf.Len())); err != nil {
 		t.Fatalf("ExtractZip: %v", err)
 	}
 
 	// Verify worker script was extracted
-	if !m.HasWorkerScript("s1", 1) {
+	if !m.HasWorkerScript("s1", "deploy1") {
 		t.Error("expected _worker.js to be present")
 	}
 
-	script, err := m.GetWorkerScript("s1", 1)
+	script, err := m.GetWorkerScript("s1", "deploy1")
 	if err != nil {
 		t.Fatalf("GetWorkerScript: %v", err)
 	}
@@ -364,11 +364,11 @@ func TestExtractZip_NestedSubdirectory(t *testing.T) {
 		"dist/assets/js/app.js":   "console.log(1)",
 	})
 
-	if err := m.ExtractZip("s1", 1, bytes.NewReader(buf.Bytes()), int64(buf.Len())); err != nil {
+	if err := m.ExtractZip("s1", "deploy1", bytes.NewReader(buf.Bytes()), int64(buf.Len())); err != nil {
 		t.Fatalf("ExtractZip: %v", err)
 	}
 
-	deployPath := m.GetDeploymentPath("s1", 1)
+	deployPath := m.GetDeploymentPath("s1", "deploy1")
 	// dist/ should be stripped, but subdirs preserved
 	if _, err := os.Stat(filepath.Join(deployPath, "index.html")); err != nil {
 		t.Error("expected index.html at root (flattened)")
@@ -386,11 +386,11 @@ func TestExtractZip_EmptyZip(t *testing.T) {
 	m := NewManager(t.TempDir())
 	buf := createTestZip(t, map[string]string{})
 
-	if err := m.ExtractZip("s1", 1, bytes.NewReader(buf.Bytes()), int64(buf.Len())); err != nil {
+	if err := m.ExtractZip("s1", "deploy1", bytes.NewReader(buf.Bytes()), int64(buf.Len())); err != nil {
 		t.Fatalf("ExtractZip with empty zip: %v", err)
 	}
 
-	deployPath := m.GetDeploymentPath("s1", 1)
+	deployPath := m.GetDeploymentPath("s1", "deploy1")
 	// Directory should still be created
 	if _, err := os.Stat(deployPath); err != nil {
 		t.Error("expected deployment directory to be created even for empty zip")
@@ -402,7 +402,7 @@ func TestExtractZip_TooLarge(t *testing.T) {
 	// Create a buffer and claim it's too large
 	buf := createTestZip(t, map[string]string{"index.html": "test"})
 
-	err := m.ExtractZip("s1", 1, bytes.NewReader(buf.Bytes()), MaxZipSize+1)
+	err := m.ExtractZip("s1", "deploy1", bytes.NewReader(buf.Bytes()), MaxZipSize+1)
 	if err == nil {
 		t.Fatal("expected error for zip too large")
 	}
