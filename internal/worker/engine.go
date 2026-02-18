@@ -211,6 +211,8 @@ func (e *Engine) GetOrCreatePool(siteID string, deployKey string, env *Env) (*qj
 	pool := qjs.NewPool(cfg.PoolSize, option,
 		// Setup function 1: Web APIs (Headers, Request, Response, URL, etc.)
 		setupWebAPIs,
+		// Setup function 1b: URLSearchParams mutations + URL sync
+		setupURLSearchParamsExt,
 		// Setup function 2: globals (structuredClone, performance, navigator, queueMicrotask)
 		setupGlobals,
 		// Setup function 3: encoding (atob, btoa)
@@ -221,17 +223,21 @@ func (e *Engine) GetOrCreatePool(siteID string, deployKey string, env *Env) (*qj
 		setupAbort,
 		// Setup function 6: crypto (crypto.getRandomValues, crypto.subtle, crypto.randomUUID)
 		setupCrypto,
+		// Setup function 6b: crypto extensions (JWK, ECDSA, AES-CBC, generateKey)
+		setupCryptoExt,
 		// Setup function 7: streams (ReadableStream, WritableStream, TransformStream)
 		setupStreams,
 		// Setup function 8: formdata (FormData, Blob, File)
 		setupFormData,
-		// Setup function 9: console capture
+		// Setup function 9: body type coercion (patches Request/Response for non-string bodies)
+		setupBodyTypes,
+		// Setup function 11: console capture
 		setupConsole,
-		// Setup function 10: fetch()
+		// Setup function 12: fetch()
 		func(rt *qjs.Runtime) error {
 			return setupFetch(rt, cfg)
 		},
-		// Setup function 11: load worker module and extract default export
+		// Setup function 13: load worker module and extract default export
 		func(rt *qjs.Runtime) error {
 			// Load registers the compiled module in the runtime.
 			if _, err := rt.Load("worker.js", qjs.Bytecode(bytecode)); err != nil {

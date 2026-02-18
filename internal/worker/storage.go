@@ -439,32 +439,34 @@ func coerceStoragePutBody(v *qjs.Value) ([]byte, error) {
 	return nil, fmt.Errorf("BUCKET.put currently supports string, ArrayBuffer, TypedArray, DataView, Blob, and File values")
 }
 
+// blobToBytes reads a Blob/File's internal _parts array synchronously.
+//
+// IMPORTANT: Do NOT call async JS methods (like arrayBuffer()) from Go and
+// then Await+Free both the Promise and the resolved value. The QuickJS WASM
+// build double-frees the resolved value when the Promise is freed, causing
+// "out of bounds memory access" panics. Always read internal JS properties
+// (e.g. _body, _parts, _map) synchronously instead. See also: jsResponseToGo
+// in webapi.go and the Execute() comment in engine.go.
 func blobToBytes(blob *qjs.Value) ([]byte, error) {
-	arrayBufferResult, err := blob.InvokeJS("arrayBuffer")
-	if err != nil {
-		return nil, err
-	}
-	defer arrayBufferResult.Free()
+	parts := blob.GetPropertyStr("_parts")
+	defer parts.Free()
 
-	arrayBufferValue := arrayBufferResult
-	if arrayBufferResult.IsPromise() {
-		awaited, err := arrayBufferResult.Await()
-		if err != nil {
-			return nil, err
-		}
-		defer awaited.Free()
-		arrayBufferValue = awaited
+	if parts.IsNull() || parts.IsUndefined() {
+		return nil, fmt.Errorf("Blob has no _parts property")
 	}
 
-	if arrayBufferValue.IsByteArray() {
-		return arrayBufferValue.ToByteArray(), nil
+	lenVal := parts.GetPropertyStr("length")
+	length := int(lenVal.Int32())
+	lenVal.Free()
+
+	var result []byte
+	for i := 0; i < length; i++ {
+		elem := parts.GetPropertyIndex(int64(i))
+		result = append(result, []byte(elem.String())...)
+		elem.Free()
 	}
 
-	if qjs.IsTypedArray(arrayBufferValue) {
-		return qjs.JsTypedArrayToGo(arrayBufferValue)
-	}
-
-	return nil, fmt.Errorf("arrayBuffer() returned unsupported type %s", arrayBufferValue.Type())
+	return result, nil
 }
 
 // buildR2Object creates a JS object matching the Cloudflare R2Object shape.

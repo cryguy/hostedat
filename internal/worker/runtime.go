@@ -8,8 +8,12 @@ import (
 
 // cryptoKeyEntry holds imported key material and its associated hash algorithm.
 type cryptoKeyEntry struct {
-	data     []byte
-	hashAlgo string
+	data       []byte // Raw key bytes (symmetric keys)
+	hashAlgo   string // Associated hash algorithm
+	algoName   string // Algorithm name (HMAC, AES-GCM, ECDSA, AES-CBC)
+	keyType    string // "secret", "public", "private"
+	namedCurve string // For EC keys: "P-256", "P-384"
+	ecKey      any    // *ecdsa.PrivateKey or *ecdsa.PublicKey
 }
 
 // requestState holds per-request mutable state (logs, fetch counter, env, crypto keys).

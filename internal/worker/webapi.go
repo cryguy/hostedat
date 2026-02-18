@@ -54,6 +54,7 @@ class URL {
 		this.origin = parsed.origin;
 		this.host = parsed.host;
 		this.searchParams = new URLSearchParams(this.search);
+		this.searchParams._url = this;
 	}
 	toString() { return this.href; }
 }
@@ -199,6 +200,72 @@ globalThis.URLSearchParams = URLSearchParams;
 globalThis.Request = Request;
 globalThis.Response = Response;
 `
+
+// urlSearchParamsExtJS patches URLSearchParams with mutation methods and URL sync.
+// Must be evaluated after webAPIsJS so that URLSearchParams and URL are defined.
+const urlSearchParamsExtJS = `
+(function() {
+var USP = URLSearchParams.prototype;
+
+USP._sync = function() {
+	if (this._url) {
+		var s = this.toString();
+		this._url.search = s ? '?' + s : '';
+		this._url.href = this._url.origin + this._url.pathname + this._url.search + this._url.hash;
+	}
+};
+
+USP.getAll = function(name) {
+	return this._entries.filter(function(e) { return e[0] === name; }).map(function(e) { return e[1]; });
+};
+
+USP.set = function(name, value) {
+	var s = String(value);
+	var found = false;
+	var filtered = [];
+	for (var i = 0; i < this._entries.length; i++) {
+		var entry = this._entries[i];
+		if (entry[0] === name) {
+			if (!found) {
+				filtered.push([name, s]);
+				found = true;
+			}
+		} else {
+			filtered.push(entry);
+		}
+	}
+	if (!found) filtered.push([name, s]);
+	this._entries = filtered;
+	this._sync();
+};
+
+USP.append = function(name, value) {
+	this._entries.push([name, String(value)]);
+	this._sync();
+};
+
+// Override delete to support sync
+var origDelete = USP['delete'];
+USP['delete'] = function(name) {
+	this._entries = this._entries.filter(function(e) { return e[0] !== name; });
+	this._sync();
+};
+
+USP.sort = function() {
+	this._entries.sort(function(a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; });
+	this._sync();
+};
+
+})();
+`
+
+// setupURLSearchParamsExt evaluates the URLSearchParams extension polyfill.
+func setupURLSearchParamsExt(rt *qjs.Runtime) error {
+	if _, err := rt.Eval("urlsearchparams_ext.js", qjs.Code(urlSearchParamsExtJS)); err != nil {
+		return fmt.Errorf("evaluating urlsearchparams_ext.js: %w", err)
+	}
+	return nil
+}
 
 // setupWebAPIs registers Go-backed helpers and evaluates the JS class
 // definitions that form the Web API surface available to workers.

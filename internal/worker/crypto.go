@@ -188,6 +188,9 @@ const cryptoJS = `
 	crypto.subtle = subtle;
 	globalThis.crypto = crypto;
 	globalThis.CryptoKey = CryptoKey;
+	// Expose helpers globally so crypto_ext.js can use them.
+	globalThis.__bufferSourceToB64 = __bufferSourceToB64;
+	globalThis.__b64ToBuffer = __b64ToBuffer;
 })();
 `
 
@@ -538,6 +541,10 @@ func normalizeAlgo(name string) string {
 		return "HMAC"
 	case "aes-gcm", "AES-GCM", "Aes-Gcm":
 		return "AES-GCM"
+	case "aes-cbc", "AES-CBC", "Aes-Cbc":
+		return "AES-CBC"
+	case "ecdsa", "ECDSA", "Ecdsa":
+		return "ECDSA"
 	default:
 		return name
 	}
