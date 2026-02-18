@@ -24,6 +24,31 @@ export default {
       }
     }
 
+    // Intercept markdown reference docs and replace domain placeholders.
+    if (path.endsWith(".md")) {
+      const response = await env.ASSETS.fetch(request);
+      if (!response.ok) return response;
+
+      // Derive the base domain by stripping the first subdomain (e.g. docs.hostedat.example.com -> hostedat.example.com).
+      const host = url.hostname;
+      const parts = host.split(".");
+      const domain = parts.length > 2 ? parts.slice(1).join(".") : host;
+
+      let body = await response.text();
+      // Replace storage.example.com first (more specific), then bare example.com.
+      body = body.replaceAll("storage.example.com", "storage." + domain);
+      body = body.replaceAll("example.com", domain);
+
+      return new Response(body, {
+        status: response.status,
+        headers: {
+          "Content-Type": "text/markdown; charset=utf-8",
+          "Cache-Control": "public, max-age=300",
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    }
+
     // Everything else: serve from static assets.
     return env.ASSETS.fetch(request);
   },

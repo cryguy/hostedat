@@ -372,6 +372,45 @@ func storageCmd() *cobra.Command {
 	create.Flags().StringVar(&bucketName, "bucket", "", "S3 bucket name (must start with site ID)")
 	create.Flags().BoolVar(&publicFlag, "public", false, "allow unauthenticated read access")
 
+	// update
+	var setPublic, setPrivate bool
+	update := &cobra.Command{
+		Use:   "update <site> <bucket-id>",
+		Short: "Update storage bucket settings",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if setPublic == setPrivate {
+				return fmt.Errorf("exactly one of --public or --private is required")
+			}
+
+			c, err := newClient()
+			if err != nil {
+				return err
+			}
+
+			siteID, err := c.ResolveSiteID(args[0])
+			if err != nil {
+				return err
+			}
+
+			public := setPublic
+			bucket, err := c.UpdateBucket(siteID, args[1], public)
+			if err != nil {
+				return err
+			}
+
+			fmt.Println("Storage bucket updated!")
+			fmt.Printf("  ID:          %s\n", bucket.ID)
+			fmt.Printf("  Binding:     %s\n", bucket.Name)
+			fmt.Printf("  Bucket name: %s\n", bucket.BucketName)
+			fmt.Printf("  Public:      %v\n", bucket.Public)
+			return nil
+		},
+	}
+	update.Flags().BoolVar(&setPublic, "public", false, "set bucket to public read")
+	update.Flags().BoolVar(&setPrivate, "private", false, "set bucket to private")
+	update.MarkFlagsMutuallyExclusive("public", "private")
+
 	// delete
 	var yes bool
 	del := &cobra.Command{
@@ -446,7 +485,7 @@ func storageCmd() *cobra.Command {
 	}
 	upload.Flags().StringVar(&uploadKey, "key", "", "object key (defaults to filename)")
 
-	storage.AddCommand(list, create, del, upload)
+	storage.AddCommand(list, create, update, del, upload)
 	return storage
 }
 

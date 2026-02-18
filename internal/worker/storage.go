@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -76,13 +77,11 @@ func buildStorageBinding(ctx *qjs.Context, bridge *StorageBridge) *qjs.Value {
 			return c.NewUndefined(), nil
 		}
 		key := args[0].String()
-		// P0 contract: reject non-string bodies explicitly instead of coercing
-		// (which can silently corrupt binary payloads).
-		if !args[1].IsString() {
-			promise.Reject(c.NewError(fmt.Errorf("BUCKET.put currently supports string values only")))
+		valueBytes, err := coerceStoragePutBody(args[1])
+		if err != nil {
+			promise.Reject(c.NewError(err))
 			return c.NewUndefined(), nil
 		}
-		value := args[1].String()
 
 		opts := minio.PutObjectOptions{}
 		customMeta := map[string]string{}
@@ -140,8 +139,8 @@ func buildStorageBinding(ctx *qjs.Context, bridge *StorageBridge) *qjs.Value {
 			opts.UserMetadata = customMeta
 		}
 
-		reader := strings.NewReader(value)
-		info, err := bridge.Client.PutObject(context.Background(), bridge.BucketName, key, reader, int64(len(value)), opts)
+		reader := bytes.NewReader(valueBytes)
+		info, err := bridge.Client.PutObject(context.Background(), bridge.BucketName, key, reader, int64(len(valueBytes)), opts)
 		if err != nil {
 			promise.Reject(c.NewError(fmt.Errorf("putting object: %w", err)))
 			return c.NewUndefined(), nil
@@ -392,8 +391,9 @@ func buildPublicObjectURL(publicBase string, bucket string, key string) (string,
 
 	cleanBucket := strings.Trim(bucket, "/")
 	cleanKey := strings.TrimPrefix(key, "/")
-	pub.Path = strings.TrimRight(pub.Path, "/") + "/" + url.PathEscape(cleanBucket) + "/" + escapePathSegments(cleanKey)
-	pub.RawPath = ""
+	base := strings.TrimRight(pub.Path, "/")
+	pub.Path = base + "/" + cleanBucket + "/" + cleanKey
+	pub.RawPath = base + "/" + url.PathEscape(cleanBucket) + "/" + escapePathSegments(cleanKey)
 	pub.RawQuery = ""
 	pub.Fragment = ""
 
@@ -409,6 +409,62 @@ func escapePathSegments(path string) string {
 		parts[i] = url.PathEscape(p)
 	}
 	return strings.Join(parts, "/")
+}
+
+func coerceStoragePutBody(v *qjs.Value) ([]byte, error) {
+	if v.IsString() {
+		return []byte(v.String()), nil
+	}
+
+	if v.IsByteArray() {
+		return v.ToByteArray(), nil
+	}
+
+	if qjs.IsTypedArray(v) {
+		buf, err := qjs.JsTypedArrayToGo(v)
+		if err != nil {
+			return nil, fmt.Errorf("BUCKET.put failed to read TypedArray body: %w", err)
+		}
+		return buf, nil
+	}
+
+	if v.IsGlobalInstanceOf("Blob") {
+		buf, err := blobToBytes(v)
+		if err != nil {
+			return nil, fmt.Errorf("BUCKET.put failed to read Blob body: %w", err)
+		}
+		return buf, nil
+	}
+
+	return nil, fmt.Errorf("BUCKET.put currently supports string, ArrayBuffer, TypedArray, DataView, Blob, and File values")
+}
+
+func blobToBytes(blob *qjs.Value) ([]byte, error) {
+	arrayBufferResult, err := blob.InvokeJS("arrayBuffer")
+	if err != nil {
+		return nil, err
+	}
+	defer arrayBufferResult.Free()
+
+	arrayBufferValue := arrayBufferResult
+	if arrayBufferResult.IsPromise() {
+		awaited, err := arrayBufferResult.Await()
+		if err != nil {
+			return nil, err
+		}
+		defer awaited.Free()
+		arrayBufferValue = awaited
+	}
+
+	if arrayBufferValue.IsByteArray() {
+		return arrayBufferValue.ToByteArray(), nil
+	}
+
+	if qjs.IsTypedArray(arrayBufferValue) {
+		return qjs.JsTypedArrayToGo(arrayBufferValue)
+	}
+
+	return nil, fmt.Errorf("arrayBuffer() returned unsupported type %s", arrayBufferValue.Type())
 }
 
 // buildR2Object creates a JS object matching the Cloudflare R2Object shape.

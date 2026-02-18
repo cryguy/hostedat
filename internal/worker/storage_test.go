@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -49,7 +50,7 @@ func awaitValue(t *testing.T, v *qjs.Value) (*qjs.Value, error) {
 	return resolved, err
 }
 
-func TestStorageBinding_Put_UnsupportedBinaryRejected(t *testing.T) {
+func TestStorageBinding_Put_UnsupportedTypeRejected(t *testing.T) {
 	rt := newStorageTestContext(t)
 	defer safeClose(rt)
 
@@ -64,8 +65,144 @@ func TestStorageBinding_Put_UnsupportedBinaryRejected(t *testing.T) {
 	defer safeFree(result)
 
 	_, err = awaitValue(t, result)
-	if err == nil || !strings.Contains(err.Error(), "supports string values only") {
+	if err == nil || !strings.Contains(err.Error(), "supports string, ArrayBuffer, TypedArray, DataView, Blob, and File values") {
 		t.Fatalf("expected unsupported-value rejection, got %v", err)
+	}
+}
+
+func TestCoerceStoragePutBody_String(t *testing.T) {
+	rt := newStorageTestContext(t)
+	defer safeClose(rt)
+
+	ctx := rt.Context()
+	v := ctx.NewString("hello")
+	defer safeFree(v)
+
+	buf, err := coerceStoragePutBody(v)
+	if err != nil {
+		t.Fatalf("coerceStoragePutBody returned error: %v", err)
+	}
+	if !bytes.Equal(buf, []byte("hello")) {
+		t.Fatalf("coerced body = %v, want %v", buf, []byte("hello"))
+	}
+}
+
+func TestCoerceStoragePutBody_ArrayBuffer(t *testing.T) {
+	rt := newStorageTestContext(t)
+	defer safeClose(rt)
+
+	ctx := rt.Context()
+	v, err := ctx.Eval("test.js", qjs.Code(`(() => { const b = new Uint8Array([0, 1, 255]); return b.buffer; })()`))
+	if err != nil {
+		t.Fatalf("eval array buffer: %v", err)
+	}
+	defer safeFree(v)
+
+	buf, err := coerceStoragePutBody(v)
+	if err != nil {
+		t.Fatalf("coerceStoragePutBody returned error: %v", err)
+	}
+	want := []byte{0, 1, 255}
+	if !bytes.Equal(buf, want) {
+		t.Fatalf("coerced body = %v, want %v", buf, want)
+	}
+}
+
+func TestCoerceStoragePutBody_TypedArrayView(t *testing.T) {
+	rt := newStorageTestContext(t)
+	defer safeClose(rt)
+
+	ctx := rt.Context()
+	v, err := ctx.Eval("test.js", qjs.Code(`(() => { const src = new Uint8Array([10, 20, 30, 40]); return src.subarray(1, 3); })()`))
+	if err != nil {
+		t.Fatalf("eval typed array view: %v", err)
+	}
+	defer safeFree(v)
+
+	buf, err := coerceStoragePutBody(v)
+	if err != nil {
+		t.Fatalf("coerceStoragePutBody returned error: %v", err)
+	}
+	want := []byte{20, 30}
+	if !bytes.Equal(buf, want) {
+		t.Fatalf("coerced body = %v, want %v", buf, want)
+	}
+}
+
+func TestCoerceStoragePutBody_DataView(t *testing.T) {
+	rt := newStorageTestContext(t)
+	defer safeClose(rt)
+
+	ctx := rt.Context()
+	v, err := ctx.Eval("test.js", qjs.Code(`(() => { const buf = new ArrayBuffer(4); const view = new DataView(buf); view.setUint8(0, 7); view.setUint8(3, 9); return view; })()`))
+	if err != nil {
+		t.Fatalf("eval data view: %v", err)
+	}
+	defer safeFree(v)
+
+	buf, err := coerceStoragePutBody(v)
+	if err != nil {
+		t.Fatalf("coerceStoragePutBody returned error: %v", err)
+	}
+	want := []byte{7, 0, 0, 9}
+	if !bytes.Equal(buf, want) {
+		t.Fatalf("coerced body = %v, want %v", buf, want)
+	}
+}
+
+func TestCoerceStoragePutBody_Blob(t *testing.T) {
+	rt := newStorageTestContext(t)
+	defer safeClose(rt)
+
+	if err := setupWebAPIs(rt); err != nil {
+		t.Fatalf("setupWebAPIs: %v", err)
+	}
+	if err := setupFormData(rt); err != nil {
+		t.Fatalf("setupFormData: %v", err)
+	}
+
+	ctx := rt.Context()
+	v, err := ctx.Eval("test.js", qjs.Code(`new Blob(["hello", " ", "blob"])`))
+	if err != nil {
+		t.Fatalf("eval blob: %v", err)
+	}
+	defer safeFree(v)
+
+	buf, err := coerceStoragePutBody(v)
+	if err != nil {
+		t.Fatalf("coerceStoragePutBody returned error: %v", err)
+	}
+	want := []byte("hello blob")
+	if !bytes.Equal(buf, want) {
+		t.Fatalf("coerced body = %v, want %v", buf, want)
+	}
+}
+
+func TestCoerceStoragePutBody_File(t *testing.T) {
+	rt := newStorageTestContext(t)
+	defer safeClose(rt)
+
+	if err := setupWebAPIs(rt); err != nil {
+		t.Fatalf("setupWebAPIs: %v", err)
+	}
+	if err := setupFormData(rt); err != nil {
+		t.Fatalf("setupFormData: %v", err)
+	}
+
+	ctx := rt.Context()
+	v, err := ctx.Eval("test.js", qjs.Code(`new File([new Uint8Array([65, 66, 67])], "x.bin")`))
+	if err != nil {
+		t.Fatalf("eval file: %v", err)
+	}
+	defer safeFree(v)
+
+	buf, err := coerceStoragePutBody(v)
+	if err != nil {
+		t.Fatalf("coerceStoragePutBody returned error: %v", err)
+	}
+	want := []byte{65, 66, 67}
+	if !bytes.Equal(buf, want) {
+		t.Fatalf("coerced body = %v, want %v", buf, want)
 	}
 }
 

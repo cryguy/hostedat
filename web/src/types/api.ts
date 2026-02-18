@@ -22,6 +22,7 @@ export interface Deployment {
   site_id: string
   version: number
   file_hash: string
+  has_worker: boolean
   uploaded_at: string
 }
 
@@ -111,7 +112,6 @@ export interface StorageBucket {
   name: string
   bucket_name: string
   public: boolean
-  garage_bucket_id: string
   created_at: string
 }
 
@@ -119,8 +119,7 @@ export interface S3Credential {
   id: string
   user_id: string
   access_key_id: string
-  secret_access_key?: string
-  garage_key_id: string
+  external_key_id: string
   name: string
   last_used_at?: string
   created_at: string

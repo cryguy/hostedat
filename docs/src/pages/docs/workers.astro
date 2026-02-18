@@ -34,8 +34,8 @@ import CodeBlock from '../../components/CodeBlock.astro';
     code={`export default {
   async fetch(request, env, ctx) {
     // request: Request object (method, url, headers, body)
-    // env: bindings (env vars, secrets, KV namespaces, ASSETS)
-    // ctx: execution context (waitUntil)
+    // env: bindings (env vars, secrets, KV, storage buckets, ASSETS)
+    // ctx: execution context — waitUntil() and passThroughOnException() are accepted but are currently no-ops
     return new Response("Hello from worker!");
   },
 
@@ -58,11 +58,12 @@ import CodeBlock from '../../components/CodeBlock.astro';
 
   <ul>
     <li>
-      <strong>Request / Response</strong> — Standard constructors with methods like <code>.text()</code>,
-      <code>.json()</code>, <code>.clone()</code>
+      <strong>Request / Response</strong> — Standard constructors with instance methods <code>.text()</code>,
+      <code>.json()</code>, <code>.arrayBuffer()</code>, <code>.clone()</code>; static methods
+      <code>Response.json(data, init?)</code> and <code>Response.redirect(url, status?)</code>
     </li>
     <li>
-      <strong>Headers</strong> — Full get/set/has/delete/append/forEach API
+      <strong>Headers</strong> — Full <code>get</code> / <code>set</code> / <code>has</code> / <code>delete</code> / <code>append</code> / <code>forEach</code> / <code>entries</code> / <code>keys</code> / <code>values</code> API
     </li>
     <li>
       <strong>URL / URLSearchParams</strong> — Standard URL parsing and manipulation
@@ -74,7 +75,55 @@ import CodeBlock from '../../components/CodeBlock.astro';
       <strong>fetch()</strong> — Outbound HTTP requests (rate-limited, SSRF-protected — blocks private/loopback IPs)
     </li>
     <li>
-      <strong>console.log / warn / error</strong> — Captured to per-site log storage, viewable via API
+      <strong>console.log / info / warn / error / debug</strong> — All five levels are captured to per-site log storage, viewable via API
+    </li>
+    <li>
+      <strong>atob() / btoa()</strong> — Base64 decode and encode (Latin-1 strings)
+    </li>
+    <li>
+      <strong>setTimeout / setInterval / clearTimeout / clearInterval</strong> — Timer functions; timing is microtask-based and approximate (see note below)
+    </li>
+    <li>
+      <strong>AbortController / AbortSignal</strong> — Request cancellation; includes <code>AbortSignal.abort()</code> and <code>AbortSignal.timeout(ms)</code>
+    </li>
+    <li>
+      <strong>Event / EventTarget / DOMException</strong> — DOM event primitives used internally by AbortSignal and custom event emitters
+    </li>
+    <li>
+      <strong>crypto.getRandomValues(typedArray)</strong> — Fill a typed array with cryptographically random bytes (up to 65536 bytes)
+    </li>
+    <li>
+      <strong>crypto.randomUUID()</strong> — Generate a random UUID v4 string
+    </li>
+    <li>
+      <strong>crypto.subtle</strong> — Web Crypto API subset:
+      <ul>
+        <li><code>digest(algorithm, data)</code> — SHA-1, SHA-256, SHA-384, SHA-512</li>
+        <li><code>importKey(format, keyData, algorithm, extractable, usages)</code> — <code>raw</code> format only; supports HMAC (with SHA-1/256/384/512 hash) and AES-GCM</li>
+        <li><code>exportKey(format, key)</code> — <code>raw</code> format only; key must be extractable</li>
+        <li><code>sign(algorithm, key, data)</code> — HMAC only</li>
+        <li><code>verify(algorithm, key, signature, data)</code> — HMAC only</li>
+        <li><code>encrypt(algorithm, key, data)</code> — AES-GCM only; requires a 12-byte IV</li>
+        <li><code>decrypt(algorithm, key, data)</code> — AES-GCM only; requires a 12-byte IV</li>
+      </ul>
+    </li>
+    <li>
+      <strong>ReadableStream / WritableStream / TransformStream</strong> — Web Streams API with reader/writer locks, async iteration, and identity transform passthrough
+    </li>
+    <li>
+      <strong>Blob / File / FormData</strong> — Binary data construction and multipart form handling; <code>Blob</code> and <code>File</code> support <code>.text()</code> and <code>.arrayBuffer()</code>
+    </li>
+    <li>
+      <strong>structuredClone(value)</strong> — Deep-clone JSON-serializable values; functions, symbols, Map, Set, WeakMap, and WeakSet are not supported
+    </li>
+    <li>
+      <strong>queueMicrotask(fn)</strong> — Schedule a callback on the next microtask tick
+    </li>
+    <li>
+      <strong>performance.now()</strong> — Milliseconds elapsed since the runtime was initialized (Go-backed, sub-millisecond precision)
+    </li>
+    <li>
+      <strong>navigator.userAgent</strong> — Returns <code>"hostedat-worker/1.0"</code>
     </li>
   </ul>
 
@@ -96,10 +145,182 @@ import CodeBlock from '../../components/CodeBlock.astro';
     lang="js"
   />
 
+  <h3>Example: Crypto</h3>
+  <p>
+    Generate UUIDs, hash data, sign requests, or encrypt values using the built-in
+    <code>crypto</code> global. All <code>crypto.subtle</code> operations return Promises.
+  </p>
+
+  <CodeBlock
+    title="Random values and hashing"
+    code={`export default {
+  async fetch(request, env) {
+    // Generate a random UUID
+    const id = crypto.randomUUID();
+
+    // Fill a typed array with random bytes
+    const buf = new Uint8Array(16);
+    crypto.getRandomValues(buf);
+
+    // SHA-256 hash of a string
+    const encoder = new TextEncoder();
+    const data = encoder.encode("hello world");
+    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+
+    return Response.json({ id, hashHex });
+  }
+};`}
+    lang="js"
+  />
+
+  <CodeBlock
+    title="HMAC signing and verification"
+    code={`export default {
+  async fetch(request, env) {
+    const encoder = new TextEncoder();
+
+    // Import a raw HMAC key (use env.SECRET in practice)
+    const keyData = encoder.encode("my-secret-key");
+    const key = await crypto.subtle.importKey(
+      "raw",
+      keyData,
+      { name: "HMAC", hash: "SHA-256" },
+      false,       // not extractable
+      ["sign", "verify"]
+    );
+
+    // Sign a payload
+    const payload = encoder.encode("user:42");
+    const signature = await crypto.subtle.sign("HMAC", key, payload);
+
+    // Verify the signature
+    const valid = await crypto.subtle.verify("HMAC", key, signature, payload);
+
+    return Response.json({ valid });
+  }
+};`}
+    lang="js"
+  />
+
+  <CodeBlock
+    title="AES-GCM encryption"
+    code={`export default {
+  async fetch(request, env) {
+    const encoder = new TextEncoder();
+
+    // AES-GCM requires a 128, 192, or 256-bit key (16, 24, or 32 bytes)
+    const rawKey = new Uint8Array(32);
+    crypto.getRandomValues(rawKey);
+
+    const key = await crypto.subtle.importKey(
+      "raw",
+      rawKey,
+      { name: "AES-GCM" },
+      false,
+      ["encrypt", "decrypt"]
+    );
+
+    // AES-GCM requires a 12-byte IV
+    const iv = new Uint8Array(12);
+    crypto.getRandomValues(iv);
+
+    const plaintext = encoder.encode("secret message");
+    const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
+    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+
+    return Response.json({
+      ciphertextBytes: new Uint8Array(ciphertext).length,
+      decrypted: new TextDecoder().decode(decrypted)
+    });
+  }
+};`}
+    lang="js"
+  />
+
+  <h3>Example: Timers and encoding</h3>
+  <p>
+    <code>setTimeout</code> and <code>setInterval</code> are available but use microtask-based
+    scheduling. In the single-threaded WebAssembly environment, true wall-clock delays are not
+    achievable — all timers fire on the next microtask tick regardless of the delay value.
+    Use them for deferred work within a single request, not for precise timing.
+    <code>setInterval</code> is capped at 1000 ticks per interval to prevent infinite loops.
+  </p>
+
+  <CodeBlock
+    title="atob / btoa — Base64 encode and decode"
+    code={`export default {
+  async fetch(request) {
+    const encoded = btoa("Hello, worker!");   // "SGVsbG8sIHdvcmtlciE="
+    const decoded = atob(encoded);             // "Hello, worker!"
+
+    return Response.json({ encoded, decoded });
+  }
+};`}
+    lang="js"
+  />
+
+  <CodeBlock
+    title="setTimeout — deferred work"
+    code={`export default {
+  async fetch(request) {
+    const result = await new Promise((resolve) => {
+      setTimeout(() => resolve("done after microtask"), 0);
+    });
+    return new Response(result);
+  }
+};`}
+    lang="js"
+  />
+
+  <h3>Example: FormData and Blob</h3>
+  <p>
+    Use <code>FormData</code> to construct multipart form bodies for upstream requests.
+    <code>Blob</code> and <code>File</code> can be used anywhere binary data or file uploads
+    are needed, including storage <code>put()</code> calls.
+  </p>
+
+  <CodeBlock
+    title="Constructing a multipart form request"
+    code={`export default {
+  async fetch(request, env) {
+    // Build a multipart/form-data body to send to an upstream API
+    const form = new FormData();
+    form.append("username", "alice");
+    form.append("avatar", new File(["<svg/>"], "avatar.svg", { type: "image/svg+xml" }));
+
+    const response = await fetch("https://api.example.com/upload", {
+      method: "POST",
+      body: form,
+    });
+
+    return Response.json({ status: response.status });
+  }
+};`}
+    lang="js"
+  />
+
+  <CodeBlock
+    title="Blob — binary data in storage"
+    code={`export default {
+  async fetch(request, env) {
+    // Store a Blob directly in a storage bucket
+    const blob = new Blob(['{"hello":"world"}'], { type: "application/json" });
+    await env.MY_BUCKET.put("data.json", blob, {
+      httpMetadata: { contentType: blob.type }
+    });
+
+    return new Response("stored", { status: 200 });
+  }
+};`}
+    lang="js"
+  />
+
   <h2>Environment bindings</h2>
   <p>
     The <code>env</code> parameter provides access to environment variables, secrets, KV namespaces,
-    and the static asset pipeline.
+    storage bucket bindings, and the static asset pipeline.
   </p>
 
   <h3>Environment variables & secrets</h3>
@@ -174,6 +395,186 @@ import CodeBlock from '../../components/CodeBlock.astro';
       — List keys. Options: <code>{'{'} prefix?, limit? {'}'}</code>
     </li>
   </ul>
+
+  <h3>Storage bucket bindings (R2-compatible)</h3>
+  <p>
+    Storage bindings expose S3 buckets as Worker bindings (for example, <code>env.DOWNLOADS</code>) with
+    an R2-style API. Create them via the CLI, the dashboard, or the API.
+  </p>
+
+  <CodeBlock
+    title="Create and toggle visibility with CLI"
+    code={`# Create a public bucket binding
+hostedat storage create <site> --name DOWNLOADS --bucket <site-id>-downloads --public
+
+# List buckets to get bucket IDs
+hostedat storage list <site>
+
+# Toggle visibility later
+hostedat storage update <site> <bucket-id> --private
+hostedat storage update <site> <bucket-id> --public`}
+    lang="bash"
+  />
+
+  <CodeBlock
+    title="Create a storage binding"
+    code={`curl -X POST https://your-hostedat-domain/api/v1/sites/<site-id>/storage/buckets \\
+  -H "Authorization: Bearer <api-key>" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "name": "DOWNLOADS",
+    "bucket_name": "<site-id>-downloads",
+    "public": true
+  }'`}
+    lang="bash"
+  />
+
+  <p>
+    Naming rules: <code>name</code> must match <code>^[A-Z][A-Z0-9_]{'{'}0,63{'}'}$</code> (for example,
+    <code>DOWNLOADS</code>), and <code>bucket_name</code> must be 3-63 chars of lowercase letters/digits/dot/hyphen,
+    must not be an IP address, and must start with <code>{'{'}site-id{'}'}-</code>.
+  </p>
+
+  <CodeBlock
+    title="Read and write objects"
+    code={`export default {
+  async fetch(request, env) {
+    const path = new URL(request.url).pathname;
+
+    if (path === "/storage/write") {
+      await env.DOWNLOADS.put("meta/build.json", JSON.stringify({
+        builtAt: new Date().toISOString()
+      }), {
+        httpMetadata: {
+          contentType: "application/json",
+          cacheControl: "public, max-age=60"
+        },
+        customMetadata: {
+          source: "worker"
+        }
+      });
+      return new Response("ok");
+    }
+
+    if (path === "/storage/read") {
+      const obj = await env.DOWNLOADS.get("meta/build.json");
+      if (!obj) return new Response("Not found", { status: 404 });
+
+      return new Response(await obj.text(), {
+        headers: {
+          "Content-Type": obj.httpMetadata.contentType || "application/json"
+        }
+      });
+    }
+
+    return new Response("Not found", { status: 404 });
+  }
+};`}
+    lang="js"
+  />
+
+  <p>
+    <code>get()</code> returns an object with metadata and one-shot body readers:
+    <code>.text()</code>, <code>.arrayBuffer()</code>, and <code>.json()</code>. After one body read,
+    further reads reject with <code>body already consumed</code>.
+  </p>
+
+  <CodeBlock
+    title="Signed URL and public URL"
+    code={`export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const key = url.searchParams.get("key") || "hostedat-linux-amd64";
+
+    if (url.pathname === "/downloads/private") {
+      const signedUrl = await env.DOWNLOADS.createSignedUrl(key, { expiresIn: 900 });
+      return Response.redirect(signedUrl, 302);
+    }
+
+    if (url.pathname === "/downloads/public") {
+      const objectUrl = env.DOWNLOADS.publicUrl(key);
+      return Response.redirect(objectUrl, 302);
+    }
+
+    return new Response("Not found", { status: 404 });
+  }
+};`}
+    lang="js"
+  />
+
+  <ul>
+    <li>
+      <code>createSignedUrl()</code> generates a SigV4 URL for private access.
+      Keep the full query string (<code>X-Amz-*</code>) intact.
+    </li>
+    <li>
+      <code>publicUrl()</code> builds <code>https://storage.&lt;domain&gt;/&lt;bucket&gt;/&lt;key&gt;</code>
+      for direct object links. This is intended for buckets with public read enabled.
+    </li>
+    <li>
+      <code>createSignedUrl()</code> and <code>publicUrl()</code> are hostedat extensions;
+      they are not part of Cloudflare's native R2 API.
+    </li>
+    <li>
+      <code>publicUrl()</code> does not bypass bucket policy. If the bucket is private,
+      unauthenticated requests to that URL will be denied.
+    </li>
+    <li>
+      <code>put()</code> supports <code>string</code>, <code>ArrayBuffer</code>,
+      typed arrays (for example <code>Uint8Array</code>), <code>DataView</code>,
+      <code>Blob</code>, and <code>File</code>.
+      For very large uploads, use <code>/storage/buckets/:bucketId/upload-url</code>
+      or S3 credentials.
+    </li>
+  </ul>
+
+  <h4>Storage binding API reference</h4>
+  <table>
+    <thead>
+      <tr>
+        <th>Method</th>
+        <th>Return type</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>env.BUCKET.get(key)</code></td>
+        <td><code>Promise&lt;R2ObjectBody|null&gt;</code></td>
+        <td>Returns object body + metadata, or <code>null</code> if missing.</td>
+      </tr>
+      <tr>
+        <td><code>env.BUCKET.head(key)</code></td>
+        <td><code>Promise&lt;R2Object|null&gt;</code></td>
+        <td>Metadata only. Returns <code>null</code> when not found.</td>
+      </tr>
+      <tr>
+        <td><code>env.BUCKET.put(key, value, options?)</code></td>
+        <td><code>Promise&lt;R2Object&gt;</code></td>
+        <td><code>value</code> supports <strong>string</strong>, <strong>ArrayBuffer</strong>, <strong>TypedArray</strong>, <strong>DataView</strong>, <strong>Blob</strong>, and <strong>File</strong>. Supports <code>httpMetadata</code> and <code>customMetadata</code>.</td>
+      </tr>
+      <tr>
+        <td><code>env.BUCKET.delete(keyOrKeys)</code></td>
+        <td><code>Promise&lt;void&gt;</code></td>
+        <td>Accepts a single key string or an array of keys.</td>
+      </tr>
+      <tr>
+        <td><code>env.BUCKET.list(options?)</code></td>
+        <td><code>Promise&lt;{'{'} objects, truncated, cursor, delimitedPrefixes {'}'}&gt;</code></td>
+        <td>Options: <code>{'{'} prefix?, cursor?, delimiter?, limit? {'}'}</code>. Default limit is 1000.</td>
+      </tr>
+      <tr>
+        <td><code>env.BUCKET.createSignedUrl(key, options?)</code></td>
+        <td><code>Promise&lt;string&gt;</code></td>
+        <td>Options: <code>{'{'} expiresIn? {'}'}</code> seconds (clamped to 1-604800).</td>
+      </tr>
+      <tr>
+        <td><code>env.BUCKET.publicUrl(key)</code></td>
+        <td><code>string</code></td>
+        <td>Builds a direct object URL for public buckets.</td>
+      </tr>
+    </tbody>
+  </table>
 
   <h3>ASSETS binding</h3>
   <p>
@@ -277,8 +678,8 @@ import CodeBlock from '../../components/CodeBlock.astro';
 
   <h2>API routes</h2>
   <p>
-    All worker-related settings are managed via the API under <code>/api/v1/sites/:id/worker/</code>.
-    These endpoints require authentication and site ownership.
+    Worker runtime endpoints are under <code>/api/v1/sites/:id/worker/</code>. Storage bindings are under
+    <code>/api/v1/sites/:id/storage/buckets</code>. All endpoints below require authentication and site ownership.
   </p>
 
   <table>
@@ -339,6 +740,31 @@ import CodeBlock from '../../components/CodeBlock.astro';
         <td><code>GET</code></td>
         <td><code>/worker/logs</code></td>
         <td>Get recent worker logs (last 100, newest first)</td>
+      </tr>
+      <tr>
+        <td><code>POST</code></td>
+        <td><code>/storage/buckets</code></td>
+        <td>Create a storage bucket binding</td>
+      </tr>
+      <tr>
+        <td><code>GET</code></td>
+        <td><code>/storage/buckets</code></td>
+        <td>List storage bucket bindings for the site</td>
+      </tr>
+      <tr>
+        <td><code>PATCH</code></td>
+        <td><code>/storage/buckets/:bucketId</code></td>
+        <td>Update bucket settings (for example, public read toggle)</td>
+      </tr>
+      <tr>
+        <td><code>DELETE</code></td>
+        <td><code>/storage/buckets/:bucketId</code></td>
+        <td>Delete bucket binding and bucket data</td>
+      </tr>
+      <tr>
+        <td><code>POST</code></td>
+        <td><code>/storage/buckets/:bucketId/upload-url</code></td>
+        <td>Generate a presigned PUT URL for direct uploads</td>
       </tr>
     </tbody>
   </table>

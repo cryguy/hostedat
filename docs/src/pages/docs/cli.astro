@@ -6,9 +6,24 @@ import CodeBlock from '../../components/CodeBlock.astro';
 <DocsLayout title="CLI Reference">
   <h1>CLI Reference</h1>
   <p>
-    The <code>hostedat</code> CLI is the primary way to deploy sites. It authenticates via API keys and
-    communicates with the hostedat server over HTTPS.
+    The <code>hostedat</code> CLI manages deployments, storage buckets, and S3-compatible credentials.
+    It authenticates with API keys and talks to your hostedat server over HTTPS.
   </p>
+
+  <h2>Command summary</h2>
+  <table>
+    <thead>
+      <tr><th>Command</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>hostedat login</code></td><td>Authenticate in browser and save API key</td></tr>
+      <tr><td><code>hostedat sites ...</code></td><td>Create, list, and delete sites</td></tr>
+      <tr><td><code>hostedat deploy ...</code></td><td>Deploy a directory to a site</td></tr>
+      <tr><td><code>hostedat storage ...</code></td><td>Manage worker storage buckets and uploads</td></tr>
+      <tr><td><code>hostedat storage-credentials ...</code></td><td>Manage S3-compatible access keys</td></tr>
+      <tr><td><code>hostedat version</code></td><td>Print CLI version and default server</td></tr>
+    </tbody>
+  </table>
 
   <h2>Global flags</h2>
   <table>
@@ -21,8 +36,8 @@ import CodeBlock from '../../components/CodeBlock.astro';
     </tbody>
   </table>
 
-  <p>Resolution order for the server URL: <code>--server</code> flag &rarr; <code>HOSTEDAT_SERVER</code> env &rarr; config file &rarr; compiled default.</p>
-  <p>Resolution order for the API key: <code>HOSTEDAT_API_KEY</code> env &rarr; <code>--api-key</code> flag &rarr; config file.</p>
+  <p>Resolution order for the server URL: <code>--server</code> &rarr; <code>HOSTEDAT_SERVER</code> &rarr; config file &rarr; compiled default.</p>
+  <p>Resolution order for the API key: <code>HOSTEDAT_API_KEY</code> &rarr; <code>--api-key</code> &rarr; config file.</p>
 
   <h2>Config file</h2>
   <p>The CLI stores its config at <code>~/.hostedat/config.json</code>:</p>
@@ -30,7 +45,7 @@ import CodeBlock from '../../components/CodeBlock.astro';
     title="~/.hostedat/config.json"
     code={`{
   "server": "https://hostedat.ditto.moe",
-  "api_key": "sk_..."
+  "api_key": "hd_..."
 }`}
     lang="json"
   />
@@ -38,14 +53,22 @@ import CodeBlock from '../../components/CodeBlock.astro';
 
   <hr />
 
-  <h2>hostedat login</h2>
+  <h2>Authentication</h2>
+
+  <h3>hostedat login</h3>
   <p>Authenticate with the server via browser-based OAuth flow.</p>
   <CodeBlock code="hostedat login" lang="bash" />
   <p>Opens your browser to the server's login page. After authenticating, an API key is generated and saved to the config file.</p>
 
   <hr />
 
-  <h2>hostedat sites list</h2>
+  <h2>Site management</h2>
+
+  <p>
+    Commands that take <code>&lt;site&gt;</code> accept a site ID, site name, or subdomain slug.
+  </p>
+
+  <h3>hostedat sites list</h3>
   <p>List all your sites. Alias: <code>hostedat sites ls</code></p>
   <CodeBlock
     code={`hostedat sites list
@@ -58,7 +81,7 @@ import CodeBlock from '../../components/CodeBlock.astro';
 
   <hr />
 
-  <h2>hostedat sites create</h2>
+  <h3>hostedat sites create</h3>
   <p>Create a new site.</p>
   <CodeBlock code='hostedat sites create <name> [--subdomain <slug>]' lang="bash" />
 
@@ -84,33 +107,36 @@ import CodeBlock from '../../components/CodeBlock.astro';
 
   <hr />
 
-  <h2>hostedat sites delete</h2>
+  <h3>hostedat sites delete</h3>
   <p>Delete a site and all its deployments. Prompts for confirmation unless <code>--yes</code> is passed.</p>
-  <CodeBlock code='hostedat sites delete <site-id> [--yes]' lang="bash" />
+  <CodeBlock code='hostedat sites delete <site> [--yes]' lang="bash" />
 
   <table>
     <thead>
       <tr><th>Argument / Flag</th><th>Description</th></tr>
     </thead>
     <tbody>
-      <tr><td><code>&lt;site-id&gt;</code></td><td>The site ID to delete (required)</td></tr>
+      <tr><td><code>&lt;site&gt;</code></td><td>Site ID, name, or subdomain slug (required)</td></tr>
       <tr><td><code>--yes</code></td><td>Skip confirmation prompt</td></tr>
     </tbody>
   </table>
 
   <hr />
 
-  <h2>hostedat deploy</h2>
+  <h2>Deployments</h2>
+
+  <h3>hostedat deploy</h3>
   <p>Deploy a directory to a site. The directory is zipped and uploaded as a new version.</p>
-  <CodeBlock code='hostedat deploy <site-id> <directory>' lang="bash" />
+  <CodeBlock code='hostedat deploy <site> <directory> [--spa]' lang="bash" />
 
   <table>
     <thead>
-      <tr><th>Argument</th><th>Description</th></tr>
+      <tr><th>Argument / Flag</th><th>Description</th></tr>
     </thead>
     <tbody>
-      <tr><td><code>&lt;site-id&gt;</code></td><td>The site ID or subdomain slug to deploy to</td></tr>
+      <tr><td><code>&lt;site&gt;</code></td><td>Site ID, name, or subdomain slug</td></tr>
       <tr><td><code>&lt;directory&gt;</code></td><td>Path to the directory to upload (e.g., <code>./dist</code>)</td></tr>
+      <tr><td><code>--spa</code></td><td>Enable SPA mode on the site after successful deploy</td></tr>
     </tbody>
   </table>
 
@@ -121,6 +147,73 @@ import CodeBlock from '../../components/CodeBlock.astro';
 # Deployed! Version: v4`}
     lang="bash"
   />
+
+  <hr />
+
+  <h2>Storage buckets</h2>
+  <p>
+    Storage commands manage bucket bindings used by worker <code>env</code> bindings (for example,
+    <code>env.DOWNLOADS</code>). Buckets can be toggled between public and private directly from the CLI.
+  </p>
+
+  <h3>hostedat storage list</h3>
+  <p>List storage buckets for a site.</p>
+  <CodeBlock code='hostedat storage list <site>' lang="bash" />
+
+  <h3>hostedat storage create</h3>
+  <p>Create a storage bucket binding for a site.</p>
+  <CodeBlock code='hostedat storage create <site> --name <BINDING> --bucket <bucket-name> [--public]' lang="bash" />
+
+  <table>
+    <thead>
+      <tr><th>Flag</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>--name</code></td><td>Binding name used in workers (for example, <code>DOWNLOADS</code>)</td></tr>
+      <tr><td><code>--bucket</code></td><td>S3 bucket name (must start with your site ID)</td></tr>
+      <tr><td><code>--public</code></td><td>Enable unauthenticated public read access at creation</td></tr>
+    </tbody>
+  </table>
+
+  <h3>hostedat storage update</h3>
+  <p>Change bucket visibility to public or private.</p>
+  <CodeBlock
+    code={`# Make a bucket public
+hostedat storage update <site> <bucket-id> --public
+
+# Make a bucket private
+hostedat storage update <site> <bucket-id> --private`}
+    lang="bash"
+  />
+  <p>Pass exactly one of <code>--public</code> or <code>--private</code>.</p>
+
+  <h3>hostedat storage upload</h3>
+  <p>Upload a file into a bucket using a presigned URL generated by the server.</p>
+  <CodeBlock code='hostedat storage upload <site> <bucket-id> <file> [--key <object-key>]' lang="bash" />
+
+  <h3>hostedat storage delete</h3>
+  <p>Delete a storage bucket and its data. Prompts for confirmation unless <code>--yes</code> is passed.</p>
+  <CodeBlock code='hostedat storage delete <site> <bucket-id> [--yes]' lang="bash" />
+
+  <hr />
+
+  <h2>Storage credentials (S3 API)</h2>
+  <p>
+    Manage S3-compatible access keys for external tools. You can use either
+    <code>hostedat storage-credentials</code> or the alias <code>hostedat storage-creds</code>.
+  </p>
+
+  <h3>hostedat storage-credentials list</h3>
+  <p>List your credentials. Alias: <code>hostedat storage-credentials ls</code>.</p>
+  <CodeBlock code='hostedat storage-credentials list' lang="bash" />
+
+  <h3>hostedat storage-credentials create</h3>
+  <p>Create a credential. The secret access key is shown once.</p>
+  <CodeBlock code='hostedat storage-credentials create <name>' lang="bash" />
+
+  <h3>hostedat storage-credentials delete</h3>
+  <p>Delete a credential. Prompts for confirmation unless <code>--yes</code> is passed.</p>
+  <CodeBlock code='hostedat storage-credentials delete <credential-id> [--yes]' lang="bash" />
 
   <hr />
 
@@ -135,5 +228,5 @@ import CodeBlock from '../../components/CodeBlock.astro';
   />
 
   <hr />
-  <p>Next: <a href="/docs/server">Server Guide</a> for running your own instance.</p>
+  <p>Next: <a href="/docs/workers">Worker Runtime</a> for binding storage buckets in <code>env</code>.</p>
 </DocsLayout>
