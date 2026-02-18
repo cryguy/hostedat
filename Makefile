@@ -85,6 +85,10 @@ docs-dev:
 release:
 	bash scripts/build-release.sh
 
+# Upload binaries to S3 bucket via hostedat CLI (reads credentials from deploy.env)
+upload-downloads:
+	set -a && . ./deploy.env && set +a && bash scripts/build-release.sh --skip-build --skip-docs
+
 # Deploy docs site to hostedat (reads credentials from deploy.env)
 deploy-docs:
 	set -a && . ./deploy.env && set +a && bin/$(CLI_NAME) deploy $(DOCS_SITE) docs/dist

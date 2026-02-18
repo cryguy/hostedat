@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/cryguy/hostedat/internal/config"
 	"github.com/cryguy/hostedat/internal/models"
@@ -32,6 +34,14 @@ func (f *fakeBucketClient) MakeBucket(_ context.Context, bucketName string, _ mi
 func (f *fakeBucketClient) RemoveBucket(_ context.Context, bucketName string) error {
 	f.removed = append(f.removed, bucketName)
 	return f.removeErr
+}
+
+func (f *fakeBucketClient) PresignedPutObject(_ context.Context, _, _ string, _ time.Duration) (*url.URL, error) {
+	return &url.URL{Scheme: "https", Host: "storage.example.com", Path: "/test"}, nil
+}
+
+func (f *fakeBucketClient) GetObject(_ context.Context, _, _ string, _ minio.GetObjectOptions) (*minio.Object, error) {
+	return nil, nil
 }
 
 type fakeIAMClient struct {

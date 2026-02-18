@@ -1,12 +1,16 @@
 package seaweedfs
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -18,6 +22,29 @@ type Manager struct {
 	Config config.ObjectStorageConfig
 	Client *Client
 	cmd    *exec.Cmd
+
+	// AccessKeyID and SecretAccessKey are the admin credentials used to
+	// authenticate with the managed SeaweedFS instance. They are either
+	// read from config, loaded from a persisted s3.config.json, or
+	// generated on first run.
+	AccessKeyID     string
+	SecretAccessKey string
+}
+
+// s3ConfigFile is the SeaweedFS S3 config structure.
+type s3ConfigFile struct {
+	Identities []s3Identity `json:"identities"`
+}
+
+type s3Identity struct {
+	Name        string         `json:"name"`
+	Credentials []s3Credential `json:"credentials"`
+	Actions     []string       `json:"actions"`
+}
+
+type s3Credential struct {
+	AccessKey string `json:"accessKey"`
+	SecretKey string `json:"secretKey"`
 }
 
 // NewManager creates a new SeaweedFS manager.
@@ -44,6 +71,12 @@ func (m *Manager) Start() error {
 		return err
 	}
 
+	// Ensure S3 credentials exist (from config, persisted file, or generated).
+	s3ConfigPath, err := m.ensureS3Config()
+	if err != nil {
+		return fmt.Errorf("setting up S3 credentials: %w", err)
+	}
+
 	weedBinary := m.Config.BinaryPath
 	if weedBinary == "" {
 		weedBinary = "weed"
@@ -55,6 +88,7 @@ func (m *Manager) Start() error {
 		fmt.Sprintf("-master.port=%d", masterPort),
 		fmt.Sprintf("-volume.port=%d", volumePort),
 		"-ip=127.0.0.1",
+		"-s3.config="+s3ConfigPath,
 	)
 	m.cmd.Stdout = os.Stdout
 	m.cmd.Stderr = os.Stderr
@@ -71,6 +105,83 @@ func (m *Manager) Start() error {
 
 	log.Printf("SeaweedFS started (pid %d), S3 at %s", m.cmd.Process.Pid, m.Config.S3Endpoint)
 	return nil
+}
+
+// ensureS3Config ensures S3 admin credentials are available and the
+// s3.config.json file exists. Credentials are resolved in order:
+// 1. From the application config (auth.access_key_id / secret_access_key)
+// 2. From an existing persisted s3.config.json in the data directory
+// 3. Generated fresh and persisted for subsequent restarts
+func (m *Manager) ensureS3Config() (string, error) {
+	configPath := filepath.Join(m.Config.DataDir, "s3.config.json")
+
+	// If credentials are in the application config, use those.
+	if m.Config.Auth.AccessKeyID != "" && m.Config.Auth.SecretAccessKey != "" {
+		m.AccessKeyID = m.Config.Auth.AccessKeyID
+		m.SecretAccessKey = m.Config.Auth.SecretAccessKey
+		return m.writeS3Config(configPath)
+	}
+
+	// Try loading from an existing persisted config.
+	if data, err := os.ReadFile(configPath); err == nil {
+		var cfg s3ConfigFile
+		if err := json.Unmarshal(data, &cfg); err == nil {
+			for _, id := range cfg.Identities {
+				if id.Name == "admin" && len(id.Credentials) > 0 {
+					m.AccessKeyID = id.Credentials[0].AccessKey
+					m.SecretAccessKey = id.Credentials[0].SecretKey
+					log.Printf("Loaded existing S3 credentials from %s", configPath)
+					return configPath, nil
+				}
+			}
+		}
+	}
+
+	// Generate new credentials.
+	accessKey, err := randomHex(16)
+	if err != nil {
+		return "", fmt.Errorf("generating access key: %w", err)
+	}
+	secretKey, err := randomHex(32)
+	if err != nil {
+		return "", fmt.Errorf("generating secret key: %w", err)
+	}
+	m.AccessKeyID = accessKey
+	m.SecretAccessKey = secretKey
+	log.Printf("Generated new S3 admin credentials (persisted to %s)", configPath)
+	return m.writeS3Config(configPath)
+}
+
+func (m *Manager) writeS3Config(path string) (string, error) {
+	cfg := s3ConfigFile{
+		Identities: []s3Identity{
+			{
+				Name: "admin",
+				Credentials: []s3Credential{
+					{
+						AccessKey: m.AccessKeyID,
+						SecretKey: m.SecretAccessKey,
+					},
+				},
+				Actions: []string{
+					"Admin",
+					"Read",
+					"Write",
+					"List",
+					"Tagging",
+					"Lock",
+				},
+			},
+		},
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // Stop gracefully shuts down the SeaweedFS subprocess.
@@ -148,4 +259,12 @@ func parsePort(endpoint string) (int, error) {
 	var p int
 	_, err = fmt.Sscanf(port, "%d", &p)
 	return p, err
+}
+
+func randomHex(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }

@@ -260,9 +260,15 @@ export const storage = {
   listBuckets(siteId: string) {
     return request<StorageBucket[]>(`/sites/${siteId}/storage/buckets`)
   },
-  createBucket(siteId: string, data: { name: string; bucket_name: string }) {
+  createBucket(siteId: string, data: { name: string; bucket_name: string; public?: boolean }) {
     return request<StorageBucket>(`/sites/${siteId}/storage/buckets`, {
       method: "POST",
+      body: JSON.stringify(data),
+    })
+  },
+  updateBucket(siteId: string, bucketId: string, data: { public: boolean }) {
+    return request<StorageBucket>(`/sites/${siteId}/storage/buckets/${bucketId}`, {
+      method: "PATCH",
       body: JSON.stringify(data),
     })
   },

@@ -56,6 +56,7 @@ type Engine struct {
 	db          *gorm.DB
 	store       *storage.Manager
 	minioClient interface{} // *minio.Client; stored as interface{} because the minio package is only imported by cmd/server
+	publicS3URL string     // public-facing S3 URL for presigned URLs (e.g. https://storage.example.com)
 	logDone     chan struct{}
 }
 
@@ -79,6 +80,11 @@ func (e *Engine) SetStore(store *storage.Manager) {
 // SetMinioClient sets the minio-go client for R2-compatible storage bindings.
 func (e *Engine) SetMinioClient(client interface{}) {
 	e.minioClient = client
+}
+
+// SetPublicS3URL sets the public-facing S3 URL used for presigned URLs.
+func (e *Engine) SetPublicS3URL(u string) {
+	e.publicS3URL = u
 }
 
 // logRetentionLoop deletes worker logs older than max_log_retention days.
@@ -325,7 +331,7 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 		return result
 	}
 
-	jsEnv := buildEnvObject(ctx, env, e.db, e.minioClient)
+	jsEnv := buildEnvObject(ctx, env, e.db, e.minioClient, e.publicS3URL)
 	jsCtx := buildExecContext(ctx)
 
 	// Call __worker_module__.fetch(request, env, ctx).
@@ -462,7 +468,7 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 	event.SetPropertyStr("scheduledTime", ctx.NewFloat64(float64(time.Now().UnixMilli())))
 	event.SetPropertyStr("cron", ctx.NewString(cron))
 
-	jsEnv := buildEnvObject(ctx, env, e.db, e.minioClient)
+	jsEnv := buildEnvObject(ctx, env, e.db, e.minioClient, e.publicS3URL)
 	jsCtx := buildExecContext(ctx)
 
 	// Call __worker_module__.scheduled(event, env, ctx).

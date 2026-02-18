@@ -46,6 +46,8 @@ func main() {
 	root.AddCommand(loginCmd())
 	root.AddCommand(sitesCmd())
 	root.AddCommand(deployCmd())
+	root.AddCommand(storageCmd())
+	root.AddCommand(storageCredentialsCmd())
 	root.AddCommand(versionCmd())
 
 	if err := root.Execute(); err != nil {
@@ -282,6 +284,275 @@ func detectSPA(dir string) bool {
 	})
 
 	return htmlCount <= 2
+}
+
+func storageCmd() *cobra.Command {
+	storage := &cobra.Command{
+		Use:   "storage",
+		Short: "Manage storage buckets for a site",
+	}
+
+	// list
+	list := &cobra.Command{
+		Use:   "list <site>",
+		Short: "List storage buckets for a site",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := newClient()
+			if err != nil {
+				return err
+			}
+
+			siteID, err := c.ResolveSiteID(args[0])
+			if err != nil {
+				return err
+			}
+
+			buckets, err := c.ListBuckets(siteID)
+			if err != nil {
+				return err
+			}
+
+			if len(buckets) == 0 {
+				fmt.Println("No storage buckets found.")
+				return nil
+			}
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "ID\tBINDING\tBUCKET NAME\tPUBLIC\tCREATED")
+			for _, b := range buckets {
+				pub := "no"
+				if b.Public {
+					pub = "yes"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+					b.ID, b.Name, b.BucketName, pub, b.CreatedAt.Format("2006-01-02"))
+			}
+			w.Flush()
+			return nil
+		},
+	}
+
+	// create
+	var bindingName, bucketName string
+	var publicFlag bool
+	create := &cobra.Command{
+		Use:   "create <site>",
+		Short: "Create a storage bucket for a site",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if bindingName == "" || bucketName == "" {
+				return fmt.Errorf("both --name and --bucket are required")
+			}
+
+			c, err := newClient()
+			if err != nil {
+				return err
+			}
+
+			siteID, err := c.ResolveSiteID(args[0])
+			if err != nil {
+				return err
+			}
+
+			bucket, err := c.CreateBucket(siteID, bindingName, bucketName, publicFlag)
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("Storage bucket created!\n")
+			fmt.Printf("  ID:          %s\n", bucket.ID)
+			fmt.Printf("  Binding:     %s\n", bucket.Name)
+			fmt.Printf("  Bucket name: %s\n", bucket.BucketName)
+			fmt.Printf("  Public:      %v\n", bucket.Public)
+			return nil
+		},
+	}
+	create.Flags().StringVar(&bindingName, "name", "", "binding name (e.g. IMAGES)")
+	create.Flags().StringVar(&bucketName, "bucket", "", "S3 bucket name (must start with site ID)")
+	create.Flags().BoolVar(&publicFlag, "public", false, "allow unauthenticated read access")
+
+	// delete
+	var yes bool
+	del := &cobra.Command{
+		Use:   "delete <site> <bucket-id>",
+		Short: "Delete a storage bucket",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := newClient()
+			if err != nil {
+				return err
+			}
+
+			siteID, err := c.ResolveSiteID(args[0])
+			if err != nil {
+				return err
+			}
+
+			if !yes {
+				fmt.Printf("Delete storage bucket %s? This will remove all stored data. [y/N] ", args[1])
+				reader := bufio.NewReader(os.Stdin)
+				answer, _ := reader.ReadString('\n')
+				if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+					fmt.Println("Aborted.")
+					return nil
+				}
+			}
+
+			if err := c.DeleteBucket(siteID, args[1]); err != nil {
+				return err
+			}
+
+			fmt.Println("Storage bucket deleted.")
+			return nil
+		},
+	}
+	del.Flags().BoolVar(&yes, "yes", false, "skip confirmation")
+
+	// upload
+	var uploadKey string
+	upload := &cobra.Command{
+		Use:   "upload <site> <bucket-id> <file>",
+		Short: "Upload a file to a storage bucket",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := newClient()
+			if err != nil {
+				return err
+			}
+
+			siteID, err := c.ResolveSiteID(args[0])
+			if err != nil {
+				return err
+			}
+
+			data, err := os.ReadFile(args[2])
+			if err != nil {
+				return fmt.Errorf("reading file: %w", err)
+			}
+
+			key := uploadKey
+			if key == "" {
+				key = filepath.Base(args[2])
+			}
+
+			if err := c.UploadToBucket(siteID, args[1], key, data); err != nil {
+				return err
+			}
+
+			fmt.Printf("Uploaded %s as %s\n", args[2], key)
+			return nil
+		},
+	}
+	upload.Flags().StringVar(&uploadKey, "key", "", "object key (defaults to filename)")
+
+	storage.AddCommand(list, create, del, upload)
+	return storage
+}
+
+func storageCredentialsCmd() *cobra.Command {
+	creds := &cobra.Command{
+		Use:     "storage-credentials",
+		Aliases: []string{"storage-creds"},
+		Short:   "Manage S3-compatible storage credentials",
+	}
+
+	// list
+	list := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List your storage credentials",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := newClient()
+			if err != nil {
+				return err
+			}
+
+			credentials, err := c.ListStorageCredentials()
+			if err != nil {
+				return err
+			}
+
+			if len(credentials) == 0 {
+				fmt.Println("No storage credentials found.")
+				return nil
+			}
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "ID\tNAME\tACCESS KEY ID\tLAST USED\tCREATED")
+			for _, cr := range credentials {
+				lastUsed := "Never"
+				if cr.LastUsedAt != nil {
+					lastUsed = cr.LastUsedAt.Format("2006-01-02")
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+					cr.ID, cr.Name, cr.AccessKeyID, lastUsed, cr.CreatedAt.Format("2006-01-02"))
+			}
+			w.Flush()
+			return nil
+		},
+	}
+
+	// create
+	create := &cobra.Command{
+		Use:   "create <name>",
+		Short: "Create a storage credential (secret is shown once)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := newClient()
+			if err != nil {
+				return err
+			}
+
+			cred, err := c.CreateStorageCredential(args[0])
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("Storage credential created!\n")
+			fmt.Printf("  Name:              %s\n", cred.Name)
+			fmt.Printf("  Access Key ID:     %s\n", cred.AccessKeyID)
+			fmt.Printf("  Secret Access Key: %s\n", cred.SecretAccessKey)
+			fmt.Println()
+			fmt.Println("Save the secret access key now — it will not be shown again.")
+			return nil
+		},
+	}
+
+	// delete
+	var yes bool
+	del := &cobra.Command{
+		Use:   "delete <id>",
+		Short: "Delete a storage credential",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := newClient()
+			if err != nil {
+				return err
+			}
+
+			if !yes {
+				fmt.Printf("Delete storage credential %s? Any integrations using it will stop working. [y/N] ", args[0])
+				reader := bufio.NewReader(os.Stdin)
+				answer, _ := reader.ReadString('\n')
+				if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+					fmt.Println("Aborted.")
+					return nil
+				}
+			}
+
+			if err := c.DeleteStorageCredential(args[0]); err != nil {
+				return err
+			}
+
+			fmt.Println("Storage credential deleted.")
+			return nil
+		},
+	}
+	del.Flags().BoolVar(&yes, "yes", false, "skip confirmation")
+
+	creds.AddCommand(list, create, del)
+	return creds
 }
 
 func versionCmd() *cobra.Command {

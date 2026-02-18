@@ -1,10 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react"
 import { toast } from "sonner"
-import { Loader2, Trash2 } from "lucide-react"
+import { Globe, Loader2, Trash2 } from "lucide-react"
 import { storage } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { ConfirmDialog } from "@/components/shared/confirm-dialog"
 import type { StorageBucket } from "@/types/api"
@@ -18,6 +19,7 @@ export function WorkerStorage({ siteId }: WorkerStorageProps) {
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState("")
   const [bucketName, setBucketName] = useState("")
+  const [publicAccess, setPublicAccess] = useState(false)
   const [creating, setCreating] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
@@ -42,15 +44,27 @@ export function WorkerStorage({ siteId }: WorkerStorageProps) {
 
     setCreating(true)
     try {
-      await storage.createBucket(siteId, { name: name.trim(), bucket_name: bucketName.trim() })
+      await storage.createBucket(siteId, { name: name.trim(), bucket_name: bucketName.trim(), public: publicAccess })
       toast.success("Storage bucket created")
       setName("")
       setBucketName("")
+      setPublicAccess(false)
       await load()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create bucket")
     } finally {
       setCreating(false)
+    }
+  }
+
+  const handleTogglePublic = async (bucket: StorageBucket) => {
+    const newPublic = !bucket.public
+    try {
+      await storage.updateBucket(siteId, bucket.id, { public: newPublic })
+      setBuckets((prev) => prev.map((b) => (b.id === bucket.id ? { ...b, public: newPublic } : b)))
+      toast.success(newPublic ? "Bucket is now public" : "Bucket is now private")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update bucket")
     }
   }
 
@@ -83,6 +97,7 @@ export function WorkerStorage({ siteId }: WorkerStorageProps) {
               <TableRow>
                 <TableHead>Binding Name</TableHead>
                 <TableHead>Bucket Name</TableHead>
+                <TableHead>Public</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead className="w-[100px]">Actions</TableHead>
               </TableRow>
@@ -91,7 +106,21 @@ export function WorkerStorage({ siteId }: WorkerStorageProps) {
               {buckets.map((bucket) => (
                 <TableRow key={bucket.id}>
                   <TableCell className="font-mono text-sm">{bucket.name}</TableCell>
-                  <TableCell className="font-mono text-sm text-muted-foreground">{bucket.bucket_name}</TableCell>
+                  <TableCell>
+                    <span className="font-mono text-sm text-muted-foreground">{bucket.bucket_name}</span>
+                    {bucket.public && (
+                      <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
+                        <Globe className="size-3" />
+                        <span>storage.{window.location.hostname}/{bucket.bucket_name}/</span>
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Switch
+                      checked={bucket.public}
+                      onCheckedChange={() => handleTogglePublic(bucket)}
+                    />
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {new Date(bucket.created_at).toLocaleString()}
                   </TableCell>
@@ -132,6 +161,10 @@ export function WorkerStorage({ siteId }: WorkerStorageProps) {
             placeholder="my-images"
             className="font-mono"
           />
+        </div>
+        <div className="flex items-center gap-2">
+          <Switch id="public-access" checked={publicAccess} onCheckedChange={setPublicAccess} />
+          <Label htmlFor="public-access">Public access</Label>
         </div>
         <Button type="submit" disabled={creating || !name.trim() || !bucketName.trim()}>
           {creating && <Loader2 className="size-4 animate-spin mr-2" />}

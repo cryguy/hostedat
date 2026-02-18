@@ -81,6 +81,10 @@ func main() {
 	var iamClient *seaweedfs.Client
 	var s3Proxy http.Handler
 	if cfg.ObjectStorage.Enabled {
+		// Resolve S3 admin credentials: config > managed auto-generated.
+		s3AccessKey := cfg.ObjectStorage.Auth.AccessKeyID
+		s3SecretKey := cfg.ObjectStorage.Auth.SecretAccessKey
+
 		if cfg.ObjectStorage.Managed {
 			mgr := seaweedfs.NewManager(cfg.ObjectStorage)
 			if err := mgr.Start(); err != nil {
@@ -88,6 +92,12 @@ func main() {
 			}
 			defer mgr.Stop()
 			iamClient = mgr.Client
+
+			// Use auto-configured credentials if not explicitly set.
+			if s3AccessKey == "" && s3SecretKey == "" {
+				s3AccessKey = mgr.AccessKeyID
+				s3SecretKey = mgr.SecretAccessKey
+			}
 		} else {
 			iamClient = seaweedfs.NewClient(cfg.ObjectStorage.S3Endpoint)
 		}
@@ -103,8 +113,8 @@ func main() {
 		useSSL := strings.HasPrefix(cfg.ObjectStorage.S3Endpoint, "https://")
 
 		var creds *credentials.Credentials
-		if cfg.ObjectStorage.Auth.AccessKeyID != "" && cfg.ObjectStorage.Auth.SecretAccessKey != "" {
-			creds = credentials.NewStaticV4(cfg.ObjectStorage.Auth.AccessKeyID, cfg.ObjectStorage.Auth.SecretAccessKey, "")
+		if s3AccessKey != "" && s3SecretKey != "" {
+			creds = credentials.NewStaticV4(s3AccessKey, s3SecretKey, "")
 		}
 
 		minioClient, err := minio.New(s3Host, &minio.Options{
@@ -117,6 +127,12 @@ func main() {
 		} else {
 			s3Client = minioClient
 			workerEngine.SetMinioClient(minioClient)
+			workerEngine.SetPublicS3URL("https://storage." + cfg.Domain)
+
+			// Wrap S3 proxy to serve public bucket objects without auth.
+			if s3Proxy != nil {
+				s3Proxy = api.NewPublicS3Wrapper(s3Proxy, db, minioClient)
+			}
 		}
 	}
 

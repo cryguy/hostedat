@@ -9,6 +9,7 @@ import { DeployUpload } from "@/components/sites/deploy-upload"
 import { DeploymentList } from "@/components/sites/deployment-list"
 import { SiteSettings } from "@/components/sites/site-settings"
 import { WorkerPanel } from "@/components/sites/worker-panel"
+import { WorkerStorage } from "@/components/sites/worker-storage"
 import { getInstanceDomain } from "@/lib/config"
 import type { Site, Deployment } from "@/types/api"
 
@@ -116,6 +117,7 @@ export default function SiteDetailPage() {
           <TabsTrigger value="deploy">Deploy</TabsTrigger>
           <TabsTrigger value="deployments">Deployments</TabsTrigger>
           <TabsTrigger value="worker">Worker</TabsTrigger>
+          <TabsTrigger value="storage">Storage</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
 
@@ -137,6 +139,18 @@ export default function SiteDetailPage() {
 
         <TabsContent value="worker">
           <WorkerPanel siteId={site.id} hasWorker={site.has_worker} />
+        </TabsContent>
+
+        <TabsContent value="storage">
+          <div className="space-y-4">
+            <div>
+              <h3 className="text-lg font-semibold mb-1">Storage Buckets</h3>
+              <p className="text-sm text-muted-foreground">
+                S3-compatible object storage buckets. Workers can access these via <code className="bg-muted px-1.5 py-0.5 rounded text-xs">env.YOUR_BUCKET</code>.
+              </p>
+            </div>
+            <WorkerStorage siteId={site.id} />
+          </div>
         </TabsContent>
 
         <TabsContent value="settings">

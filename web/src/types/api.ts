@@ -110,6 +110,7 @@ export interface StorageBucket {
   site_id: string
   name: string
   bucket_name: string
+  public: boolean
   garage_bucket_id: string
   created_at: string
 }

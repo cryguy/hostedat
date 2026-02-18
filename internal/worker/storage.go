@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/fastschema/qjs"
 	minio "github.com/minio/minio-go/v7"
@@ -13,8 +15,9 @@ import (
 
 // StorageBridge backs a single R2-compatible bucket binding.
 type StorageBridge struct {
-	Client     *minio.Client
-	BucketName string
+	Client      *minio.Client
+	BucketName  string
+	PublicS3URL string // public-facing S3 URL (e.g. https://storage.example.com) for presigned URLs
 }
 
 // buildStorageBinding creates a JS object with R2-compatible get/put/delete/head/list
@@ -292,7 +295,66 @@ func buildStorageBinding(ctx *qjs.Context, bridge *StorageBridge) *qjs.Value {
 	}, true)
 	bucket.SetPropertyStr("list", listFn)
 
+	// createSignedUrl(key, opts?) -> Promise<string>
+	// opts: { expiresIn?: number } (seconds, default 3600, max 604800)
+	if bridge.PublicS3URL != "" {
+		signFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
+			c := this.Context()
+			args := this.Args()
+			promise := this.Promise()
+			if len(args) == 0 {
+				promise.Reject(c.NewError(fmt.Errorf("BUCKET.createSignedUrl requires a key argument")))
+				return c.NewUndefined(), nil
+			}
+			key := args[0].String()
+
+			expiry := 3600 // default 1 hour
+			if len(args) > 1 && args[1].IsObject() {
+				eVal := args[1].GetPropertyStr("expiresIn")
+				if !eVal.IsUndefined() && !eVal.IsNull() {
+					expiry = int(eVal.Int32())
+				}
+				eVal.Free()
+			}
+			if expiry < 1 {
+				expiry = 1
+			}
+			if expiry > 604800 {
+				expiry = 604800 // cap at 7 days
+			}
+
+			presigned, err := bridge.Client.PresignedGetObject(
+				context.Background(),
+				bridge.BucketName,
+				key,
+				time.Duration(expiry)*time.Second,
+				nil,
+			)
+			if err != nil {
+				promise.Reject(c.NewError(fmt.Errorf("creating signed URL: %w", err)))
+				return c.NewUndefined(), nil
+			}
+
+			// Rewrite internal S3 URL to public-facing storage URL.
+			publicURL := rewritePresignedURL(presigned, bridge.PublicS3URL)
+			promise.Resolve(c.NewString(publicURL))
+			return c.NewUndefined(), nil
+		}, true)
+		bucket.SetPropertyStr("createSignedUrl", signFn)
+	}
+
 	return bucket
+}
+
+// rewritePresignedURL replaces the scheme+host of a presigned URL with the public S3 URL.
+func rewritePresignedURL(presigned *url.URL, publicBase string) string {
+	pub, err := url.Parse(publicBase)
+	if err != nil {
+		return presigned.String()
+	}
+	presigned.Scheme = pub.Scheme
+	presigned.Host = pub.Host
+	return presigned.String()
 }
 
 // buildR2Object creates a JS object matching the Cloudflare R2Object shape.

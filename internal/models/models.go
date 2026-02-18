@@ -247,6 +247,7 @@ type StorageBucket struct {
 	SiteID     string    `gorm:"not null;uniqueIndex:idx_storage_buckets_site_name,priority:1" json:"site_id"`
 	Name       string    `gorm:"not null;uniqueIndex:idx_storage_buckets_site_name,priority:2" json:"name"`
 	BucketName string    `gorm:"uniqueIndex;not null" json:"bucket_name"`
+	Public     bool      `gorm:"default:false" json:"public"`
 	CreatedAt  time.Time `json:"created_at"`
 
 	Site Site `gorm:"foreignKey:SiteID" json:"-"`

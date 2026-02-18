@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/shared/empty-state"
 import { KeyList } from "@/components/api-keys/key-list"
 import { S3CredentialList } from "@/components/api-keys/s3-credentials"
 import { CreateKeyDialog } from "@/components/api-keys/create-key-dialog"
+import { CreateS3CredentialDialog } from "@/components/api-keys/create-s3-credential-dialog"
 import type { APIKey, S3Credential } from "@/types/api"
 
 export default function APIKeysPage() {
@@ -16,6 +17,7 @@ export default function APIKeysPage() {
   const [credentials, setCredentials] = useState<S3Credential[]>([])
   const [loading, setLoading] = useState(true)
   const [createOpen, setCreateOpen] = useState(false)
+  const [createS3Open, setCreateS3Open] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -80,11 +82,17 @@ export default function APIKeysPage() {
       <Separator className="my-8" />
 
       <div className="space-y-4">
-        <div>
-          <h2 className="text-2xl font-semibold">S3 Credentials</h2>
-          <p className="text-sm text-muted-foreground">
-            Manage S3-compatible storage credentials for object storage access
-          </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-semibold">S3 Credentials</h2>
+            <p className="text-sm text-muted-foreground">
+              Manage S3-compatible storage credentials for object storage access
+            </p>
+          </div>
+          <Button variant="outline" onClick={() => setCreateS3Open(true)}>
+            <Plus className="size-4" />
+            New credential
+          </Button>
         </div>
         <S3CredentialList items={credentials} onDeleted={loadCredentials} />
       </div>
@@ -93,6 +101,12 @@ export default function APIKeysPage() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={load}
+      />
+
+      <CreateS3CredentialDialog
+        open={createS3Open}
+        onOpenChange={setCreateS3Open}
+        onCreated={loadCredentials}
       />
     </>
   )

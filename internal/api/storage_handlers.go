@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/seaweedfs"
@@ -32,6 +34,8 @@ var (
 type bucketClient interface {
 	MakeBucket(ctx context.Context, bucketName string, opts minio.MakeBucketOptions) error
 	RemoveBucket(ctx context.Context, bucketName string) error
+	PresignedPutObject(ctx context.Context, bucketName, objectName string, expires time.Duration) (*url.URL, error)
+	GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (*minio.Object, error)
 }
 
 type iamClient interface {
@@ -44,10 +48,11 @@ type iamClient interface {
 
 // StorageHandler manages object storage buckets and S3 credentials.
 type StorageHandler struct {
-	DB        *gorm.DB
-	S3Client  bucketClient
-	IAMClient iamClient
-	Region    string
+	DB          *gorm.DB
+	S3Client    bucketClient
+	IAMClient   iamClient
+	Region      string
+	PublicS3URL string // public-facing S3 URL for presigned URLs (e.g. https://storage.example.com)
 }
 
 // CreateBucket creates a storage bucket bound to a site.
@@ -67,6 +72,7 @@ func (h *StorageHandler) CreateBucket(c echo.Context) error {
 	var req struct {
 		Name       string `json:"name"`        // binding name (e.g. "IMAGES")
 		BucketName string `json:"bucket_name"` // S3 bucket name
+		Public     bool   `json:"public"`      // allow unauthenticated read access
 	}
 	if err := c.Bind(&req); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "invalid request")
@@ -104,6 +110,7 @@ func (h *StorageHandler) CreateBucket(c echo.Context) error {
 		SiteID:     siteID,
 		Name:       req.Name,
 		BucketName: req.BucketName,
+		Public:     req.Public,
 	}
 	if err := h.DB.Create(&bucket).Error; err != nil {
 		_ = h.S3Client.RemoveBucket(ctx, req.BucketName)
@@ -177,6 +184,101 @@ func (h *StorageHandler) DeleteBucket(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+// UpdateBucket updates a storage bucket's settings (e.g. public access toggle).
+func (h *StorageHandler) UpdateBucket(c echo.Context) error {
+	userID, _, role := GetUserFromContext(c)
+	siteID := c.Param("id")
+	bucketID := c.Param("bucketId")
+
+	var site models.Site
+	if err := h.DB.First(&site, "id = ?", siteID).Error; err != nil {
+		return errorJSON(c, http.StatusNotFound, "site not found")
+	}
+	if site.UserID != userID && role != "admin" && role != "superadmin" {
+		return errorJSON(c, http.StatusForbidden, "access denied")
+	}
+
+	var bucket models.StorageBucket
+	if err := h.DB.First(&bucket, "id = ? AND site_id = ?", bucketID, siteID).Error; err != nil {
+		return errorJSON(c, http.StatusNotFound, "bucket not found")
+	}
+
+	var req struct {
+		Public *bool `json:"public"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return errorJSON(c, http.StatusBadRequest, "invalid request")
+	}
+
+	if req.Public != nil {
+		bucket.Public = *req.Public
+	}
+
+	if err := h.DB.Save(&bucket).Error; err != nil {
+		return errorJSON(c, http.StatusInternalServerError, "failed to update bucket")
+	}
+
+	return c.JSON(http.StatusOK, bucket)
+}
+
+// UploadURL generates a presigned PUT URL for uploading an object to a bucket.
+func (h *StorageHandler) UploadURL(c echo.Context) error {
+	userID, _, role := GetUserFromContext(c)
+	siteID := c.Param("id")
+	bucketID := c.Param("bucketId")
+	ctx := c.Request().Context()
+
+	var site models.Site
+	if err := h.DB.First(&site, "id = ?", siteID).Error; err != nil {
+		return errorJSON(c, http.StatusNotFound, "site not found")
+	}
+	if site.UserID != userID && role != "admin" && role != "superadmin" {
+		return errorJSON(c, http.StatusForbidden, "access denied")
+	}
+
+	var bucket models.StorageBucket
+	if err := h.DB.First(&bucket, "id = ? AND site_id = ?", bucketID, siteID).Error; err != nil {
+		return errorJSON(c, http.StatusNotFound, "bucket not found")
+	}
+
+	var req struct {
+		Key       string `json:"key"`
+		ExpiresIn int    `json:"expires_in"` // seconds, default 3600
+	}
+	if err := c.Bind(&req); err != nil {
+		return errorJSON(c, http.StatusBadRequest, "invalid request")
+	}
+	if req.Key == "" {
+		return errorJSON(c, http.StatusBadRequest, "key is required")
+	}
+	if req.ExpiresIn <= 0 {
+		req.ExpiresIn = 3600
+	}
+	if req.ExpiresIn > 604800 {
+		req.ExpiresIn = 604800
+	}
+
+	presigned, err := h.S3Client.PresignedPutObject(ctx, bucket.BucketName, req.Key, time.Duration(req.ExpiresIn)*time.Second)
+	if err != nil {
+		return errorJSON(c, http.StatusInternalServerError, "failed to generate upload URL: "+err.Error())
+	}
+
+	// Rewrite internal S3 URL to public-facing URL.
+	if h.PublicS3URL != "" {
+		if pub, err := url.Parse(h.PublicS3URL); err == nil {
+			presigned.Scheme = pub.Scheme
+			presigned.Host = pub.Host
+		}
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"upload_url": presigned.String(),
+		"key":        req.Key,
+		"bucket":     bucket.BucketName,
+		"expires_in": req.ExpiresIn,
+	})
 }
 
 // CreateS3Credential creates an S3 credential for the current user.

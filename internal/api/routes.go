@@ -85,10 +85,12 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 
 	// Storage routes (object storage buckets per site, S3 credentials per user)
 	if s3Client != nil && iamClient != nil {
-		storageHandler := &StorageHandler{DB: db, S3Client: s3Client, IAMClient: iamClient, Region: region}
+		storageHandler := &StorageHandler{DB: db, S3Client: s3Client, IAMClient: iamClient, Region: region, PublicS3URL: "https://storage." + cfg.Domain}
 		sites.POST("/:id/storage/buckets", storageHandler.CreateBucket)
 		sites.GET("/:id/storage/buckets", storageHandler.ListBuckets)
+		sites.PATCH("/:id/storage/buckets/:bucketId", storageHandler.UpdateBucket)
 		sites.DELETE("/:id/storage/buckets/:bucketId", storageHandler.DeleteBucket)
+		sites.POST("/:id/storage/buckets/:bucketId/upload-url", storageHandler.UploadURL)
 
 		s3creds := protected.Group("/s3-credentials")
 		s3creds.POST("", storageHandler.CreateS3Credential)
