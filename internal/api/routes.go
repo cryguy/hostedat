@@ -26,13 +26,13 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	})
 
 	authHandler := &AuthHandler{DB: db, JWTSecret: cfg.JWTSecret}
-	siteHandler := &SiteHandler{DB: db, Storage: store}
+	siteHandler := &SiteHandler{DB: db, Storage: store, S3Client: s3Client, IAMClient: iamClient}
 	deployHandler := &DeployHandler{DB: db, Storage: store, MaxScriptSizeKB: cfg.Worker.MaxScriptSizeKB}
 	if workerEngine != nil {
 		deployHandler.WorkerEngine = workerEngine
 	}
 	apiKeyHandler := &APIKeyHandler{DB: db}
-	adminHandler := &AdminHandler{DB: db, Storage: store}
+	adminHandler := &AdminHandler{DB: db, Storage: store, S3Client: s3Client, IAMClient: iamClient}
 	workerHandler := &WorkerHandler{DB: db}
 
 	// Public auth routes — stricter rate limit (5 req/s per IP)
@@ -59,8 +59,9 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	sites.PATCH("/:id", siteHandler.Update)
 	sites.DELETE("/:id", siteHandler.Delete)
 
-	// Deployment routes
-	sites.POST("/:id/deploy", deployHandler.Deploy)
+	// Deployment routes — stricter rate limit for uploads (2 req/s per IP)
+	deployLimiter := middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(2)))
+	sites.POST("/:id/deploy", deployHandler.Deploy, deployLimiter)
 	sites.GET("/:id/deployments", deployHandler.List)
 	sites.POST("/:id/deployments/:version/rollback", deployHandler.Rollback)
 

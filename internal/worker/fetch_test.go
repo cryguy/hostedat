@@ -20,6 +20,16 @@ func TestIsPrivateIP(t *testing.T) {
 		{"192.168.0.1", true},
 		{"192.168.255.255", true},
 		{"169.254.0.1", true},
+		{"169.254.169.254", true}, // Cloud metadata
+		{"0.0.0.1", true},        // "This" network
+		{"100.64.0.1", true},     // CGNAT
+		{"100.128.0.1", false},   // Above CGNAT range
+		{"192.0.0.1", true},      // IETF protocol assignments
+		{"192.0.2.1", true},      // TEST-NET-1
+		{"198.18.0.1", true},     // Benchmarking
+		{"198.51.100.1", true},   // TEST-NET-2
+		{"203.0.113.1", true},    // TEST-NET-3
+		{"240.0.0.1", true},      // Reserved
 		{"8.8.8.8", false},
 		{"1.1.1.1", false},
 		{"::1", true},
@@ -39,7 +49,7 @@ func TestIsPrivateIP(t *testing.T) {
 	}
 }
 
-func TestIsPrivateURL(t *testing.T) {
+func TestIsPrivateHostname(t *testing.T) {
 	tests := []struct {
 		url     string
 		private bool
@@ -52,13 +62,16 @@ func TestIsPrivateURL(t *testing.T) {
 		{"http://[::1]/api", true},
 		{"not-a-url", true},
 		{"", true},
+		// Non-literal hostnames are not blocked by the pre-check;
+		// actual SSRF protection happens in ssrfSafeDialContext.
+		{"http://example.com/api", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.url, func(t *testing.T) {
-			got := isPrivateURL(tt.url)
+			got := isPrivateHostname(tt.url)
 			if got != tt.private {
-				t.Errorf("isPrivateURL(%q) = %v, want %v", tt.url, got, tt.private)
+				t.Errorf("isPrivateHostname(%q) = %v, want %v", tt.url, got, tt.private)
 			}
 		})
 	}

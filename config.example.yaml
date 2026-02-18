@@ -25,8 +25,11 @@ database:
   dsn: ./data/hostedat.db
 
 # Registration settings (initial seed — managed at runtime via admin API)
+# IMPORTANT: On first run, registration is temporarily enabled to create the
+# superadmin account (first registered user). After that, registration follows
+# these settings. Change via admin API or set enabled: true here.
 registration:
-  enabled: true          # Allow new user signups
+  enabled: false         # Allow new user signups (disabled by default for safety)
   invite_required: false # Require invite code to register
 
 # Cloudflare API token for DNS-01 challenge (Let's Encrypt wildcard cert).
@@ -53,7 +56,7 @@ object_storage:
   enabled: false
   managed: true                              # hostedat manages SeaweedFS lifecycle
   data_dir: ./data/seaweedfs                 # SeaweedFS data directory
-  binary_path: ./weed.exe                    # SeaweedFS binary path (managed mode)
+  binary_path: ./weed                         # SeaweedFS binary path (managed mode; .exe on Windows)
   region: us-east-1
   auth:
     require_sigv4: true                      # Reject unsigned proxy requests

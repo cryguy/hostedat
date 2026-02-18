@@ -18,8 +18,22 @@ export default function SiteDetailPage() {
   const { id } = useParams<{ id: string }>()
   const [site, setSite] = useState<Site | null>(null)
   const [deps, setDeps] = useState<Deployment[]>([])
+  const [depsTotal, setDepsTotal] = useState(0)
+  const [depsPage, setDepsPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  const loadDeps = useCallback(async (page: number) => {
+    if (!id) return
+    try {
+      const d = await deploymentsApi.list(id, page)
+      setDeps(d.deployments)
+      setDepsTotal(d.total)
+      setDepsPage(page)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load deployments")
+    }
+  }, [id])
 
   const load = useCallback(async () => {
     if (!id) return
@@ -27,10 +41,11 @@ export default function SiteDetailPage() {
     try {
       const [s, d] = await Promise.all([
         sitesApi.get(id),
-        deploymentsApi.list(id),
+        deploymentsApi.list(id, depsPage),
       ])
       setSite(s)
-      setDeps(d)
+      setDeps(d.deployments)
+      setDepsTotal(d.total)
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to load site"
       setError(msg)
@@ -38,7 +53,7 @@ export default function SiteDetailPage() {
     } finally {
       setLoading(false)
     }
-  }, [id])
+  }, [id, depsPage])
 
   useEffect(() => { load() }, [load])
 
@@ -109,7 +124,15 @@ export default function SiteDetailPage() {
         </TabsContent>
 
         <TabsContent value="deployments">
-          <DeploymentList siteId={site.id} items={deps} activeVersion={site.active_version} onRollback={load} />
+          <DeploymentList
+            siteId={site.id}
+            items={deps}
+            activeVersion={site.active_version}
+            onRollback={load}
+            page={depsPage}
+            total={depsTotal}
+            onPageChange={loadDeps}
+          />
         </TabsContent>
 
         <TabsContent value="worker">

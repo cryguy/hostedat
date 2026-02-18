@@ -114,6 +114,7 @@ func detectSingleTopDir(files []*zip.File) string {
 	}
 
 	var topDir string
+	hasDirEntry := false
 	for _, f := range files {
 		parts := strings.SplitN(f.Name, "/", 2)
 		if topDir == "" {
@@ -121,9 +122,18 @@ func detectSingleTopDir(files []*zip.File) string {
 		} else if parts[0] != topDir {
 			return ""
 		}
+		// Track whether any entry actually lives inside this directory.
+		if len(parts) == 2 && parts[1] != "" {
+			hasDirEntry = true
+		}
 	}
 
-	// Only strip if it's actually a directory prefix
+	// Only strip if all entries share the same top-level directory and at
+	// least one entry exists inside it (i.e., it's truly a wrapper directory).
+	if !hasDirEntry {
+		return ""
+	}
+
 	return topDir + "/"
 }
 

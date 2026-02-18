@@ -145,6 +145,13 @@ type Setting struct {
 	Value string `gorm:"not null" json:"value"`
 }
 
+// RevokedToken tracks JWTs that have been explicitly revoked (e.g. logout).
+// Entries are cleaned up after they expire.
+type RevokedToken struct {
+	TokenHash string    `gorm:"primaryKey;size:64"` // SHA-256 of the raw JWT
+	ExpiresAt time.Time `gorm:"index;not null"`     // When the JWT would naturally expire
+}
+
 // Worker-related models
 
 type WorkerEnvVar struct {

@@ -98,9 +98,16 @@ for binary in "$DOCS_DL_DIR"/*; do
     sha256=$(sha256sum "$binary" | awk '{print $1}')
   elif command -v shasum &>/dev/null; then
     sha256=$(shasum -a 256 "$binary" | awk '{print $1}')
-  else
+  elif command -v powershell &>/dev/null; then
     # PowerShell fallback (Git Bash on Windows)
-    sha256=$(powershell -Command "(Get-FileHash -Path '$binary' -Algorithm SHA256).Hash.ToLower()" 2>/dev/null || echo "unknown")
+    sha256=$(powershell -Command "(Get-FileHash -Path '$binary' -Algorithm SHA256).Hash.ToLower()" 2>/dev/null)
+    if [ -z "$sha256" ]; then
+      echo "Error: Failed to compute SHA-256 for $filename"
+      exit 1
+    fi
+  else
+    echo "Error: No SHA-256 tool found (sha256sum, shasum, or powershell required)"
+    exit 1
   fi
 
   # Write JSON entry

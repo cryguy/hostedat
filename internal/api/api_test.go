@@ -193,6 +193,8 @@ func TestRegister_ShortPassword(t *testing.T) {
 
 func TestRegister_RegistrationDisabled(t *testing.T) {
 	env := setupTestEnv(t)
+	// Create an existing user so the first-user bootstrap bypass doesn't apply.
+	env.createTestUser(t, "existing@test.com", "password123", "superadmin")
 	models.SetSetting(env.db, "registration_enabled", "false")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register",
@@ -678,10 +680,20 @@ func TestDeploy_ListDeployments(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
-	var deps []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &deps)
-	if len(deps) != 2 {
-		t.Errorf("got %d deployments, want 2", len(deps))
+	var result struct {
+		Deployments []map[string]interface{} `json:"deployments"`
+		Total       int                      `json:"total"`
+		Page        int                      `json:"page"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &result)
+	if len(result.Deployments) != 2 {
+		t.Errorf("got %d deployments, want 2", len(result.Deployments))
+	}
+	if result.Total != 2 {
+		t.Errorf("got total %d, want 2", result.Total)
+	}
+	if result.Page != 1 {
+		t.Errorf("got page %d, want 1", result.Page)
 	}
 }
 

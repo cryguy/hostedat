@@ -52,16 +52,24 @@ func (h *AuthHandler) Register(c echo.Context) error {
 		return errorJSON(c, http.StatusBadRequest, "invalid email format")
 	}
 
-	// Check registration settings
-	regEnabled, err := models.GetSetting(h.DB, "registration_enabled")
-	if err != nil || regEnabled != "true" {
-		return errorJSON(c, http.StatusForbidden, "registration is disabled")
+	// Allow first-user bootstrap: if no users exist, skip the registration
+	// check so the superadmin account can be created regardless of settings.
+	var userCount int64
+	h.DB.Model(&models.User{}).Count(&userCount)
+	isBootstrap := userCount == 0
+
+	// Check registration settings (skip for first-user bootstrap).
+	if !isBootstrap {
+		regEnabled, err := models.GetSetting(h.DB, "registration_enabled")
+		if err != nil || regEnabled != "true" {
+			return errorJSON(c, http.StatusForbidden, "registration is disabled")
+		}
 	}
 
-	// Check invite requirement
+	// Check invite requirement (skip for first-user bootstrap).
 	var inviteID *string
 	inviteRequired, _ := models.GetSetting(h.DB, "invite_required")
-	if inviteRequired == "true" {
+	if inviteRequired == "true" && !isBootstrap {
 		if req.InviteCode == "" {
 			return errorJSON(c, http.StatusBadRequest, "invite code is required")
 		}
@@ -172,6 +180,16 @@ func (h *AuthHandler) Login(c echo.Context) error {
 }
 
 func (h *AuthHandler) Logout(c echo.Context) error {
+	// Extract the raw token from the Authorization header and revoke it.
+	header := c.Request().Header.Get("Authorization")
+	token := strings.TrimPrefix(header, "Bearer ")
+	if token != "" && token != header && !strings.HasPrefix(token, "hd_") {
+		// Parse the token to get its expiry for cleanup scheduling.
+		claims, err := auth.ValidateToken(token, h.JWTSecret)
+		if err == nil {
+			_ = RevokeToken(h.DB, token, claims.ExpiresAt.Time)
+		}
+	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "logged out"})
 }
 
@@ -348,10 +366,13 @@ func (h *AuthHandler) TokenExchange(c echo.Context) error {
 		return errorJSON(c, http.StatusUnauthorized, "code verifier mismatch")
 	}
 
-	// Atomically mark as used — check RowsAffected for race safety
+	// Atomically mark as used — check Error first, then RowsAffected for race safety.
 	result := h.DB.Model(&models.AuthCode{}).
 		Where("id = ? AND used = ?", authCode.ID, false).
 		Update("used", true)
+	if result.Error != nil {
+		return errorJSON(c, http.StatusInternalServerError, "failed to consume authorization code")
+	}
 	if result.RowsAffected == 0 {
 		return errorJSON(c, http.StatusUnauthorized, "authorization code already used")
 	}

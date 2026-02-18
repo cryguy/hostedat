@@ -1,21 +1,27 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/cryguy/hostedat/internal/models"
+	"github.com/cryguy/hostedat/internal/seaweedfs"
 	"github.com/cryguy/hostedat/internal/storage"
 	"github.com/labstack/echo/v4"
+	minio "github.com/minio/minio-go/v7"
 	"gorm.io/gorm"
 )
 
 type AdminHandler struct {
-	DB      *gorm.DB
-	Storage *storage.Manager
+	DB        *gorm.DB
+	Storage   *storage.Manager
+	S3Client  *minio.Client     // optional; nil when object storage is disabled
+	IAMClient *seaweedfs.Client // optional; nil when object storage is disabled
 }
 
 func (h *AdminHandler) ListUsers(c echo.Context) error {
@@ -83,16 +89,81 @@ func (h *AdminHandler) DeleteUser(c echo.Context) error {
 		return errorJSON(c, http.StatusForbidden, "cannot delete superadmin")
 	}
 
-	// Delete user's sites and storage
+	// Collect data for external cleanup after DB transaction.
 	var sites []models.Site
 	h.DB.Where("user_id = ?", targetID).Find(&sites)
+	var siteIDs []string
 	for _, site := range sites {
-		h.DB.Where("site_id = ?", site.ID).Delete(&models.Deployment{})
-		_ = h.Storage.DeleteSite(site.ID)
+		siteIDs = append(siteIDs, site.ID)
 	}
-	h.DB.Where("user_id = ?", targetID).Delete(&models.Site{})
-	h.DB.Where("user_id = ?", targetID).Delete(&models.APIKey{})
-	h.DB.Delete(&target)
+
+	var storageBuckets []models.StorageBucket
+	for _, siteID := range siteIDs {
+		var buckets []models.StorageBucket
+		h.DB.Where("site_id = ?", siteID).Find(&buckets)
+		storageBuckets = append(storageBuckets, buckets...)
+	}
+
+	var s3Creds []models.S3Credential
+	h.DB.Where("user_id = ?", targetID).Find(&s3Creds)
+
+	// Delete all user data in a transaction.
+	if err := h.DB.Transaction(func(tx *gorm.DB) error {
+		for _, siteID := range siteIDs {
+			// Delete KV entries via namespace IDs.
+			var nsIDs []string
+			tx.Model(&models.KVNamespace{}).Where("site_id = ?", siteID).Pluck("id", &nsIDs)
+			if len(nsIDs) > 0 {
+				if err := tx.Where("namespace_id IN ?", nsIDs).Delete(&models.KVEntry{}).Error; err != nil {
+					return err
+				}
+			}
+
+			for _, model := range []interface{}{
+				&models.Deployment{},
+				&models.WorkerEnvVar{},
+				&models.KVNamespace{},
+				&models.CronSchedule{},
+				&models.WorkerLog{},
+				&models.StorageBucket{},
+			} {
+				if err := tx.Where("site_id = ?", siteID).Delete(model).Error; err != nil {
+					return err
+				}
+			}
+		}
+		if err := tx.Where("user_id = ?", targetID).Delete(&models.Site{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("user_id = ?", targetID).Delete(&models.APIKey{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("user_id = ?", targetID).Delete(&models.S3Credential{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&target).Error
+	}); err != nil {
+		return errorJSON(c, http.StatusInternalServerError, "failed to delete user")
+	}
+
+	// External cleanup after successful transaction (best-effort).
+	for _, siteID := range siteIDs {
+		_ = h.Storage.DeleteSite(siteID)
+	}
+
+	// Remove external S3 buckets.
+	if h.S3Client != nil {
+		for _, b := range storageBuckets {
+			if err := h.S3Client.RemoveBucket(context.Background(), b.BucketName); err != nil {
+				log.Printf("warning: failed to remove external bucket %s: %v", b.BucketName, err)
+			}
+		}
+	}
+
+	// Revoke external IAM access keys and users.
+	if h.IAMClient != nil && len(s3Creds) > 0 {
+		revokeIAMCredentials(h.IAMClient, s3Creds)
+	}
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "user deleted"})
 }
@@ -145,8 +216,10 @@ func (h *AdminHandler) CreateInvite(c echo.Context) error {
 		return errorJSON(c, http.StatusBadRequest, "invalid request body")
 	}
 
-	b := make([]byte, 4)
-	rand.Read(b)
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return errorJSON(c, http.StatusInternalServerError, "failed to generate invite code")
+	}
 	code := hex.EncodeToString(b)
 
 	invite := models.Invite{

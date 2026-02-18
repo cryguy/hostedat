@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
@@ -197,17 +198,23 @@ func (h *DeployHandler) Rollback(c echo.Context) error {
 		return errorJSON(c, http.StatusNotFound, "deployment not found")
 	}
 
-	// Invalidate old worker pool if applicable
-	if h.WorkerEngine != nil && site.ActiveDeployID != nil {
-		h.WorkerEngine.InvalidatePool(siteID, *site.ActiveDeployID)
+	oldDeployID := site.ActiveDeployID
+
+	// Update site to the target version in a transaction.
+	if err := h.DB.Transaction(func(tx *gorm.DB) error {
+		return tx.Model(&site).Updates(map[string]interface{}{
+			"active_version":   version,
+			"active_deploy_id": dep.ID,
+			"has_worker":       dep.HasWorker,
+		}).Error
+	}); err != nil {
+		return errorJSON(c, http.StatusInternalServerError, "failed to rollback deployment")
 	}
 
-	// Update site to the target version
-	h.DB.Model(&site).Updates(map[string]interface{}{
-		"active_version":   version,
-		"active_deploy_id": dep.ID,
-		"has_worker":       dep.HasWorker,
-	})
+	// Invalidate old worker pool after successful transaction.
+	if h.WorkerEngine != nil && oldDeployID != nil {
+		h.WorkerEngine.InvalidatePool(siteID, *oldDeployID)
+	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message":        "rolled back",
@@ -228,10 +235,23 @@ func (h *DeployHandler) List(c echo.Context) error {
 		return errorJSON(c, http.StatusForbidden, "access denied")
 	}
 
+	page, _ := strconv.Atoi(c.QueryParam("page"))
+	if page < 1 {
+		page = 1
+	}
+	perPage := 20
+	offset := (page - 1) * perPage
+
 	var deployments []models.Deployment
-	if err := h.DB.Where("site_id = ?", siteID).Order("version DESC").Find(&deployments).Error; err != nil {
+	var total int64
+	h.DB.Model(&models.Deployment{}).Where("site_id = ?", siteID).Count(&total)
+	if err := h.DB.Where("site_id = ?", siteID).Order("version DESC").Offset(offset).Limit(perPage).Find(&deployments).Error; err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to list deployments")
 	}
 
-	return c.JSON(http.StatusOK, deployments)
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"deployments": deployments,
+		"total":       total,
+		"page":        page,
+	})
 }

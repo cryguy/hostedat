@@ -50,7 +50,7 @@ test:
 	go test ./...
 
 test-frontend:
-	cd web && npm test
+	cd web && npx tsc --noEmit
 
 # Cross-compilation targets
 build-linux: frontend

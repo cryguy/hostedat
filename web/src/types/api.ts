@@ -56,6 +56,12 @@ export interface AuthResponse {
   user: User
 }
 
+export interface DeploymentsListResponse {
+  deployments: Deployment[]
+  total: number
+  page: number
+}
+
 export interface UsersListResponse {
   users: User[]
   total: number

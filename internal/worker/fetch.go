@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -131,8 +132,8 @@ func setupFetch(rt *qjs.Runtime, cfg config.WorkerConfig) error {
 			method = "GET"
 		}
 
-		// Block private IP addresses.
-		if isPrivateURL(fetchURL) {
+		// Block obviously private hostnames before even attempting a connection.
+		if isPrivateHostname(fetchURL) {
 			promise.Reject(c.NewError(fmt.Errorf("fetch to private IP addresses is not allowed")))
 			return
 		}
@@ -154,14 +155,19 @@ func setupFetch(rt *qjs.Runtime, cfg config.WorkerConfig) error {
 			httpReq.Header.Set(k, v)
 		}
 
+		// Use a custom transport that validates resolved IPs at connect time,
+		// preventing DNS rebinding/TOCTOU attacks.
 		client := &http.Client{
 			Timeout: timeout,
+			Transport: &http.Transport{
+				DialContext: ssrfSafeDialContext,
+			},
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 10 {
 					return fmt.Errorf("too many redirects")
 				}
-				// Re-validate each redirect target against private IPs
-				if isPrivateURL(req.URL.String()) {
+				// Redirect hostname pre-check (the dialer also validates at connect time).
+				if isPrivateHostname(req.URL.String()) {
 					return fmt.Errorf("redirect to private IP address is not allowed")
 				}
 				return nil
@@ -206,8 +212,10 @@ func setupFetch(rt *qjs.Runtime, cfg config.WorkerConfig) error {
 	return nil
 }
 
-// isPrivateURL checks whether the URL targets a private/loopback address.
-func isPrivateURL(rawURL string) bool {
+// isPrivateHostname performs a fast, non-resolving pre-check for obviously
+// private hostnames and literal IP addresses. It does NOT resolve DNS — the
+// actual SSRF protection happens in ssrfSafeDialContext at connect time.
+func isPrivateHostname(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return true // block unparseable URLs
@@ -224,55 +232,88 @@ func isPrivateURL(rawURL string) bool {
 		return true
 	}
 
-	// Resolve and check IP ranges.
-	ips, err := net.LookupIP(hostname)
-	if err != nil {
-		// If we can't resolve, check if it's a literal IP.
-		ip := net.ParseIP(hostname)
-		if ip == nil {
-			return false // unresolvable hostname, let HTTP client handle
-		}
+	// Block literal private IPs (no DNS resolution).
+	if ip := net.ParseIP(hostname); ip != nil {
 		return isPrivateIP(ip)
 	}
 
-	for _, ip := range ips {
-		if isPrivateIP(ip) {
-			return true
-		}
+	return false
+}
+
+// ssrfSafeDialContext is a custom DialContext that resolves DNS and validates
+// the resolved IP against private ranges at actual connect time, preventing
+// DNS rebinding / TOCTOU attacks.
+func ssrfSafeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid address %q: %w", addr, err)
 	}
 
-	return false
+	// Resolve DNS.
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("DNS lookup failed for %s: %w", host, err)
+	}
+
+	// Filter out private IPs.
+	var safeIP net.IPAddr
+	found := false
+	for _, ip := range ips {
+		if !isPrivateIP(ip.IP) {
+			safeIP = ip
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("fetch to private IP addresses is not allowed")
+	}
+
+	// Connect to the validated IP directly.
+	dialer := &net.Dialer{}
+	return dialer.DialContext(ctx, network, net.JoinHostPort(safeIP.IP.String(), port))
+}
+
+// privateRanges is parsed once at init time to avoid repeated allocations
+// on every isPrivateIP call.
+var privateRanges []*net.IPNet
+
+func init() {
+	for _, cidr := range []string{
+		// IPv4 private and special-use ranges
+		"0.0.0.0/8",          // "This" network (RFC 1122)
+		"10.0.0.0/8",         // Private (RFC 1918)
+		"100.64.0.0/10",      // Carrier-grade NAT (RFC 6598)
+		"127.0.0.0/8",        // Loopback (RFC 1122)
+		"169.254.0.0/16",     // Link-local (RFC 3927)
+		"172.16.0.0/12",      // Private (RFC 1918)
+		"192.0.0.0/24",       // IETF protocol assignments (RFC 6890)
+		"192.0.2.0/24",       // Documentation TEST-NET-1 (RFC 5737)
+		"192.168.0.0/16",     // Private (RFC 1918)
+		"198.18.0.0/15",      // Benchmarking (RFC 2544)
+		"198.51.100.0/24",    // Documentation TEST-NET-2 (RFC 5737)
+		"203.0.113.0/24",     // Documentation TEST-NET-3 (RFC 5737)
+		"240.0.0.0/4",        // Reserved for future use (RFC 1112)
+		// IPv6 private and special-use ranges
+		"::1/128",            // Loopback
+		"fc00::/7",           // Unique local address
+		"fe80::/10",          // Link-local
+	} {
+		_, n, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic("invalid CIDR: " + cidr)
+		}
+		privateRanges = append(privateRanges, n)
+	}
 }
 
 // isPrivateIP returns true if the IP is in a private, loopback, or
 // link-local range.
 func isPrivateIP(ip net.IP) bool {
-	privateRanges := []struct {
-		network *net.IPNet
-	}{
-		{mustParseCIDR("127.0.0.0/8")},
-		{mustParseCIDR("10.0.0.0/8")},
-		{mustParseCIDR("172.16.0.0/12")},
-		{mustParseCIDR("192.168.0.0/16")},
-		{mustParseCIDR("169.254.0.0/16")},
-		{mustParseCIDR("::1/128")},
-		{mustParseCIDR("fc00::/7")},
-		{mustParseCIDR("fe80::/10")},
-	}
-
-	for _, r := range privateRanges {
-		if r.network.Contains(ip) {
+	for _, n := range privateRanges {
+		if n.Contains(ip) {
 			return true
 		}
 	}
-
 	return false
-}
-
-func mustParseCIDR(s string) *net.IPNet {
-	_, n, err := net.ParseCIDR(s)
-	if err != nil {
-		panic("invalid CIDR: " + s)
-	}
-	return n
 }

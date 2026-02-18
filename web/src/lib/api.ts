@@ -2,6 +2,7 @@ import type {
   AuthResponse,
   Site,
   Deployment,
+  DeploymentsListResponse,
   APIKey,
   APIKeyCreateResponse,
   Invite,
@@ -19,15 +20,15 @@ import type {
 const TOKEN_KEY = "hostedat_token"
 
 function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
+  return sessionStorage.getItem(TOKEN_KEY)
 }
 
 function setToken(token: string) {
-  localStorage.setItem(TOKEN_KEY, token)
+  sessionStorage.setItem(TOKEN_KEY, token)
 }
 
 function clearToken() {
-  localStorage.removeItem(TOKEN_KEY)
+  sessionStorage.removeItem(TOKEN_KEY)
 }
 
 async function request<T>(
@@ -128,8 +129,8 @@ export const sites = {
 }
 
 export const deployments = {
-  list(siteId: string) {
-    return request<Deployment[]>(`/sites/${siteId}/deployments`)
+  list(siteId: string, page = 1) {
+    return request<DeploymentsListResponse>(`/sites/${siteId}/deployments?page=${page}`)
   },
 
   deploy(siteId: string, file: File) {

@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/cryguy/hostedat/internal/api"
 	"github.com/cryguy/hostedat/internal/certs"
@@ -133,7 +137,7 @@ func main() {
 		ContentTypeNosniff:    "nosniff",
 		XFrameOptions:         "DENY",
 		HSTSMaxAge:            31536000,
-		ContentSecurityPolicy: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+		ContentSecurityPolicy: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'",
 		ReferrerPolicy:        "strict-origin-when-cross-origin",
 	}))
 
@@ -141,8 +145,9 @@ func main() {
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOriginFunc: func(origin string) (bool, error) {
 			origin = strings.ToLower(origin)
-			// Allow localhost for development
-			if strings.HasPrefix(origin, "http://localhost") || strings.HasPrefix(origin, "http://127.0.0.1") {
+			// Allow localhost for development (exact host match with optional port).
+			if strings.HasPrefix(origin, "http://localhost:") || origin == "http://localhost" ||
+				strings.HasPrefix(origin, "http://127.0.0.1:") || origin == "http://127.0.0.1" {
 				return true, nil
 			}
 			// Allow the configured domain and its subdomains
@@ -186,6 +191,10 @@ func main() {
 		fileServer.ServeHTTP(w, r)
 	})))
 
+	// Graceful shutdown on SIGINT/SIGTERM.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+
 	// Start with TLS if Cloudflare token is configured, otherwise plain HTTP
 	if cfg.Cloudflare.APIToken != "" {
 		log.Printf("Starting hostedat %s (%s) with TLS on %s for domain %s", version, commit, cfg.Listen, cfg.Domain)
@@ -206,13 +215,36 @@ func main() {
 			TLSConfig: tlsCfg,
 		}
 
-		if err := server.ListenAndServeTLS("", ""); err != nil {
-			log.Fatalf("Server failed: %v", err)
+		go func() {
+			if err := server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("Server failed: %v", err)
+			}
+		}()
+
+		<-quit
+		log.Println("Shutting down server...")
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			log.Fatalf("Server forced to shutdown: %v", err)
 		}
 	} else {
 		log.Printf("Starting hostedat %s (%s) (no TLS) on %s for domain %s", version, commit, cfg.Listen, cfg.Domain)
-		if err := e.Start(cfg.Listen); err != nil {
-			log.Fatalf("Server failed: %v", err)
+
+		go func() {
+			if err := e.Start(cfg.Listen); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("Server failed: %v", err)
+			}
+		}()
+
+		<-quit
+		log.Println("Shutting down server...")
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := e.Shutdown(ctx); err != nil {
+			log.Fatalf("Server forced to shutdown: %v", err)
 		}
 	}
+
+	log.Println("Server exited cleanly")
 }

@@ -43,6 +43,11 @@ func (sp *sitePool) markInvalid() {
 	sp.invalid = true
 }
 
+// S3Client abstracts the minio.Client methods used by worker storage bindings.
+type S3Client interface {
+	GetObject(ctx context.Context, bucketName, objectName string, opts interface{}) (interface{}, error)
+}
+
 // Engine manages per-site worker pools and executes JS worker scripts.
 type Engine struct {
 	pools       sync.Map // poolKey -> *sitePool
@@ -50,7 +55,7 @@ type Engine struct {
 	config      config.WorkerConfig
 	db          *gorm.DB
 	store       *storage.Manager
-	minioClient interface{} // *minio.Client, stored as interface to avoid import cycle
+	minioClient interface{} // *minio.Client; stored as interface{} because the minio package is only imported by cmd/server
 	logDone     chan struct{}
 }
 
@@ -277,9 +282,11 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 		cancelReq()
 	})
 
+	var panicked bool
 	defer func() {
 		stopped := watchdog.Stop()
 		if r := recover(); r != nil {
+			panicked = true
 			if timedOut.Load() {
 				result.Error = fmt.Errorf("worker execution timed out (limit: %v)", timeout)
 			} else {
@@ -287,15 +294,20 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 			}
 		}
 		result.Duration = time.Since(start)
-		// Only return healthy runtimes to the pool. If the watchdog fired
-		// (stopped==false), the context is cancelled and the runtime may be
-		// in a broken state — discard it.
-		if stopped && !timedOut.Load() {
+		// Only return healthy runtimes to the pool. Discard if the watchdog
+		// fired, if a timeout occurred, or if the runtime panicked.
+		if stopped && !timedOut.Load() && !panicked {
 			rt.Context().Context = origCtx
 			cancelReq() // Release context resources.
 			pool.Put(rt)
 		} else {
-			log.Printf("worker: discarding runtime for site %s deploy %s (timed out or panicked), pool capacity may be reduced", siteID, deployKey)
+			log.Printf("worker: discarding runtime for site %s deploy %s (timed out or panicked)", siteID, deployKey)
+			// Invalidate the pool so the next request rebuilds it with full capacity.
+			key := poolKey{SiteID: siteID, DeployKey: deployKey}
+			if val, ok := e.pools.Load(key); ok {
+				sp := val.(*sitePool)
+				sp.markInvalid()
+			}
 		}
 	}()
 
@@ -412,9 +424,11 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 		cancelReq()
 	})
 
+	var panicked bool
 	defer func() {
 		stopped := watchdog.Stop()
 		if r := recover(); r != nil {
+			panicked = true
 			if timedOut.Load() {
 				result.Error = fmt.Errorf("worker execution timed out (limit: %v)", timeout)
 			} else {
@@ -422,12 +436,18 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 			}
 		}
 		result.Duration = time.Since(start)
-		if stopped && !timedOut.Load() {
+		if stopped && !timedOut.Load() && !panicked {
 			rt.Context().Context = origCtx
 			cancelReq()
 			pool.Put(rt)
 		} else {
-			log.Printf("worker: discarding scheduled runtime for site %s deploy %s (timed out or panicked), pool capacity may be reduced", siteID, deployKey)
+			log.Printf("worker: discarding scheduled runtime for site %s deploy %s (timed out or panicked)", siteID, deployKey)
+			// Invalidate pool so next call rebuilds it with full capacity.
+			key := poolKey{SiteID: siteID, DeployKey: deployKey}
+			if val, ok := e.pools.Load(key); ok {
+				sp := val.(*sitePool)
+				sp.markInvalid()
+			}
 		}
 	}()
 
