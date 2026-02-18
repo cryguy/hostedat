@@ -1450,8 +1450,8 @@ func TestEdge_NoDefaultExport(t *testing.T) {
 	db := testDB(t)
 	e := newTestEngine(t, db)
 
-	// Module with named export but no default export.
-	source := `export const handler = { fetch() { return new Response("nope"); } };`
+	// Script without a default export — no __worker_module__ assigned.
+	source := `const handler = { fetch() { return new Response("nope"); } };`
 
 	siteID := "no-default"
 	if _, err := e.CompileAndCache(siteID, "deploy1", source); err != nil {

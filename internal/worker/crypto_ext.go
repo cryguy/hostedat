@@ -170,7 +170,7 @@ func setupCryptoExt(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 				namedCurve: namedCurve,
 				ecKey:      pubKey,
 			})
-			val, _ := v8.NewValue(iso, id)
+			val, _ := v8.NewValue(iso, int32(id))
 			return val
 		}
 
@@ -178,7 +178,7 @@ func setupCryptoExt(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 		if id < 0 {
 			return throwError(iso, "importKey: no active request state")
 		}
-		val, _ := v8.NewValue(iso, id)
+		val, _ := v8.NewValue(iso, int32(id))
 		return val
 	}).GetFunction(ctx))
 

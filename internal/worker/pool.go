@@ -27,14 +27,14 @@ type setupFunc func(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error
 
 // newV8Pool creates a pool of V8 isolates, each configured with the given
 // setup functions and loaded with the worker script.
-func newV8Pool(size int, source string, setupFns []setupFunc) (*v8Pool, error) {
+func newV8Pool(size int, source string, setupFns []setupFunc, memoryLimitMB int) (*v8Pool, error) {
 	pool := &v8Pool{
 		workers: make(chan *v8Worker, size),
 		size:    size,
 	}
 
 	for i := 0; i < size; i++ {
-		w, err := newV8Worker(source, setupFns)
+		w, err := newV8Worker(source, setupFns, memoryLimitMB)
 		if err != nil {
 			pool.dispose()
 			return nil, fmt.Errorf("creating pool worker %d: %w", i, err)
@@ -47,8 +47,14 @@ func newV8Pool(size int, source string, setupFns []setupFunc) (*v8Pool, error) {
 
 // newV8Worker creates a single V8 isolate+context, runs all setup functions,
 // and loads the worker script.
-func newV8Worker(source string, setupFns []setupFunc) (*v8Worker, error) {
-	iso := v8.NewIsolate()
+func newV8Worker(source string, setupFns []setupFunc, memoryLimitMB int) (*v8Worker, error) {
+	var iso *v8.Isolate
+	if memoryLimitMB > 0 {
+		heapSize := uint64(memoryLimitMB) * 1024 * 1024
+		iso = v8.NewIsolate(v8.WithResourceConstraints(heapSize/2, heapSize))
+	} else {
+		iso = v8.NewIsolate()
+	}
 	ctx := v8.NewContext(iso)
 	el := newEventLoop()
 

@@ -202,7 +202,7 @@ func (e *Engine) GetOrCreatePool(siteID string, deployKey string, env *Env) (*v8
 		},
 	}
 
-	pool, err := newV8Pool(cfg.PoolSize, source, setupFns)
+	pool, err := newV8Pool(cfg.PoolSize, source, setupFns, e.config.MemoryLimitMB)
 	if err != nil {
 		return nil, fmt.Errorf("creating v8 pool: %w", err)
 	}
@@ -279,7 +279,7 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 
 	// Set up per-request state.
 	reqID := newRequestState(e.config.MaxFetchRequests, env)
-	reqIDVal, _ := v8.NewValue(iso, int64(reqID))
+	reqIDVal, _ := v8.NewValue(iso, int32(reqID))
 	if err := ctx.Global().Set("__requestID", reqIDVal); err != nil {
 		clearRequestState(reqID)
 		result.Error = fmt.Errorf("setting request ID: %w", err)
@@ -361,7 +361,11 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 		if state != nil {
 			result.Logs = state.logs
 		}
-		result.Error = fmt.Errorf("invoking worker fetch: %w", err)
+		if timedOut.Load() {
+			result.Error = fmt.Errorf("worker execution timed out (limit: %v)", timeout)
+		} else {
+			result.Error = fmt.Errorf("invoking worker fetch: %w", err)
+		}
 		return result
 	}
 
@@ -465,7 +469,7 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 
 	// Set up per-request state.
 	reqID := newRequestState(e.config.MaxFetchRequests, env)
-	reqIDVal, _ := v8.NewValue(iso, int64(reqID))
+	reqIDVal, _ := v8.NewValue(iso, int32(reqID))
 	ctx.Global().Set("__requestID", reqIDVal)
 
 	// Build the scheduled event object.

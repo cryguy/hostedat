@@ -104,14 +104,14 @@ func TestTimers_SetIntervalAndClear(t *testing.T) {
 	source := `export default {
   async fetch(request, env) {
     let count = 0;
-    const id = setInterval(() => { count++; }, 0);
-    // Let it tick a few times.
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    const id = setInterval(() => { count++; }, 10);
+    // Wait long enough for the interval to fire several times.
+    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 50));
     clearInterval(id);
     const afterClear = count;
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 50));
     return Response.json({ afterClear, afterWait: count });
   },
 };`

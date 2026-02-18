@@ -76,7 +76,7 @@ func TestPoolModuleFlow(t *testing.T) {
 		func(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 			return setupFetch(iso, ctx, el, cfg)
 		},
-	})
+	}, cfg.MemoryLimitMB)
 	if err != nil {
 		t.Fatalf("newV8Pool: %v", err)
 	}
