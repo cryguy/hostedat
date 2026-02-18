@@ -19,8 +19,8 @@ export default {
           return new Response("File not found", { status: 404 });
         }
 
-        // Generate a presigned URL valid for 1 hour.
-        const signedUrl = await env.DOWNLOADS.createSignedUrl(filename, { expiresIn: 3600 });
+        // dirty hack... i know...
+        const signedUrl = (await env.DOWNLOADS.createSignedUrl(filename, { expiresIn: 3600 })).split("?")[0];
 
         return Response.redirect(signedUrl, 302);
       }
