@@ -16,6 +16,15 @@ import (
 	"gorm.io/gorm"
 )
 
+// internalFiles are files that should never be served directly to visitors.
+// These are configuration/runtime files similar to Cloudflare Pages behavior.
+var internalFiles = map[string]bool{
+	"/_worker.js":  true,
+	"/_headers":    true,
+	"/_redirects":  true,
+	"/_routes.json": true,
+}
+
 // deniedHeaders are headers that user _headers files must not be able to set.
 var deniedHeaders = map[string]bool{
 	"content-length":            true,
@@ -141,13 +150,18 @@ func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteR
 
 		deployID := *site.ActiveDeployID
 
+		// Block access to internal files (_worker.js, _headers, _redirects, etc.)
+		reqPath := c.Request().URL.Path
+		if internalFiles[reqPath] {
+			return errorJSON(c, http.StatusNotFound, "not found")
+		}
+
 		// Worker intercept: if site has a worker, execute it before static pipeline
 		if site.HasWorker && workerEngine != nil {
 			return handleWorkerRequest(c, db, store, cache, &site, deployID, domain, workerEngine)
 		}
 
 		deployPath := store.GetDeploymentPath(site.ID, deployID)
-		reqPath := c.Request().URL.Path
 
 		// Load/cache rules
 		rules := loadRules(store, cache, site.ID, deployID, deployPath)
