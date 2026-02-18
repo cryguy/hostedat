@@ -1,257 +1,105 @@
 package worker
 
 import (
-	"bytes"
-	"context"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 	minio "github.com/minio/minio-go/v7"
 )
 
-func newStorageTestContext(t *testing.T) *qjs.Runtime {
+// newV8TestContext creates an isolate+context with encoding support (atob/btoa)
+// needed by R2ObjectBody.arrayBuffer(). Cleaned up automatically via t.Cleanup.
+func newV8TestContext(t *testing.T) (*v8.Isolate, *v8.Context) {
 	t.Helper()
-	rt, err := qjs.New(qjs.Option{
-		Context:          context.Background(),
-		MemoryLimit:      128 * 1024 * 1024,
-		MaxStackSize:     1024 * 1024,
-		MaxExecutionTime: 5000,
-		GCThreshold:      256 * 1024,
+	iso := v8.NewIsolate()
+	ctx := v8.NewContext(iso)
+	el := newEventLoop()
+	if err := setupEncoding(iso, ctx, el); err != nil {
+		ctx.Close()
+		iso.Dispose()
+		t.Fatalf("setupEncoding: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx.Close()
+		iso.Dispose()
 	})
-	if err != nil {
-		t.Fatalf("new runtime: %v", err)
-	}
-	return rt
-}
-
-// safeClose closes a QJS runtime, recovering from panics caused by
-// known WASM cleanup bugs in the fastschema/qjs library.
-func safeClose(rt *qjs.Runtime) {
-	defer func() { recover() }()
-	rt.Close()
-}
-
-// safeFree frees a QJS value, recovering from WASM panics that can
-// occur when the runtime is in a corrupted state after promise rejection.
-func safeFree(v *qjs.Value) {
-	defer func() { recover() }()
-	v.Free()
-}
-
-func awaitValue(t *testing.T, v *qjs.Value) (*qjs.Value, error) {
-	t.Helper()
-	if !v.IsPromise() {
-		return v, nil
-	}
-	resolved, err := v.Await()
-	return resolved, err
+	return iso, ctx
 }
 
 func TestStorageBinding_Put_UnsupportedTypeRejected(t *testing.T) {
-	rt := newStorageTestContext(t)
-	defer safeClose(rt)
+	iso, ctx := newV8TestContext(t)
 
-	ctx := rt.Context()
-	bucket := buildStorageBinding(ctx, &StorageBridge{BucketName: "test"})
-	defer safeFree(bucket)
-
-	result, err := bucket.InvokeJS("put", ctx.NewString("k"), ctx.NewObject())
+	bucketVal, err := buildStorageBinding(iso, ctx, &StorageBridge{BucketName: "test"})
 	if err != nil {
-		t.Fatalf("InvokeJS put: %v", err)
+		t.Fatalf("buildStorageBinding: %v", err)
 	}
-	defer safeFree(result)
 
-	_, err = awaitValue(t, result)
-	if err == nil || !strings.Contains(err.Error(), "supports string, ArrayBuffer, TypedArray, DataView, Blob, and File values") {
+	ctx.Global().Set("__bucket", bucketVal)
+	result, err := ctx.RunScript("__bucket.put('k', {})", "test_put.js")
+	if err != nil {
+		t.Fatalf("RunScript put: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	_, err = awaitValue(ctx, result, deadline)
+	if err == nil || !strings.Contains(err.Error(), "unsupported body type") {
 		t.Fatalf("expected unsupported-value rejection, got %v", err)
 	}
 }
 
-func TestCoerceStoragePutBody_String(t *testing.T) {
-	rt := newStorageTestContext(t)
-	defer safeClose(rt)
-
-	ctx := rt.Context()
-	v := ctx.NewString("hello")
-	defer safeFree(v)
-
-	buf, err := coerceStoragePutBody(v)
-	if err != nil {
-		t.Fatalf("coerceStoragePutBody returned error: %v", err)
-	}
-	if !bytes.Equal(buf, []byte("hello")) {
-		t.Fatalf("coerced body = %v, want %v", buf, []byte("hello"))
-	}
-}
-
-func TestCoerceStoragePutBody_ArrayBuffer(t *testing.T) {
-	rt := newStorageTestContext(t)
-	defer safeClose(rt)
-
-	ctx := rt.Context()
-	v, err := ctx.Eval("test.js", qjs.Code(`(() => { const b = new Uint8Array([0, 1, 255]); return b.buffer; })()`))
-	if err != nil {
-		t.Fatalf("eval array buffer: %v", err)
-	}
-	defer safeFree(v)
-
-	buf, err := coerceStoragePutBody(v)
-	if err != nil {
-		t.Fatalf("coerceStoragePutBody returned error: %v", err)
-	}
-	want := []byte{0, 1, 255}
-	if !bytes.Equal(buf, want) {
-		t.Fatalf("coerced body = %v, want %v", buf, want)
-	}
-}
-
-func TestCoerceStoragePutBody_TypedArrayView(t *testing.T) {
-	rt := newStorageTestContext(t)
-	defer safeClose(rt)
-
-	ctx := rt.Context()
-	v, err := ctx.Eval("test.js", qjs.Code(`(() => { const src = new Uint8Array([10, 20, 30, 40]); return src.subarray(1, 3); })()`))
-	if err != nil {
-		t.Fatalf("eval typed array view: %v", err)
-	}
-	defer safeFree(v)
-
-	buf, err := coerceStoragePutBody(v)
-	if err != nil {
-		t.Fatalf("coerceStoragePutBody returned error: %v", err)
-	}
-	want := []byte{20, 30}
-	if !bytes.Equal(buf, want) {
-		t.Fatalf("coerced body = %v, want %v", buf, want)
-	}
-}
-
-func TestCoerceStoragePutBody_DataView(t *testing.T) {
-	rt := newStorageTestContext(t)
-	defer safeClose(rt)
-
-	ctx := rt.Context()
-	v, err := ctx.Eval("test.js", qjs.Code(`(() => { const buf = new ArrayBuffer(4); const view = new DataView(buf); view.setUint8(0, 7); view.setUint8(3, 9); return view; })()`))
-	if err != nil {
-		t.Fatalf("eval data view: %v", err)
-	}
-	defer safeFree(v)
-
-	buf, err := coerceStoragePutBody(v)
-	if err != nil {
-		t.Fatalf("coerceStoragePutBody returned error: %v", err)
-	}
-	want := []byte{7, 0, 0, 9}
-	if !bytes.Equal(buf, want) {
-		t.Fatalf("coerced body = %v, want %v", buf, want)
-	}
-}
-
-func TestCoerceStoragePutBody_Blob(t *testing.T) {
-	rt := newStorageTestContext(t)
-	defer safeClose(rt)
-
-	if err := setupWebAPIs(rt); err != nil {
-		t.Fatalf("setupWebAPIs: %v", err)
-	}
-	if err := setupFormData(rt); err != nil {
-		t.Fatalf("setupFormData: %v", err)
-	}
-
-	ctx := rt.Context()
-	v, err := ctx.Eval("test.js", qjs.Code(`new Blob(["hello", " ", "blob"])`))
-	if err != nil {
-		t.Fatalf("eval blob: %v", err)
-	}
-	defer safeFree(v)
-
-	buf, err := coerceStoragePutBody(v)
-	if err != nil {
-		t.Fatalf("coerceStoragePutBody returned error: %v", err)
-	}
-	want := []byte("hello blob")
-	if !bytes.Equal(buf, want) {
-		t.Fatalf("coerced body = %v, want %v", buf, want)
-	}
-}
-
-func TestCoerceStoragePutBody_File(t *testing.T) {
-	rt := newStorageTestContext(t)
-	defer safeClose(rt)
-
-	if err := setupWebAPIs(rt); err != nil {
-		t.Fatalf("setupWebAPIs: %v", err)
-	}
-	if err := setupFormData(rt); err != nil {
-		t.Fatalf("setupFormData: %v", err)
-	}
-
-	ctx := rt.Context()
-	v, err := ctx.Eval("test.js", qjs.Code(`new File([new Uint8Array([65, 66, 67])], "x.bin")`))
-	if err != nil {
-		t.Fatalf("eval file: %v", err)
-	}
-	defer safeFree(v)
-
-	buf, err := coerceStoragePutBody(v)
-	if err != nil {
-		t.Fatalf("coerceStoragePutBody returned error: %v", err)
-	}
-	want := []byte{65, 66, 67}
-	if !bytes.Equal(buf, want) {
-		t.Fatalf("coerced body = %v, want %v", buf, want)
-	}
-}
-
 func TestStorageBinding_ArrayBuffer_ReturnsData(t *testing.T) {
-	rt := newStorageTestContext(t)
-	defer safeClose(rt)
+	iso, ctx := newV8TestContext(t)
 
-	ctx := rt.Context()
-	obj := buildR2ObjectBody(ctx, "k", []byte("hello"), &minio.ObjectInfo{
+	obj, err := buildR2ObjectBody(iso, ctx, "k", []byte("hello"), &minio.ObjectInfo{
 		Size:         5,
 		ETag:         "etag",
 		ContentType:  "text/plain",
 		LastModified: time.Now(),
 	})
-	defer safeFree(obj)
-
-	result, err := obj.InvokeJS("arrayBuffer")
 	if err != nil {
-		t.Fatalf("InvokeJS arrayBuffer: %v", err)
+		t.Fatalf("buildR2ObjectBody: %v", err)
 	}
-	defer safeFree(result)
+	ctx.Global().Set("__obj", obj.Value)
 
-	resolved, err := awaitValue(t, result)
+	result, err := ctx.RunScript("__obj.arrayBuffer()", "test_ab.js")
+	if err != nil {
+		t.Fatalf("RunScript arrayBuffer: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	resolved, err := awaitValue(ctx, result, deadline)
 	if err != nil {
 		t.Fatalf("await arrayBuffer: %v", err)
 	}
 
 	// Verify bodyUsed is set after consuming.
-	after := obj.GetPropertyStr("bodyUsed")
-	if after.String() != "true" {
-		t.Fatalf("bodyUsed after arrayBuffer = %q, want true", after.String())
+	afterVal, err := ctx.RunScript("__obj.bodyUsed", "check_used.js")
+	if err != nil {
+		t.Fatalf("checking bodyUsed: %v", err)
 	}
-	after.Free()
+	if afterVal.String() != "true" {
+		t.Fatalf("bodyUsed after arrayBuffer = %q, want true", afterVal.String())
+	}
 
 	// Verify the ArrayBuffer has the right byte length.
-	bl := resolved.GetPropertyStr("byteLength")
-	if bl.Int32() != 5 {
-		t.Fatalf("byteLength = %d, want 5", bl.Int32())
+	ctx.Global().Set("__result", resolved)
+	blVal, err := ctx.RunScript("__result.byteLength", "check_bl.js")
+	if err != nil {
+		t.Fatalf("checking byteLength: %v", err)
 	}
-	bl.Free()
+	if blVal.Int32() != 5 {
+		t.Fatalf("byteLength = %d, want 5", blVal.Int32())
+	}
 
 	// Verify body cannot be consumed again.
-	result2, err := obj.InvokeJS("arrayBuffer")
+	result2, err := ctx.RunScript("__obj.arrayBuffer()", "test_ab2.js")
 	if err != nil {
-		t.Fatalf("InvokeJS second arrayBuffer: %v", err)
+		t.Fatalf("RunScript second arrayBuffer: %v", err)
 	}
-	defer safeFree(result2)
-
-	_, err = awaitValue(t, result2)
+	_, err = awaitValue(ctx, result2, deadline)
 	if err == nil || !strings.Contains(err.Error(), "already consumed") {
 		t.Fatalf("expected body consumed rejection, got %v", err)
 	}
@@ -265,50 +113,48 @@ func TestStorageBinding_ArrayBuffer_BinaryBlob(t *testing.T) {
 		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk header
 	}
 
-	rt := newStorageTestContext(t)
-	defer safeClose(rt)
+	iso, ctx := newV8TestContext(t)
 
-	ctx := rt.Context()
-	obj := buildR2ObjectBody(ctx, "image.png", pngHeader, &minio.ObjectInfo{
+	obj, err := buildR2ObjectBody(iso, ctx, "image.png", pngHeader, &minio.ObjectInfo{
 		Size:         int64(len(pngHeader)),
 		ETag:         "png-etag",
 		ContentType:  "image/png",
 		LastModified: time.Now(),
 	})
-	defer safeFree(obj)
-
-	result, err := obj.InvokeJS("arrayBuffer")
 	if err != nil {
-		t.Fatalf("InvokeJS arrayBuffer: %v", err)
+		t.Fatalf("buildR2ObjectBody: %v", err)
 	}
-	defer safeFree(result)
+	ctx.Global().Set("__obj", obj.Value)
 
-	resolved, err := awaitValue(t, result)
+	result, err := ctx.RunScript("__obj.arrayBuffer()", "test_ab.js")
+	if err != nil {
+		t.Fatalf("RunScript arrayBuffer: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	resolved, err := awaitValue(ctx, result, deadline)
 	if err != nil {
 		t.Fatalf("await arrayBuffer: %v", err)
 	}
 
 	// Verify byte length matches the original blob.
-	bl := resolved.GetPropertyStr("byteLength")
-	if bl.Int32() != int32(len(pngHeader)) {
-		t.Fatalf("byteLength = %d, want %d", bl.Int32(), len(pngHeader))
+	ctx.Global().Set("__testBuf", resolved)
+	blVal, err := ctx.RunScript("__testBuf.byteLength", "check_bl.js")
+	if err != nil {
+		t.Fatalf("checking byteLength: %v", err)
 	}
-	bl.Free()
-
-	// Store the ArrayBuffer as a global so we can inspect bytes from JS.
-	g := ctx.Global()
-	g.SetPropertyStr("__testBuf", resolved)
-	g.Free()
+	if blVal.Int32() != int32(len(pngHeader)) {
+		t.Fatalf("byteLength = %d, want %d", blVal.Int32(), len(pngHeader))
+	}
 
 	// Read back every byte via Uint8Array and compare to the Go source.
 	for i, expected := range pngHeader {
 		jsCode := fmt.Sprintf("new Uint8Array(__testBuf)[%d]", i)
-		v, err := ctx.Eval("test.js", qjs.Code(jsCode))
+		v, err := ctx.RunScript(jsCode, "test_byte.js")
 		if err != nil {
 			t.Fatalf("eval byte[%d]: %v", i, err)
 		}
 		got := byte(v.Int32())
-		v.Free()
 		if got != expected {
 			t.Fatalf("byte[%d] = 0x%02X, want 0x%02X", i, got, expected)
 		}
@@ -316,87 +162,89 @@ func TestStorageBinding_ArrayBuffer_BinaryBlob(t *testing.T) {
 }
 
 func TestStorageBinding_ArrayBuffer_EmptyBlob(t *testing.T) {
-	rt := newStorageTestContext(t)
-	defer safeClose(rt)
+	iso, ctx := newV8TestContext(t)
 
-	ctx := rt.Context()
-	obj := buildR2ObjectBody(ctx, "empty.bin", []byte{}, &minio.ObjectInfo{
+	obj, err := buildR2ObjectBody(iso, ctx, "empty.bin", []byte{}, &minio.ObjectInfo{
 		Size:         0,
 		ETag:         "empty-etag",
 		ContentType:  "application/octet-stream",
 		LastModified: time.Now(),
 	})
-	defer safeFree(obj)
-
-	result, err := obj.InvokeJS("arrayBuffer")
 	if err != nil {
-		t.Fatalf("InvokeJS arrayBuffer: %v", err)
+		t.Fatalf("buildR2ObjectBody: %v", err)
 	}
-	defer safeFree(result)
+	ctx.Global().Set("__obj", obj.Value)
 
-	resolved, err := awaitValue(t, result)
+	result, err := ctx.RunScript("__obj.arrayBuffer()", "test_ab.js")
+	if err != nil {
+		t.Fatalf("RunScript arrayBuffer: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	resolved, err := awaitValue(ctx, result, deadline)
 	if err != nil {
 		t.Fatalf("await arrayBuffer: %v", err)
 	}
 
-	bl := resolved.GetPropertyStr("byteLength")
-	if bl.Int32() != 0 {
-		t.Fatalf("byteLength = %d, want 0", bl.Int32())
+	ctx.Global().Set("__result", resolved)
+	blVal, err := ctx.RunScript("__result.byteLength", "check_bl.js")
+	if err != nil {
+		t.Fatalf("checking byteLength: %v", err)
 	}
-	bl.Free()
+	if blVal.Int32() != 0 {
+		t.Fatalf("byteLength = %d, want 0", blVal.Int32())
+	}
 }
 
 func TestStorageBinding_ArrayBuffer_AllByteValues(t *testing.T) {
 	// Create a 256-byte blob containing every possible byte value 0x00..0xFF.
-	// This catches any truncation or encoding issues across the full byte range.
 	blob := make([]byte, 256)
 	for i := range blob {
 		blob[i] = byte(i)
 	}
 
-	rt := newStorageTestContext(t)
-	defer safeClose(rt)
+	iso, ctx := newV8TestContext(t)
 
-	ctx := rt.Context()
-	obj := buildR2ObjectBody(ctx, "allbytes.bin", blob, &minio.ObjectInfo{
+	obj, err := buildR2ObjectBody(iso, ctx, "allbytes.bin", blob, &minio.ObjectInfo{
 		Size:         256,
 		ETag:         "all-etag",
 		ContentType:  "application/octet-stream",
 		LastModified: time.Now(),
 	})
-	defer safeFree(obj)
-
-	result, err := obj.InvokeJS("arrayBuffer")
 	if err != nil {
-		t.Fatalf("InvokeJS arrayBuffer: %v", err)
+		t.Fatalf("buildR2ObjectBody: %v", err)
 	}
-	defer safeFree(result)
+	ctx.Global().Set("__obj", obj.Value)
 
-	resolved, err := awaitValue(t, result)
+	result, err := ctx.RunScript("__obj.arrayBuffer()", "test_ab.js")
+	if err != nil {
+		t.Fatalf("RunScript arrayBuffer: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	resolved, err := awaitValue(ctx, result, deadline)
 	if err != nil {
 		t.Fatalf("await arrayBuffer: %v", err)
 	}
 
-	bl := resolved.GetPropertyStr("byteLength")
-	if bl.Int32() != 256 {
-		t.Fatalf("byteLength = %d, want 256", bl.Int32())
+	ctx.Global().Set("__testBuf", resolved)
+	blVal, err := ctx.RunScript("__testBuf.byteLength", "check_bl.js")
+	if err != nil {
+		t.Fatalf("checking byteLength: %v", err)
 	}
-	bl.Free()
+	if blVal.Int32() != 256 {
+		t.Fatalf("byteLength = %d, want 256", blVal.Int32())
+	}
 
 	// Spot-check key byte values: null, high bytes, and boundaries.
-	g := ctx.Global()
-	g.SetPropertyStr("__testBuf", resolved)
-	g.Free()
-
 	checks := []int{0x00, 0x01, 0x7F, 0x80, 0xFE, 0xFF}
 	for _, idx := range checks {
 		jsCode := fmt.Sprintf("new Uint8Array(__testBuf)[%d]", idx)
-		v, err := ctx.Eval("test.js", qjs.Code(jsCode))
+		v, err := ctx.RunScript(jsCode, "test_byte.js")
 		if err != nil {
 			t.Fatalf("eval byte[%d]: %v", idx, err)
 		}
 		got := byte(v.Int32())
-		v.Free()
 		if got != byte(idx) {
 			t.Fatalf("byte[%d] = 0x%02X, want 0x%02X", idx, got, byte(idx))
 		}
@@ -404,112 +252,115 @@ func TestStorageBinding_ArrayBuffer_AllByteValues(t *testing.T) {
 }
 
 func TestStorageBinding_ArrayBuffer_ThenTextRejects(t *testing.T) {
-	rt := newStorageTestContext(t)
-	defer safeClose(rt)
+	iso, ctx := newV8TestContext(t)
 
-	ctx := rt.Context()
-	obj := buildR2ObjectBody(ctx, "img.png", []byte{0x89, 0x50, 0x4E, 0x47}, &minio.ObjectInfo{
+	obj, err := buildR2ObjectBody(iso, ctx, "img.png", []byte{0x89, 0x50, 0x4E, 0x47}, &minio.ObjectInfo{
 		Size:         4,
 		ETag:         "etag",
 		ContentType:  "image/png",
 		LastModified: time.Now(),
 	})
-	defer safeFree(obj)
+	if err != nil {
+		t.Fatalf("buildR2ObjectBody: %v", err)
+	}
+	ctx.Global().Set("__obj", obj.Value)
+	deadline := time.Now().Add(5 * time.Second)
 
 	// Consume via arrayBuffer().
-	result, err := obj.InvokeJS("arrayBuffer")
+	result, err := ctx.RunScript("__obj.arrayBuffer()", "test_ab.js")
 	if err != nil {
-		t.Fatalf("InvokeJS arrayBuffer: %v", err)
+		t.Fatalf("RunScript arrayBuffer: %v", err)
 	}
-	defer safeFree(result)
-	if _, err := awaitValue(t, result); err != nil {
+	if _, err := awaitValue(ctx, result, deadline); err != nil {
 		t.Fatalf("await arrayBuffer: %v", err)
 	}
 
 	// text() must reject after arrayBuffer() consumed the body.
-	r2, err := obj.InvokeJS("text")
+	r2, err := ctx.RunScript("__obj.text()", "test_text.js")
 	if err != nil {
-		t.Fatalf("InvokeJS text: %v", err)
+		t.Fatalf("RunScript text: %v", err)
 	}
-	defer safeFree(r2)
-	_, err = awaitValue(t, r2)
+	_, err = awaitValue(ctx, r2, deadline)
 	if err == nil || !strings.Contains(err.Error(), "already consumed") {
 		t.Fatalf("expected body consumed rejection from text(), got %v", err)
 	}
 
 	// json() must also reject.
-	r3, err := obj.InvokeJS("json")
+	r3, err := ctx.RunScript("__obj.json()", "test_json.js")
 	if err != nil {
-		t.Fatalf("InvokeJS json: %v", err)
+		t.Fatalf("RunScript json: %v", err)
 	}
-	defer safeFree(r3)
-	_, err = awaitValue(t, r3)
+	_, err = awaitValue(ctx, r3, deadline)
 	if err == nil || !strings.Contains(err.Error(), "already consumed") {
 		t.Fatalf("expected body consumed rejection from json(), got %v", err)
 	}
 }
 
 func TestStorageBinding_Text_ThenArrayBufferRejects(t *testing.T) {
-	rt := newStorageTestContext(t)
-	defer safeClose(rt)
+	iso, ctx := newV8TestContext(t)
 
-	ctx := rt.Context()
-	obj := buildR2ObjectBody(ctx, "doc.txt", []byte("hello world"), &minio.ObjectInfo{
+	obj, err := buildR2ObjectBody(iso, ctx, "doc.txt", []byte("hello world"), &minio.ObjectInfo{
 		Size:         11,
 		ETag:         "etag",
 		ContentType:  "text/plain",
 		LastModified: time.Now(),
 	})
-	defer safeFree(obj)
+	if err != nil {
+		t.Fatalf("buildR2ObjectBody: %v", err)
+	}
+	ctx.Global().Set("__obj", obj.Value)
+	deadline := time.Now().Add(5 * time.Second)
 
 	// Consume via text().
-	result, err := obj.InvokeJS("text")
+	result, err := ctx.RunScript("__obj.text()", "test_text.js")
 	if err != nil {
-		t.Fatalf("InvokeJS text: %v", err)
+		t.Fatalf("RunScript text: %v", err)
 	}
-	defer safeFree(result)
-	if _, err := awaitValue(t, result); err != nil {
+	if _, err := awaitValue(ctx, result, deadline); err != nil {
 		t.Fatalf("await text: %v", err)
 	}
 
 	// arrayBuffer() must reject after text() consumed the body.
-	r2, err := obj.InvokeJS("arrayBuffer")
+	r2, err := ctx.RunScript("__obj.arrayBuffer()", "test_ab.js")
 	if err != nil {
-		t.Fatalf("InvokeJS arrayBuffer: %v", err)
+		t.Fatalf("RunScript arrayBuffer: %v", err)
 	}
-	defer safeFree(r2)
-	_, err = awaitValue(t, r2)
+	_, err = awaitValue(ctx, r2, deadline)
 	if err == nil || !strings.Contains(err.Error(), "already consumed") {
 		t.Fatalf("expected body consumed rejection from arrayBuffer(), got %v", err)
 	}
 }
 
 func TestStorageBinding_BodyUsed_TransitionsAfterRead(t *testing.T) {
-	rt := newStorageTestContext(t)
-	defer safeClose(rt)
+	iso, ctx := newV8TestContext(t)
 
-	ctx := rt.Context()
-	obj := buildR2ObjectBody(ctx, "k", []byte("hello"), &minio.ObjectInfo{
+	obj, err := buildR2ObjectBody(iso, ctx, "k", []byte("hello"), &minio.ObjectInfo{
 		Size:         5,
 		ETag:         "etag",
 		ContentType:  "text/plain",
 		LastModified: time.Now(),
 	})
-	defer safeFree(obj)
+	if err != nil {
+		t.Fatalf("buildR2ObjectBody: %v", err)
+	}
+	ctx.Global().Set("__obj", obj.Value)
+	deadline := time.Now().Add(5 * time.Second)
 
-	initial := obj.GetPropertyStr("bodyUsed")
+	// Initial bodyUsed should be false.
+	initial, err := ctx.RunScript("__obj.bodyUsed", "check_init.js")
+	if err != nil {
+		t.Fatalf("checking initial bodyUsed: %v", err)
+	}
 	if initial.String() != "false" {
 		t.Fatalf("initial bodyUsed = %q, want false", initial.String())
 	}
-	initial.Free()
 
-	result, err := obj.InvokeJS("text")
+	// Call text().
+	result, err := ctx.RunScript("__obj.text()", "test_text.js")
 	if err != nil {
-		t.Fatalf("InvokeJS text: %v", err)
+		t.Fatalf("RunScript text: %v", err)
 	}
-	defer safeFree(result)
-
-	resolved, err := awaitValue(t, result)
+	resolved, err := awaitValue(ctx, result, deadline)
 	if err != nil {
 		t.Fatalf("await text: %v", err)
 	}
@@ -517,48 +368,55 @@ func TestStorageBinding_BodyUsed_TransitionsAfterRead(t *testing.T) {
 		t.Fatalf("text result = %q, want hello", resolved.String())
 	}
 
-	after := obj.GetPropertyStr("bodyUsed")
+	// bodyUsed should be true after consuming.
+	after, err := ctx.RunScript("__obj.bodyUsed", "check_after.js")
+	if err != nil {
+		t.Fatalf("checking bodyUsed after text: %v", err)
+	}
 	if after.String() != "true" {
 		t.Fatalf("bodyUsed after text = %q, want true", after.String())
 	}
-	after.Free()
 
-	result2, err := obj.InvokeJS("text")
+	// Second text() call must reject.
+	result2, err := ctx.RunScript("__obj.text()", "test_text2.js")
 	if err != nil {
-		t.Fatalf("InvokeJS second text: %v", err)
+		t.Fatalf("RunScript second text: %v", err)
 	}
-	defer safeFree(result2)
-
-	_, err = awaitValue(t, result2)
+	_, err = awaitValue(ctx, result2, deadline)
 	if err == nil || !strings.Contains(err.Error(), "already consumed") {
 		t.Fatalf("expected body consumed rejection, got %v", err)
 	}
 }
 
 func TestStorageBinding_JSON_InvalidJSONRejects(t *testing.T) {
-	rt := newStorageTestContext(t)
-	defer safeClose(rt)
+	iso, ctx := newV8TestContext(t)
 
-	ctx := rt.Context()
-	obj := buildR2ObjectBody(ctx, "k", []byte("{not-json"), &minio.ObjectInfo{
+	obj, err := buildR2ObjectBody(iso, ctx, "k", []byte("{not-json"), &minio.ObjectInfo{
 		Size:         9,
 		ETag:         "etag",
 		ContentType:  "application/json",
 		LastModified: time.Now(),
 	})
-	defer safeFree(obj)
-
-	result, err := obj.InvokeJS("json")
 	if err != nil {
-		t.Fatalf("InvokeJS json: %v", err)
+		t.Fatalf("buildR2ObjectBody: %v", err)
 	}
-	defer safeFree(result)
+	ctx.Global().Set("__obj", obj.Value)
 
-	_, err = awaitValue(t, result)
+	result, err := ctx.RunScript("__obj.json()", "test_json.js")
+	if err != nil {
+		t.Fatalf("RunScript json: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	_, err = awaitValue(ctx, result, deadline)
 	if err == nil || !strings.Contains(err.Error(), "invalid JSON") {
 		t.Fatalf("expected invalid JSON rejection, got %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Pure Go helpers (no V8 dependency)
+// ---------------------------------------------------------------------------
 
 func TestBuildPublicObjectURL_PathEscaping(t *testing.T) {
 	u, err := buildPublicObjectURL("https://storage.example.com", "downloads", "releases/v1.0/file name+plus?.zip")

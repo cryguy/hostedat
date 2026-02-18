@@ -3,7 +3,7 @@ package worker
 import (
 	"fmt"
 
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 )
 
 // streamsJS implements ReadableStream, WritableStream, and TransformStream
@@ -357,8 +357,8 @@ globalThis.TransformStream = TransformStream;
 `
 
 // setupStreams evaluates the Streams API polyfills.
-func setupStreams(rt *qjs.Runtime) error {
-	if _, err := rt.Eval("streams.js", qjs.Code(streamsJS)); err != nil {
+func setupStreams(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+	if _, err := ctx.RunScript(streamsJS, "streams.js"); err != nil {
 		return fmt.Errorf("evaluating streams.js: %w", err)
 	}
 	return nil

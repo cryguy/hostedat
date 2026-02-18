@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 )
 
 // globalsJS defines pure-JS polyfills for simple global APIs.
@@ -50,25 +50,27 @@ Object.defineProperty(globalThis, 'navigator', {
 
 // setupGlobals registers structuredClone, performance.now(), navigator,
 // queueMicrotask, and the Event/EventTarget base classes.
-func setupGlobals(rt *qjs.Runtime) error {
-	ctx := rt.Context()
-
+func setupGlobals(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	// Evaluate pure-JS polyfills first.
-	if _, err := rt.Eval("globals.js", qjs.Code(globalsJS)); err != nil {
+	if _, err := ctx.RunScript(globalsJS, "globals.js"); err != nil {
 		return fmt.Errorf("evaluating globals.js: %w", err)
 	}
 
-	// performance.now() — Go-backed for high-resolution timing.
+	// performance.now()  EGo-backed for high-resolution timing.
 	startTime := time.Now()
-	perf := ctx.NewObject()
-	nowFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
+	perf, err := newJSObject(iso, ctx)
+	if err != nil {
+		return fmt.Errorf("creating performance object: %w", err)
+	}
+
+	ft := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		elapsed := time.Since(startTime)
 		ms := float64(elapsed.Nanoseconds()) / 1e6
-		return c.NewFloat64(ms), nil
-	}, false)
-	perf.SetPropertyStr("now", nowFn)
-	ctx.Global().SetPropertyStr("performance", perf)
+		val, _ := v8.NewValue(iso, ms)
+		return val
+	})
+	perf.Set("now", ft.GetFunction(ctx))
+	ctx.Global().Set("performance", perf)
 
 	return nil
 }

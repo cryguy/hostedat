@@ -3,7 +3,7 @@ package worker
 import (
 	"fmt"
 
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 )
 
 // bodyTypesJS patches Request and Response prototypes with:
@@ -11,9 +11,8 @@ import (
 //   (ArrayBuffer, TypedArray, Blob, URLSearchParams, FormData, ReadableStream)
 // - formData() method for parsing multipart/form-data and url-encoded bodies
 //
-// Uses prototype patching (not constructor wrapping) because QuickJS compiled
-// bytecode modules resolve constructors at load time, before wrapper functions
-// can intercept them.
+// Uses prototype patching so that worker scripts using the standard Request/Response
+// constructors get extended body handling automatically.
 //
 // This must be evaluated AFTER setupWebAPIs, setupStreams, and setupFormData
 // so that all referenced types (Blob, FormData, ReadableStream, File) are defined.
@@ -176,8 +175,8 @@ Response.prototype.formData = async function() {
 
 // setupBodyTypes patches Request/Response with extended body type support.
 // Must be called after setupWebAPIs, setupStreams, and setupFormData.
-func setupBodyTypes(rt *qjs.Runtime) error {
-	if _, err := rt.Eval("bodytypes.js", qjs.Code(bodyTypesJS)); err != nil {
+func setupBodyTypes(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+	if _, err := ctx.RunScript(bodyTypesJS, "bodytypes.js"); err != nil {
 		return fmt.Errorf("evaluating bodytypes.js: %w", err)
 	}
 	return nil

@@ -6,11 +6,11 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 )
 
 // webAPIsJS defines the Web API classes (Headers, Request, Response, URL,
-// TextEncoder, TextDecoder) in JavaScript. Go-backed helpers like __parseURL
+// URLSearchParams, TextEncoder, TextDecoder) in JavaScript. Go-backed helpers like __parseURL
 // are registered separately and called from inside these classes.
 const webAPIsJS = `
 class Headers {
@@ -260,8 +260,8 @@ USP.sort = function() {
 `
 
 // setupURLSearchParamsExt evaluates the URLSearchParams extension polyfill.
-func setupURLSearchParamsExt(rt *qjs.Runtime) error {
-	if _, err := rt.Eval("urlsearchparams_ext.js", qjs.Code(urlSearchParamsExtJS)); err != nil {
+func setupURLSearchParamsExt(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+	if _, err := ctx.RunScript(urlSearchParamsExtJS, "urlsearchparams_ext.js"); err != nil {
 		return fmt.Errorf("evaluating urlsearchparams_ext.js: %w", err)
 	}
 	return nil
@@ -269,15 +269,13 @@ func setupURLSearchParamsExt(rt *qjs.Runtime) error {
 
 // setupWebAPIs registers Go-backed helpers and evaluates the JS class
 // definitions that form the Web API surface available to workers.
-func setupWebAPIs(rt *qjs.Runtime) error {
-	ctx := rt.Context()
-
+func setupWebAPIs(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	// Register Go-backed URL parser.
-	ctx.SetFunc("__parseURL", func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
+	ft := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
 		if len(args) < 1 {
-			return c.NewString(`{"error":"URL constructor requires at least 1 argument"}`), nil
+			val, _ := v8.NewValue(iso, `{"error":"URL constructor requires at least 1 argument"}`)
+			return val
 		}
 
 		rawURL := args[0].String()
@@ -289,15 +287,18 @@ func setupWebAPIs(rt *qjs.Runtime) error {
 		parsed, err := parseURL(rawURL, base)
 		if err != nil {
 			errJSON := fmt.Sprintf(`{"error":%q}`, err.Error())
-			return c.NewString(errJSON), nil
+			val, _ := v8.NewValue(iso, errJSON)
+			return val
 		}
 
 		data, _ := json.Marshal(parsed)
-		return c.NewString(string(data)), nil
+		val, _ := v8.NewValue(iso, string(data))
+		return val
 	})
+	ctx.Global().Set("__parseURL", ft.GetFunction(ctx))
 
 	// Evaluate the JS class definitions.
-	_, err := rt.Eval("webapi.js", qjs.Code(webAPIsJS))
+	_, err := ctx.RunScript(webAPIsJS, "webapi.js")
 	return err
 }
 
@@ -369,78 +370,96 @@ func parseURL(rawURL, base string) (*urlParsed, error) {
 	}, nil
 }
 
-// goRequestToJS converts a Go WorkerRequest into a JS Request object by
-// invoking the Request constructor defined in webAPIsJS.
-func goRequestToJS(ctx *qjs.Context, req *WorkerRequest) (*qjs.Value, error) {
-	// Build the init object.
-	init := ctx.NewObject()
-	init.SetPropertyStr("method", ctx.NewString(req.Method))
-
-	headersObj := ctx.NewObject()
+// goRequestToJS converts a Go WorkerRequest into a JS Request object.
+func goRequestToJS(iso *v8.Isolate, ctx *v8.Context, req *WorkerRequest) (*v8.Value, error) {
+	// Lowercase headers for the JS Headers constructor.
+	lowerHeaders := make(map[string]string, len(req.Headers))
 	for k, v := range req.Headers {
-		headersObj.SetPropertyStr(strings.ToLower(k), ctx.NewString(v))
+		lowerHeaders[strings.ToLower(k)] = v
 	}
-	init.SetPropertyStr("headers", headersObj)
+	headersJSON, _ := json.Marshal(lowerHeaders)
 
+	// Set temporary globals for the constructor call.
+	urlVal, _ := v8.NewValue(iso, req.URL)
+	ctx.Global().Set("__tmp_url", urlVal)
+	methodVal, _ := v8.NewValue(iso, req.Method)
+	ctx.Global().Set("__tmp_method", methodVal)
+	headersStr, _ := v8.NewValue(iso, string(headersJSON))
+	ctx.Global().Set("__tmp_headers_json", headersStr)
+
+	var bodyScript string
 	if req.Body != nil && len(req.Body) > 0 {
-		init.SetPropertyStr("body", ctx.NewString(string(req.Body)))
+		bodyVal, _ := v8.NewValue(iso, string(req.Body))
+		ctx.Global().Set("__tmp_body", bodyVal)
+		bodyScript = "init.body = globalThis.__tmp_body;"
 	}
 
-	// Call: new Request(url, init)
-	requestCtor := ctx.Global().GetPropertyStr("Request")
-	defer requestCtor.Free()
+	script := fmt.Sprintf(`(function() {
+		var init = {
+			method: globalThis.__tmp_method,
+			headers: JSON.parse(globalThis.__tmp_headers_json),
+		};
+		%s
+		var req = new Request(globalThis.__tmp_url, init);
+		delete globalThis.__tmp_url;
+		delete globalThis.__tmp_method;
+		delete globalThis.__tmp_headers_json;
+		delete globalThis.__tmp_body;
+		return req;
+	})()`, bodyScript)
 
-	jsReq := requestCtor.CallConstructor(ctx.NewString(req.URL), init)
-	if jsReq.IsError() {
-		return nil, fmt.Errorf("failed to create JS Request: %s", jsReq.String())
-	}
-
-	return jsReq, nil
+	return ctx.RunScript(script, "goRequestToJS.js")
 }
 
 // jsResponseToGo extracts a Go WorkerResponse from a JS Response value.
-func jsResponseToGo(ctx *qjs.Context, val *qjs.Value) (*WorkerResponse, error) {
-	if val.IsNull() || val.IsUndefined() {
+func jsResponseToGo(ctx *v8.Context, val *v8.Value) (*WorkerResponse, error) {
+	if val == nil || val.IsNull() || val.IsUndefined() {
 		return nil, fmt.Errorf("worker returned null/undefined instead of Response")
 	}
 
-	status := val.GetPropertyStr("status")
-	statusCode := int(status.Int32())
-	status.Free()
-
-	// Extract headers from headers._map
-	headersVal := val.GetPropertyStr("headers")
-	headersMap := headersVal.GetPropertyStr("_map")
-	goHeaders := make(map[string]string)
-
-	if headersMap.IsObject() {
-		names, err := headersMap.GetOwnPropertyNames()
-		if err == nil {
-			for _, name := range names {
-				v := headersMap.GetPropertyStr(name)
-				goHeaders[name] = v.String()
-				v.Free()
+	// Use JS to extract all response data as JSON in one call.
+	ctx.Global().Set("__tmp_resp", val)
+	result, err := ctx.RunScript(`(function() {
+		var r = globalThis.__tmp_resp;
+		delete globalThis.__tmp_resp;
+		var headers = {};
+		if (r.headers && r.headers._map) {
+			var m = r.headers._map;
+			for (var k in m) {
+				if (m.hasOwnProperty(k)) headers[k] = m[k];
 			}
 		}
-	}
-	headersMap.Free()
-	headersVal.Free()
-
-	// Read body directly from _body property to avoid async .text() Promise
-	// which causes WASM memory issues when freeing the awaited Promise.
-	var body []byte
-	bodyVal := val.GetPropertyStr("_body")
-	if !bodyVal.IsNull() && !bodyVal.IsUndefined() {
-		bodyStr := bodyVal.String()
-		if bodyStr != "" {
-			body = []byte(bodyStr)
+		var body = '';
+		if (r._body !== null && r._body !== undefined) {
+			body = String(r._body);
 		}
+		return JSON.stringify({
+			status: r.status || 200,
+			headers: headers,
+			body: body,
+		});
+	})()`, "jsResponseToGo.js")
+	if err != nil {
+		return nil, fmt.Errorf("extracting response: %w", err)
 	}
-	bodyVal.Free()
+
+	var resp struct {
+		Status  int               `json:"status"`
+		Headers map[string]string `json:"headers"`
+		Body    string            `json:"body"`
+	}
+	if err := json.Unmarshal([]byte(result.String()), &resp); err != nil {
+		return nil, fmt.Errorf("parsing response JSON: %w", err)
+	}
+
+	var body []byte
+	if resp.Body != "" {
+		body = []byte(resp.Body)
+	}
 
 	return &WorkerResponse{
-		StatusCode: statusCode,
-		Headers:    goHeaders,
+		StatusCode: resp.Status,
+		Headers:    resp.Headers,
 		Body:       body,
 	}, nil
 }

@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 	minio "github.com/minio/minio-go/v7"
 )
 
@@ -27,112 +28,180 @@ type StorageBridge struct {
 //
 // All operations run synchronously on the JS thread (same rationale as KV bindings
 // in kv.go). Minio-go calls are HTTP to localhost SeaweedFS and respond quickly.
-func buildStorageBinding(ctx *qjs.Context, bridge *StorageBridge) *qjs.Value {
-	bucket := ctx.NewObject()
+func buildStorageBinding(iso *v8.Isolate, ctx *v8.Context, bridge *StorageBridge) (*v8.Value, error) {
+	bucket, err := newJSObject(iso, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("creating storage binding object: %w", err)
+	}
 
 	// get(key) -> Promise<R2ObjectBody|null>
-	getFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
-		promise := this.Promise()
+	bucket.Set("get", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		resolver, _ := v8.NewPromiseResolver(ctx)
+		args := info.Args()
 		if len(args) == 0 {
-			promise.Reject(c.NewError(fmt.Errorf("BUCKET.get requires a key argument")))
-			return c.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, "BUCKET.get requires a key argument")
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 		key := args[0].String()
 
 		obj, err := bridge.Client.GetObject(context.Background(), bridge.BucketName, key, minio.GetObjectOptions{})
 		if err != nil {
-			promise.Resolve(c.NewNull())
-			return c.NewUndefined(), nil
+			resolver.Resolve(v8.Null(iso))
+			return resolver.GetPromise().Value
 		}
 		defer obj.Close()
 
 		stat, err := obj.Stat()
 		if err != nil {
-			// Object not found.
-			promise.Resolve(c.NewNull())
-			return c.NewUndefined(), nil
+			resolver.Resolve(v8.Null(iso))
+			return resolver.GetPromise().Value
 		}
 
 		data, err := io.ReadAll(obj)
 		if err != nil {
-			promise.Reject(c.NewError(fmt.Errorf("reading object: %w", err)))
-			return c.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, fmt.Sprintf("reading object: %s", err.Error()))
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 
-		r2obj := buildR2ObjectBody(c, key, data, &stat)
-		promise.Resolve(r2obj)
-		return c.NewUndefined(), nil
-	}, true)
-	bucket.SetPropertyStr("get", getFn)
+		r2obj, err := buildR2ObjectBody(iso, ctx, key, data, &stat)
+		if err != nil {
+			errVal, _ := v8.NewValue(iso, err.Error())
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
+		}
+		resolver.Resolve(r2obj.Value)
+		return resolver.GetPromise().Value
+	}).GetFunction(ctx))
 
 	// put(key, value, opts?) -> Promise<R2Object>
-	putFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
-		promise := this.Promise()
+	bucket.Set("put", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		resolver, _ := v8.NewPromiseResolver(ctx)
+		args := info.Args()
 		if len(args) < 2 {
-			promise.Reject(c.NewError(fmt.Errorf("BUCKET.put requires key and value arguments")))
-			return c.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, "BUCKET.put requires key and value arguments")
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 		key := args[0].String()
-		valueBytes, err := coerceStoragePutBody(args[1])
-		if err != nil {
-			promise.Reject(c.NewError(err))
-			return c.NewUndefined(), nil
+
+		// Coerce body to bytes via JS (handles string, ArrayBuffer, TypedArray, Blob).
+		ctx.Global().Set("__tmp_put_body", args[1])
+		coerceResult, jsErr := ctx.RunScript(`(function() {
+			var v = globalThis.__tmp_put_body;
+			delete globalThis.__tmp_put_body;
+			if (typeof v === 'string') return JSON.stringify({type:'string',data:v});
+			if (v instanceof ArrayBuffer) {
+				var arr = new Uint8Array(v);
+				var s = '';
+				for (var i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]);
+				return JSON.stringify({type:'binary',data:btoa(s)});
+			}
+			if (ArrayBuffer.isView(v)) {
+				var arr = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+				var s = '';
+				for (var i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]);
+				return JSON.stringify({type:'binary',data:btoa(s)});
+			}
+			if (typeof Blob !== 'undefined' && v instanceof Blob) {
+				var parts = v._parts;
+				if (!parts) return JSON.stringify({type:'error',data:'Blob has no _parts'});
+				var result = '';
+				for (var i = 0; i < parts.length; i++) result += String(parts[i]);
+				return JSON.stringify({type:'string',data:result});
+			}
+			return JSON.stringify({type:'error',data:'unsupported body type: use string, ArrayBuffer, TypedArray, or Blob'});
+		})()`, "storage_coerce.js")
+		if jsErr != nil {
+			errVal, _ := v8.NewValue(iso, fmt.Sprintf("BUCKET.put body coercion: %s", jsErr.Error()))
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 
+		var coerced struct {
+			Type string `json:"type"`
+			Data string `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(coerceResult.String()), &coerced); err != nil {
+			errVal, _ := v8.NewValue(iso, "BUCKET.put: failed to parse coerced body")
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
+		}
+
+		var valueBytes []byte
+		switch coerced.Type {
+		case "string":
+			valueBytes = []byte(coerced.Data)
+		case "binary":
+			var decErr error
+			valueBytes, decErr = base64.StdEncoding.DecodeString(coerced.Data)
+			if decErr != nil {
+				errVal, _ := v8.NewValue(iso, "BUCKET.put: invalid binary body encoding")
+				resolver.Reject(errVal)
+				return resolver.GetPromise().Value
+			}
+		case "error":
+			errVal, _ := v8.NewValue(iso, fmt.Sprintf("BUCKET.put: %s", coerced.Data))
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
+		}
+
+		// Extract options via JS.
 		opts := minio.PutObjectOptions{}
 		customMeta := map[string]string{}
 
 		if len(args) > 2 && args[2].IsObject() {
-			optsObj := args[2]
-
-			// httpMetadata
-			httpMeta := optsObj.GetPropertyStr("httpMetadata")
-			if httpMeta.IsObject() {
-				ct := httpMeta.GetPropertyStr("contentType")
-				if !ct.IsUndefined() && !ct.IsNull() {
-					opts.ContentType = ct.String()
+			ctx.Global().Set("__tmp_put_opts", args[2])
+			optsResult, err := ctx.RunScript(`(function() {
+				var o = globalThis.__tmp_put_opts;
+				delete globalThis.__tmp_put_opts;
+				var result = {httpMetadata:{},customMetadata:{}};
+				if (o.httpMetadata && typeof o.httpMetadata === 'object') {
+					var h = o.httpMetadata;
+					if (h.contentType != null) result.httpMetadata.contentType = String(h.contentType);
+					if (h.contentEncoding != null) result.httpMetadata.contentEncoding = String(h.contentEncoding);
+					if (h.contentDisposition != null) result.httpMetadata.contentDisposition = String(h.contentDisposition);
+					if (h.contentLanguage != null) result.httpMetadata.contentLanguage = String(h.contentLanguage);
+					if (h.cacheControl != null) result.httpMetadata.cacheControl = String(h.cacheControl);
 				}
-				ct.Free()
-				ce := httpMeta.GetPropertyStr("contentEncoding")
-				if !ce.IsUndefined() && !ce.IsNull() {
-					opts.ContentEncoding = ce.String()
-				}
-				ce.Free()
-				cd := httpMeta.GetPropertyStr("contentDisposition")
-				if !cd.IsUndefined() && !cd.IsNull() {
-					opts.ContentDisposition = cd.String()
-				}
-				cd.Free()
-				cl := httpMeta.GetPropertyStr("contentLanguage")
-				if !cl.IsUndefined() && !cl.IsNull() {
-					opts.ContentLanguage = cl.String()
-				}
-				cl.Free()
-				cc := httpMeta.GetPropertyStr("cacheControl")
-				if !cc.IsUndefined() && !cc.IsNull() {
-					opts.CacheControl = cc.String()
-				}
-				cc.Free()
-			}
-			httpMeta.Free()
-
-			// customMetadata
-			cm := optsObj.GetPropertyStr("customMetadata")
-			if cm.IsObject() {
-				names, err := cm.GetOwnPropertyNames()
-				if err == nil {
-					for _, name := range names {
-						v := cm.GetPropertyStr(name)
-						customMeta[name] = v.String()
-						v.Free()
+				if (o.customMetadata && typeof o.customMetadata === 'object') {
+					for (var k in o.customMetadata) {
+						if (o.customMetadata.hasOwnProperty(k)) result.customMetadata[k] = String(o.customMetadata[k]);
 					}
 				}
+				return JSON.stringify(result);
+			})()`, "storage_put_opts.js")
+			if err == nil {
+				var parsed struct {
+					HTTPMetadata struct {
+						ContentType        string `json:"contentType"`
+						ContentEncoding    string `json:"contentEncoding"`
+						ContentDisposition string `json:"contentDisposition"`
+						ContentLanguage    string `json:"contentLanguage"`
+						CacheControl       string `json:"cacheControl"`
+					} `json:"httpMetadata"`
+					CustomMetadata map[string]string `json:"customMetadata"`
+				}
+				if json.Unmarshal([]byte(optsResult.String()), &parsed) == nil {
+					if parsed.HTTPMetadata.ContentType != "" {
+						opts.ContentType = parsed.HTTPMetadata.ContentType
+					}
+					if parsed.HTTPMetadata.ContentEncoding != "" {
+						opts.ContentEncoding = parsed.HTTPMetadata.ContentEncoding
+					}
+					if parsed.HTTPMetadata.ContentDisposition != "" {
+						opts.ContentDisposition = parsed.HTTPMetadata.ContentDisposition
+					}
+					if parsed.HTTPMetadata.ContentLanguage != "" {
+						opts.ContentLanguage = parsed.HTTPMetadata.ContentLanguage
+					}
+					if parsed.HTTPMetadata.CacheControl != "" {
+						opts.CacheControl = parsed.HTTPMetadata.CacheControl
+					}
+					customMeta = parsed.CustomMetadata
+				}
 			}
-			cm.Free()
 		}
 
 		if len(customMeta) > 0 {
@@ -140,106 +209,123 @@ func buildStorageBinding(ctx *qjs.Context, bridge *StorageBridge) *qjs.Value {
 		}
 
 		reader := bytes.NewReader(valueBytes)
-		info, err := bridge.Client.PutObject(context.Background(), bridge.BucketName, key, reader, int64(len(valueBytes)), opts)
+		putInfo, err := bridge.Client.PutObject(context.Background(), bridge.BucketName, key, reader, int64(len(valueBytes)), opts)
 		if err != nil {
-			promise.Reject(c.NewError(fmt.Errorf("putting object: %w", err)))
-			return c.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, fmt.Sprintf("putting object: %s", err.Error()))
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 
-		r2obj := buildR2Object(c, key, info.Size, info.ETag, opts.ContentType, customMeta)
-		promise.Resolve(r2obj)
-		return c.NewUndefined(), nil
-	}, true)
-	bucket.SetPropertyStr("put", putFn)
+		r2obj, err := buildR2Object(iso, ctx, key, putInfo.Size, putInfo.ETag, opts.ContentType, customMeta)
+		if err != nil {
+			errVal, _ := v8.NewValue(iso, err.Error())
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
+		}
+		resolver.Resolve(r2obj.Value)
+		return resolver.GetPromise().Value
+	}).GetFunction(ctx))
 
 	// delete(key|keys) -> Promise<void>
-	delFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
-		promise := this.Promise()
+	bucket.Set("delete", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		resolver, _ := v8.NewPromiseResolver(ctx)
+		args := info.Args()
 		if len(args) == 0 {
-			promise.Reject(c.NewError(fmt.Errorf("BUCKET.delete requires a key argument")))
-			return c.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, "BUCKET.delete requires a key argument")
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 
-		// Support single key (string) or array of keys.
-		if args[0].IsArray() {
-			length := args[0].GetPropertyStr("length")
-			n := int(length.Int32())
-			length.Free()
-			for i := 0; i < n; i++ {
-				item := args[0].GetPropertyIndex(int64(i))
-				k := item.String()
-				item.Free()
-				_ = bridge.Client.RemoveObject(context.Background(), bridge.BucketName, k, minio.RemoveObjectOptions{})
-			}
-		} else {
-			key := args[0].String()
-			_ = bridge.Client.RemoveObject(context.Background(), bridge.BucketName, key, minio.RemoveObjectOptions{})
+		// Support single key (string) or array of keys via JS extraction.
+		ctx.Global().Set("__tmp_del_arg", args[0])
+		keysResult, err := ctx.RunScript(`(function() {
+			var v = globalThis.__tmp_del_arg;
+			delete globalThis.__tmp_del_arg;
+			if (Array.isArray(v)) return JSON.stringify(v.map(String));
+			return JSON.stringify([String(v)]);
+		})()`, "storage_del_keys.js")
+		if err != nil {
+			errVal, _ := v8.NewValue(iso, fmt.Sprintf("BUCKET.delete: %s", err.Error()))
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 
-		promise.Resolve(c.NewUndefined())
-		return c.NewUndefined(), nil
-	}, true)
-	bucket.SetPropertyStr("delete", delFn)
+		var keys []string
+		if err := json.Unmarshal([]byte(keysResult.String()), &keys); err != nil {
+			errVal, _ := v8.NewValue(iso, "BUCKET.delete: failed to parse keys")
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
+		}
+
+		for _, k := range keys {
+			_ = bridge.Client.RemoveObject(context.Background(), bridge.BucketName, k, minio.RemoveObjectOptions{})
+		}
+
+		resolver.Resolve(v8.Undefined(iso))
+		return resolver.GetPromise().Value
+	}).GetFunction(ctx))
 
 	// head(key) -> Promise<R2Object|null>
-	headFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
-		promise := this.Promise()
+	bucket.Set("head", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		resolver, _ := v8.NewPromiseResolver(ctx)
+		args := info.Args()
 		if len(args) == 0 {
-			promise.Reject(c.NewError(fmt.Errorf("BUCKET.head requires a key argument")))
-			return c.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, "BUCKET.head requires a key argument")
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 		key := args[0].String()
 
 		stat, err := bridge.Client.StatObject(context.Background(), bridge.BucketName, key, minio.StatObjectOptions{})
 		if err != nil {
-			promise.Resolve(c.NewNull())
-			return c.NewUndefined(), nil
+			resolver.Resolve(v8.Null(iso))
+			return resolver.GetPromise().Value
 		}
 
-		r2obj := buildR2Object(c, key, stat.Size, stat.ETag, stat.ContentType, stat.UserMetadata)
-		promise.Resolve(r2obj)
-		return c.NewUndefined(), nil
-	}, true)
-	bucket.SetPropertyStr("head", headFn)
+		r2obj, err := buildR2Object(iso, ctx, key, stat.Size, stat.ETag, stat.ContentType, stat.UserMetadata)
+		if err != nil {
+			errVal, _ := v8.NewValue(iso, err.Error())
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
+		}
+		resolver.Resolve(r2obj.Value)
+		return resolver.GetPromise().Value
+	}).GetFunction(ctx))
 
 	// list(opts?) -> Promise<R2Objects>
-	listFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
-		promise := this.Promise()
+	bucket.Set("list", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		resolver, _ := v8.NewPromiseResolver(ctx)
+		args := info.Args()
 
 		var prefix, cursor, delimiter string
 		limit := 1000
 
 		if len(args) > 0 && args[0].IsObject() {
-			opts := args[0]
-			pVal := opts.GetPropertyStr("prefix")
-			if !pVal.IsUndefined() && !pVal.IsNull() {
-				prefix = pVal.String()
+			ctx.Global().Set("__tmp_list_opts", args[0])
+			optsResult, err := ctx.RunScript(`(function() {
+				var o = globalThis.__tmp_list_opts;
+				delete globalThis.__tmp_list_opts;
+				return JSON.stringify({
+					prefix: o.prefix != null ? String(o.prefix) : '',
+					cursor: o.cursor != null ? String(o.cursor) : '',
+					delimiter: o.delimiter != null ? String(o.delimiter) : '',
+					limit: o.limit != null ? Number(o.limit) : 1000,
+				});
+			})()`, "storage_list_opts.js")
+			if err == nil {
+				var opts struct {
+					Prefix    string `json:"prefix"`
+					Cursor    string `json:"cursor"`
+					Delimiter string `json:"delimiter"`
+					Limit     int    `json:"limit"`
+				}
+				if json.Unmarshal([]byte(optsResult.String()), &opts) == nil {
+					prefix = opts.Prefix
+					cursor = opts.Cursor
+					delimiter = opts.Delimiter
+					limit = opts.Limit
+				}
 			}
-			pVal.Free()
-
-			cVal := opts.GetPropertyStr("cursor")
-			if !cVal.IsUndefined() && !cVal.IsNull() {
-				cursor = cVal.String()
-			}
-			cVal.Free()
-
-			dVal := opts.GetPropertyStr("delimiter")
-			if !dVal.IsUndefined() && !dVal.IsNull() {
-				delimiter = dVal.String()
-			}
-			dVal.Free()
-
-			lVal := opts.GetPropertyStr("limit")
-			if !lVal.IsUndefined() && !lVal.IsNull() {
-				limit = int(lVal.Int32())
-			}
-			lVal.Free()
 		}
 
 		listOpts := minio.ListObjectsOptions{
@@ -259,8 +345,6 @@ func buildStorageBinding(ctx *qjs.Context, bridge *StorageBridge) *qjs.Value {
 			if obj.Err != nil {
 				break
 			}
-			// CommonPrefixes show up as empty Key with a Prefix field in some S3 impls.
-			// Minio-go for delimiter mode returns them differently.
 			if strings.HasSuffix(obj.Key, "/") && delimiter != "" {
 				delimitedPrefixes = append(delimitedPrefixes, obj.Key)
 				continue
@@ -290,31 +374,40 @@ func buildStorageBinding(ctx *qjs.Context, bridge *StorageBridge) *qjs.Value {
 			"delimitedPrefixes": delimitedPrefixes,
 		}
 		data, _ := json.Marshal(result)
-		promise.Resolve(c.ParseJSON(string(data)))
-		return c.NewUndefined(), nil
-	}, true)
-	bucket.SetPropertyStr("list", listFn)
+
+		jsResult, err := ctx.RunScript(fmt.Sprintf("JSON.parse(%q)", string(data)), "storage_list_result.js")
+		if err != nil {
+			errVal, _ := v8.NewValue(iso, err.Error())
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
+		}
+		resolver.Resolve(jsResult)
+		return resolver.GetPromise().Value
+	}).GetFunction(ctx))
 
 	// createSignedUrl(key, opts?) -> Promise<string>
-	// opts: { expiresIn?: number } (seconds, default 3600, max 604800)
 	if bridge.Client != nil || bridge.PresignClient != nil {
-		signFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-			c := this.Context()
-			args := this.Args()
-			promise := this.Promise()
+		bucket.Set("createSignedUrl", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+			resolver, _ := v8.NewPromiseResolver(ctx)
+			args := info.Args()
 			if len(args) == 0 {
-				promise.Reject(c.NewError(fmt.Errorf("BUCKET.createSignedUrl requires a key argument")))
-				return c.NewUndefined(), nil
+				errVal, _ := v8.NewValue(iso, "BUCKET.createSignedUrl requires a key argument")
+				resolver.Reject(errVal)
+				return resolver.GetPromise().Value
 			}
 			key := args[0].String()
 
 			expiry := 3600 // default 1 hour
 			if len(args) > 1 && args[1].IsObject() {
-				eVal := args[1].GetPropertyStr("expiresIn")
-				if !eVal.IsUndefined() && !eVal.IsNull() {
-					expiry = int(eVal.Int32())
+				ctx.Global().Set("__tmp_sign_opts", args[1])
+				optsResult, err := ctx.RunScript(`(function() {
+					var o = globalThis.__tmp_sign_opts;
+					delete globalThis.__tmp_sign_opts;
+					return o.expiresIn != null ? Number(o.expiresIn) : 3600;
+				})()`, "storage_sign_opts.js")
+				if err == nil {
+					expiry = int(optsResult.Int32())
 				}
-				eVal.Free()
 			}
 			if expiry < 1 {
 				expiry = 1
@@ -326,14 +419,16 @@ func buildStorageBinding(ctx *qjs.Context, bridge *StorageBridge) *qjs.Value {
 			signClient := bridge.PresignClient
 			if signClient == nil {
 				if bridge.PublicS3URL != "" {
-					promise.Reject(c.NewError(fmt.Errorf("creating signed URL: presign client not configured for public S3 host")))
-					return c.NewUndefined(), nil
+					errVal, _ := v8.NewValue(iso, "creating signed URL: presign client not configured for public S3 host")
+					resolver.Reject(errVal)
+					return resolver.GetPromise().Value
 				}
 				signClient = bridge.Client
 			}
 			if signClient == nil {
-				promise.Reject(c.NewError(fmt.Errorf("creating signed URL: storage client not configured")))
-				return c.NewUndefined(), nil
+				errVal, _ := v8.NewValue(iso, "creating signed URL: storage client not configured")
+				resolver.Reject(errVal)
+				return resolver.GetPromise().Value
 			}
 
 			presigned, err := signClient.PresignedGetObject(
@@ -344,39 +439,37 @@ func buildStorageBinding(ctx *qjs.Context, bridge *StorageBridge) *qjs.Value {
 				nil,
 			)
 			if err != nil {
-				promise.Reject(c.NewError(fmt.Errorf("creating signed URL: %w", err)))
-				return c.NewUndefined(), nil
+				errVal, _ := v8.NewValue(iso, fmt.Sprintf("creating signed URL: %s", err.Error()))
+				resolver.Reject(errVal)
+				return resolver.GetPromise().Value
 			}
 
-			promise.Resolve(c.NewString(presigned.String()))
-			return c.NewUndefined(), nil
-		}, true)
-		bucket.SetPropertyStr("createSignedUrl", signFn)
+			urlVal, _ := v8.NewValue(iso, presigned.String())
+			resolver.Resolve(urlVal)
+			return resolver.GetPromise().Value
+		}).GetFunction(ctx))
 	}
 
-	// publicUrl(key) -> string
-	// Returns a direct object URL at {publicS3URL}/{bucket}/{key}. This is
-	// intended for buckets with public-read enabled.
+	// publicUrl(key) -> string (synchronous)
 	if bridge.PublicS3URL != "" {
-		publicURLFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-			c := this.Context()
-			args := this.Args()
+		bucket.Set("publicUrl", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+			args := info.Args()
 			if len(args) == 0 {
-				return nil, fmt.Errorf("BUCKET.publicUrl requires a key argument")
+				return throwError(iso, "BUCKET.publicUrl requires a key argument")
 			}
 			key := args[0].String()
 
 			objectURL, err := buildPublicObjectURL(bridge.PublicS3URL, bridge.BucketName, key)
 			if err != nil {
-				return nil, fmt.Errorf("creating public object URL: %w", err)
+				return throwError(iso, fmt.Sprintf("creating public object URL: %s", err.Error()))
 			}
 
-			return c.NewString(objectURL), nil
-		}, false)
-		bucket.SetPropertyStr("publicUrl", publicURLFn)
+			val, _ := v8.NewValue(iso, objectURL)
+			return val
+		}).GetFunction(ctx))
 	}
 
-	return bucket
+	return bucket.Value, nil
 }
 
 // buildPublicObjectURL returns an object URL using the configured public S3 base.
@@ -411,152 +504,136 @@ func escapePathSegments(path string) string {
 	return strings.Join(parts, "/")
 }
 
-func coerceStoragePutBody(v *qjs.Value) ([]byte, error) {
-	if v.IsString() {
-		return []byte(v.String()), nil
-	}
-
-	if v.IsByteArray() {
-		return v.ToByteArray(), nil
-	}
-
-	if qjs.IsTypedArray(v) {
-		buf, err := qjs.JsTypedArrayToGo(v)
-		if err != nil {
-			return nil, fmt.Errorf("BUCKET.put failed to read TypedArray body: %w", err)
-		}
-		return buf, nil
-	}
-
-	if v.IsGlobalInstanceOf("Blob") {
-		buf, err := blobToBytes(v)
-		if err != nil {
-			return nil, fmt.Errorf("BUCKET.put failed to read Blob body: %w", err)
-		}
-		return buf, nil
-	}
-
-	return nil, fmt.Errorf("BUCKET.put currently supports string, ArrayBuffer, TypedArray, DataView, Blob, and File values")
-}
-
-// blobToBytes reads a Blob/File's internal _parts array synchronously.
-//
-// IMPORTANT: Do NOT call async JS methods (like arrayBuffer()) from Go and
-// then Await+Free both the Promise and the resolved value. The QuickJS WASM
-// build double-frees the resolved value when the Promise is freed, causing
-// "out of bounds memory access" panics. Always read internal JS properties
-// (e.g. _body, _parts, _map) synchronously instead. See also: jsResponseToGo
-// in webapi.go and the Execute() comment in engine.go.
-func blobToBytes(blob *qjs.Value) ([]byte, error) {
-	parts := blob.GetPropertyStr("_parts")
-	defer parts.Free()
-
-	if parts.IsNull() || parts.IsUndefined() {
-		return nil, fmt.Errorf("Blob has no _parts property")
-	}
-
-	lenVal := parts.GetPropertyStr("length")
-	length := int(lenVal.Int32())
-	lenVal.Free()
-
-	var result []byte
-	for i := 0; i < length; i++ {
-		elem := parts.GetPropertyIndex(int64(i))
-		result = append(result, []byte(elem.String())...)
-		elem.Free()
-	}
-
-	return result, nil
-}
-
 // buildR2Object creates a JS object matching the Cloudflare R2Object shape.
-func buildR2Object(c *qjs.Context, key string, size int64, etag string, contentType string, customMeta map[string]string) *qjs.Value {
-	obj := c.NewObject()
-	obj.SetPropertyStr("key", c.NewString(key))
-	obj.SetPropertyStr("size", c.NewFloat64(float64(size)))
-	obj.SetPropertyStr("etag", c.NewString(etag))
-	obj.SetPropertyStr("httpEtag", c.NewString("\""+etag+"\""))
-	obj.SetPropertyStr("version", c.NewString(etag))
-	obj.SetPropertyStr("storageClass", c.NewString("STANDARD"))
+func buildR2Object(iso *v8.Isolate, ctx *v8.Context, key string, size int64, etag string, contentType string, customMeta map[string]string) (*v8.Object, error) {
+	obj, err := newJSObject(iso, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("creating R2Object: %w", err)
+	}
 
-	httpMeta := c.NewObject()
+	keyVal, _ := v8.NewValue(iso, key)
+	obj.Set("key", keyVal)
+	sizeVal, _ := v8.NewValue(iso, float64(size))
+	obj.Set("size", sizeVal)
+	etagVal, _ := v8.NewValue(iso, etag)
+	obj.Set("etag", etagVal)
+	httpEtagVal, _ := v8.NewValue(iso, "\""+etag+"\"")
+	obj.Set("httpEtag", httpEtagVal)
+	versionVal, _ := v8.NewValue(iso, etag)
+	obj.Set("version", versionVal)
+	scVal, _ := v8.NewValue(iso, "STANDARD")
+	obj.Set("storageClass", scVal)
+
+	httpMeta, _ := newJSObject(iso, ctx)
 	if contentType != "" {
-		httpMeta.SetPropertyStr("contentType", c.NewString(contentType))
+		ctVal, _ := v8.NewValue(iso, contentType)
+		httpMeta.Set("contentType", ctVal)
 	}
-	obj.SetPropertyStr("httpMetadata", httpMeta)
+	obj.Set("httpMetadata", httpMeta)
 
-	cm := c.NewObject()
+	cm, _ := newJSObject(iso, ctx)
 	for k, v := range customMeta {
-		cm.SetPropertyStr(k, c.NewString(v))
+		vVal, _ := v8.NewValue(iso, v)
+		cm.Set(k, vVal)
 	}
-	obj.SetPropertyStr("customMetadata", cm)
+	obj.Set("customMetadata", cm)
 
-	checksums := c.NewObject()
-	obj.SetPropertyStr("checksums", checksums)
+	checksums, _ := newJSObject(iso, ctx)
+	obj.Set("checksums", checksums)
 
-	return obj
+	return obj, nil
 }
 
 // buildR2ObjectBody extends R2Object with body reading methods.
-func buildR2ObjectBody(c *qjs.Context, key string, data []byte, stat *minio.ObjectInfo) *qjs.Value {
-	obj := buildR2Object(c, key, stat.Size, stat.ETag, stat.ContentType, stat.UserMetadata)
-	obj.SetPropertyStr("uploaded", c.NewFloat64(float64(stat.LastModified.UnixMilli())))
+func buildR2ObjectBody(iso *v8.Isolate, ctx *v8.Context, key string, data []byte, stat *minio.ObjectInfo) (*v8.Object, error) {
+	obj, err := buildR2Object(iso, ctx, key, stat.Size, stat.ETag, stat.ContentType, stat.UserMetadata)
+	if err != nil {
+		return nil, err
+	}
+
+	uploadedVal, _ := v8.NewValue(iso, float64(stat.LastModified.UnixMilli()))
+	obj.Set("uploaded", uploadedVal)
 
 	bodyUsed := false
 	bodyData := string(data)
-	markBodyUsed := func() {
-		bodyUsed = true
-		obj.SetPropertyStr("bodyUsed", c.NewBool(true))
-	}
 
 	// text() -> Promise<string>
-	textFn := c.Function(func(this *qjs.This) (*qjs.Value, error) {
-		cc := this.Context()
-		p := this.Promise()
+	obj.Set("text", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		resolver, _ := v8.NewPromiseResolver(ctx)
 		if bodyUsed {
-			p.Reject(cc.NewError(fmt.Errorf("body already consumed")))
-			return cc.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, "body already consumed")
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
-		markBodyUsed()
-		p.Resolve(cc.NewString(bodyData))
-		return cc.NewUndefined(), nil
-	}, true)
-	obj.SetPropertyStr("text", textFn)
+		bodyUsed = true
+		boolVal, _ := v8.NewValue(iso, true)
+		obj.Set("bodyUsed", boolVal)
+		textVal, _ := v8.NewValue(iso, bodyData)
+		resolver.Resolve(textVal)
+		return resolver.GetPromise().Value
+	}).GetFunction(ctx))
 
 	// arrayBuffer() -> Promise<ArrayBuffer>
-	abFn := c.Function(func(this *qjs.This) (*qjs.Value, error) {
-		cc := this.Context()
-		p := this.Promise()
+	obj.Set("arrayBuffer", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		resolver, _ := v8.NewPromiseResolver(ctx)
 		if bodyUsed {
-			p.Reject(cc.NewError(fmt.Errorf("body already consumed")))
-			return cc.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, "body already consumed")
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
-		markBodyUsed()
-		p.Resolve(cc.NewArrayBuffer(data))
-		return cc.NewUndefined(), nil
-	}, true)
-	obj.SetPropertyStr("arrayBuffer", abFn)
+		bodyUsed = true
+		boolVal, _ := v8.NewValue(iso, true)
+		obj.Set("bodyUsed", boolVal)
+		// Create ArrayBuffer via JS from base64.
+		b64 := base64.StdEncoding.EncodeToString(data)
+		b64Val, _ := v8.NewValue(iso, b64)
+		ctx.Global().Set("__tmp_ab_b64", b64Val)
+		abResult, err := ctx.RunScript(`(function() {
+			var b64 = globalThis.__tmp_ab_b64;
+			delete globalThis.__tmp_ab_b64;
+			var raw = atob(b64);
+			var buf = new ArrayBuffer(raw.length);
+			var arr = new Uint8Array(buf);
+			for (var i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+			return buf;
+		})()`, "r2_arraybuffer.js")
+		if err != nil {
+			errVal, _ := v8.NewValue(iso, err.Error())
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
+		}
+		resolver.Resolve(abResult)
+		return resolver.GetPromise().Value
+	}).GetFunction(ctx))
 
 	// json() -> Promise<any>
-	jsonFn := c.Function(func(this *qjs.This) (*qjs.Value, error) {
-		cc := this.Context()
-		p := this.Promise()
+	obj.Set("json", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		resolver, _ := v8.NewPromiseResolver(ctx)
 		if bodyUsed {
-			p.Reject(cc.NewError(fmt.Errorf("body already consumed")))
-			return cc.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, "body already consumed")
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
-		markBodyUsed()
+		bodyUsed = true
+		boolVal, _ := v8.NewValue(iso, true)
+		obj.Set("bodyUsed", boolVal)
 		if !json.Valid([]byte(bodyData)) {
-			p.Reject(cc.NewError(fmt.Errorf("invalid JSON")))
-			return cc.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, "invalid JSON")
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
-		parsed := cc.ParseJSON(bodyData)
-		p.Resolve(parsed)
-		return cc.NewUndefined(), nil
-	}, true)
-	obj.SetPropertyStr("json", jsonFn)
+		parsed, err := ctx.RunScript(fmt.Sprintf("JSON.parse(%q)", bodyData), "r2_json_parse.js")
+		if err != nil {
+			errVal, _ := v8.NewValue(iso, err.Error())
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
+		}
+		resolver.Resolve(parsed)
+		return resolver.GetPromise().Value
+	}).GetFunction(ctx))
 
-	obj.SetPropertyStr("bodyUsed", c.NewBool(false))
+	falseVal, _ := v8.NewValue(iso, false)
+	obj.Set("bodyUsed", falseVal)
 
-	return obj
+	return obj, nil
 }

@@ -3,7 +3,7 @@ package worker
 import (
 	"fmt"
 
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 )
 
 // formdataJS implements Blob, File, and FormData as pure JS polyfills.
@@ -157,8 +157,8 @@ globalThis.FormData = FormData;
 `
 
 // setupFormData evaluates the FormData/Blob/File polyfills.
-func setupFormData(rt *qjs.Runtime) error {
-	if _, err := rt.Eval("formdata.js", qjs.Code(formdataJS)); err != nil {
+func setupFormData(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+	if _, err := ctx.RunScript(formdataJS, "formdata.js"); err != nil {
 		return fmt.Errorf("evaluating formdata.js: %w", err)
 	}
 	return nil

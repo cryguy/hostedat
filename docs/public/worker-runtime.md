@@ -1,6 +1,6 @@
 # hostedat Worker Runtime
 
-The worker runtime executes JavaScript using QuickJS (via Wazero, pure Go, zero CGO). Workers are Cloudflare Workers-compatible in structure, but not all Cloudflare APIs are available. This document describes exactly what is available.
+The worker runtime executes JavaScript using V8 (via v8go, CGO bindings to the V8 engine). Workers are Cloudflare Workers-compatible in structure, but not all Cloudflare APIs are available. This document describes exactly what is available.
 
 ---
 
@@ -706,8 +706,8 @@ Request arrives → check pool for {siteID, deployID} → checkout runtime
 
 | Feature | Cloudflare | hostedat |
 |---------|-----------|---------|
-| JS engine | V8 | QuickJS (via Wazero) |
-| Module system | ESM (native V8) | ESM (QuickJS subset) |
+| JS engine | V8 | V8 (via v8go) |
+| Module system | ESM (native V8) | ESM (wrapped via globalThis) |
 | `crypto.subtle` algorithms | Full Web Crypto API | HMAC, AES-GCM, digest only |
 | `importKey` formats | JWK, PKCS8, SPKI, raw | `raw` only |
 | Timer accuracy | Wall-clock | Microtask-based (no real delay) |

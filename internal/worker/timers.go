@@ -1,97 +1,79 @@
 package worker
 
 import (
-	"fmt"
+	"time"
 
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 )
 
-// timersJS implements setTimeout/setInterval/clearTimeout/clearInterval.
-// In the Workers model, timers only fire during microtask processing (Promise
-// chains). setTimeout(fn, 0) schedules fn on the next microtask tick.
-// Longer delays are approximate and constrained by the execution timeout.
-//
-// Implementation: We use Promise-based scheduling since QuickJS processes
-// Promise microtasks synchronously. setTimeout(fn, 0) is equivalent to
-// queueMicrotask(fn). For non-zero delays, we still use microtask scheduling
-// since we cannot use real timers in the single-threaded WASM environment.
-const timersJS = `
-(function() {
-	let __timerID = 0;
-	const __timers = new Map();
-	const __MAX_INTERVAL_TICKS = 1000;
-
-	function __scheduleCallback(fn, delay) {
-		if (delay <= 0) {
-			Promise.resolve().then(fn);
-		} else {
-			// Approximate delay using a chain of microtasks.
-			// Each microtask takes ~0ms, so for non-zero delays we just
-			// schedule on the next microtask. True wall-clock delay is not
-			// achievable in synchronous WASM, but this matches the Workers
-			// contract: timers fire when the JS thread yields.
-			Promise.resolve().then(fn);
+// setupTimers registers Go-backed setTimeout/setInterval/clearTimeout/clearInterval.
+// Unlike the previous JS microtask-based implementation, these use real wall-clock
+// delays via the eventLoop. Timer callbacks fire during eventLoop.drain() which is
+// called by Engine.Execute after the fetch handler returns.
+func setupTimers(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+	// setTimeout(fn, delay) -> timerID
+	setTimeoutFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
+		if len(args) < 1 || !args[0].IsFunction() {
+			val, _ := v8.NewValue(iso, int32(0))
+			return val
 		}
-	}
-
-	globalThis.setTimeout = function(fn, delay) {
-		if (typeof fn !== 'function') return 0;
-		const id = ++__timerID;
-		let cancelled = false;
-		__timers.set(id, { cancel: function() { cancelled = true; } });
-		__scheduleCallback(function() {
-			if (!cancelled) {
-				__timers.delete(id);
-				fn();
-			}
-		}, delay || 0);
-		return id;
-	};
-
-	globalThis.clearTimeout = function(id) {
-		const timer = __timers.get(id);
-		if (timer) {
-			timer.cancel();
-			__timers.delete(id);
+		fn, err := args[0].AsFunction()
+		if err != nil {
+			val, _ := v8.NewValue(iso, int32(0))
+			return val
 		}
-	};
-
-	globalThis.setInterval = function(fn, delay) {
-		if (typeof fn !== 'function') return 0;
-		const id = ++__timerID;
-		let cancelled = false;
-		let count = 0;
-		__timers.set(id, { cancel: function() { cancelled = true; } });
-		function tick() {
-			if (cancelled) return;
-			if (++count > __MAX_INTERVAL_TICKS) {
-				cancelled = true;
-				__timers.delete(id);
-				return;
-			}
-			fn();
-			if (!cancelled) {
-				__scheduleCallback(tick, delay || 0);
-			}
+		var delay time.Duration
+		if len(args) > 1 {
+			delay = time.Duration(args[1].Int32()) * time.Millisecond
 		}
-		__scheduleCallback(tick, delay || 0);
-		return id;
-	};
+		id := el.setTimeout(fn, delay)
+		val, _ := v8.NewValue(iso, int32(id))
+		return val
+	})
+	ctx.Global().Set("setTimeout", setTimeoutFT.GetFunction(ctx))
 
-	globalThis.clearInterval = function(id) {
-		const timer = __timers.get(id);
-		if (timer) {
-			timer.cancel();
-			__timers.delete(id);
+	// clearTimeout(id)
+	clearTimeoutFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
+		if len(args) > 0 {
+			el.clearTimer(int(args[0].Int32()))
 		}
-	};
-})();
-`
+		return v8.Undefined(iso)
+	})
+	ctx.Global().Set("clearTimeout", clearTimeoutFT.GetFunction(ctx))
 
-// setupTimers evaluates the timer polyfills.
-func setupTimers(rt *qjs.Runtime) error {
-	if _, err := rt.Eval("timers.js", qjs.Code(timersJS)); err != nil {
-		return fmt.Errorf("evaluating timers.js: %w", err)
-	}
+	// setInterval(fn, interval) -> timerID
+	setIntervalFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
+		if len(args) < 1 || !args[0].IsFunction() {
+			val, _ := v8.NewValue(iso, int32(0))
+			return val
+		}
+		fn, err := args[0].AsFunction()
+		if err != nil {
+			val, _ := v8.NewValue(iso, int32(0))
+			return val
+		}
+		interval := 10 * time.Millisecond // minimum interval
+		if len(args) > 1 && args[1].Int32() > 0 {
+			interval = time.Duration(args[1].Int32()) * time.Millisecond
+		}
+		id := el.setInterval(fn, interval)
+		val, _ := v8.NewValue(iso, int32(id))
+		return val
+	})
+	ctx.Global().Set("setInterval", setIntervalFT.GetFunction(ctx))
+
+	// clearInterval(id)  Esame semantics as clearTimeout.
+	clearIntervalFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
+		if len(args) > 0 {
+			el.clearTimer(int(args[0].Int32()))
+		}
+		return v8.Undefined(iso)
+	})
+	ctx.Global().Set("clearInterval", clearIntervalFT.GetFunction(ctx))
+
 	return nil
 }

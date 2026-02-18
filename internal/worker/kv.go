@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/cryguy/hostedat/internal/models"
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 	"gorm.io/gorm"
 )
 
@@ -27,7 +27,6 @@ func (kv *KVBridge) Get(key string) (string, error) {
 		return "", err
 	}
 
-	// Check expiration.
 	if entry.ExpiresAt != nil && entry.ExpiresAt.Before(time.Now()) {
 		kv.DB.Delete(&entry)
 		return "", nil
@@ -54,7 +53,6 @@ func (kv *KVBridge) Put(key, value string, metadata *string, ttl *int) error {
 	var existing models.KVEntry
 	err := kv.DB.Where("namespace_id = ? AND key = ?", kv.NamespaceID, key).First(&existing).Error
 	if err == nil {
-		// Update existing.
 		return kv.DB.Model(&existing).Updates(map[string]interface{}{
 			"value":      value,
 			"metadata":   metadata,
@@ -65,7 +63,6 @@ func (kv *KVBridge) Put(key, value string, metadata *string, ttl *int) error {
 		return err
 	}
 
-	// Insert new.
 	entry := models.KVEntry{
 		NamespaceID: kv.NamespaceID,
 		Key:         key,
@@ -115,45 +112,47 @@ func (kv *KVBridge) List(prefix string, limit int) ([]map[string]interface{}, er
 // buildKVBinding creates a JS object with async get/put/delete/list methods
 // backed by the given KVBridge.
 //
-// All operations run synchronously on the JS thread. QuickJS/Wazero is not
-// thread-safe — calling context methods (NewString, NewObject, ParseJSON,
-// promise.Resolve, etc.) from goroutines causes WASM out-of-bounds crashes.
-// SQLite queries are fast local I/O, so synchronous execution is fine.
-func buildKVBinding(ctx *qjs.Context, bridge *KVBridge) *qjs.Value {
-	kv := ctx.NewObject()
+// All operations run synchronously on the JS thread. SQLite queries are fast
+// local I/O, so synchronous execution within a PromiseResolver is fine.
+func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Value, error) {
+	kv, err := newJSObject(iso, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("creating KV object: %w", err)
+	}
 
 	// get(key) -> Promise<string|null>
-	getFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
-		promise := this.Promise()
+	kv.Set("get", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		resolver, _ := v8.NewPromiseResolver(ctx)
+		args := info.Args()
 		if len(args) == 0 {
-			promise.Reject(c.NewError(fmt.Errorf("KV.get requires a key argument")))
-			return c.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, "KV.get requires a key argument")
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 		key := args[0].String()
 		val, err := bridge.Get(key)
 		if err != nil {
-			promise.Reject(c.NewError(err))
-			return c.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, err.Error())
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 		if val == "" {
-			promise.Resolve(c.NewNull())
+			resolver.Resolve(v8.Null(iso))
 		} else {
-			promise.Resolve(c.NewString(val))
+			strVal, _ := v8.NewValue(iso, val)
+			resolver.Resolve(strVal)
 		}
-		return c.NewUndefined(), nil
-	}, true)
-	kv.SetPropertyStr("get", getFn)
+		return resolver.GetPromise().Value
+	}).GetFunction(ctx))
 
 	// put(key, value, options?) -> Promise<void>
-	putFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
-		promise := this.Promise()
+	kv.Set("put", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		resolver, _ := v8.NewPromiseResolver(ctx)
+		args := info.Args()
 		if len(args) < 2 {
-			promise.Reject(c.NewError(fmt.Errorf("KV.put requires key and value arguments")))
-			return c.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, "KV.put requires key and value arguments")
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 		key := args[0].String()
 		value := args[1].String()
@@ -161,86 +160,105 @@ func buildKVBinding(ctx *qjs.Context, bridge *KVBridge) *qjs.Value {
 		var metadata *string
 		var ttl *int
 		if len(args) > 2 && args[2].IsObject() {
-			opts := args[2]
-			metaVal := opts.GetPropertyStr("metadata")
-			if !metaVal.IsUndefined() && !metaVal.IsNull() {
-				m := metaVal.String()
-				metadata = &m
+			// Extract options via JS to avoid complex property iteration.
+			ctx.Global().Set("__tmp_kv_opts", args[2])
+			optsResult, err := ctx.RunScript(`(function() {
+				var o = globalThis.__tmp_kv_opts;
+				delete globalThis.__tmp_kv_opts;
+				return JSON.stringify({
+					metadata: o.metadata !== undefined && o.metadata !== null ? String(o.metadata) : null,
+					expirationTtl: o.expirationTtl !== undefined && o.expirationTtl !== null ? Number(o.expirationTtl) : null,
+				});
+			})()`, "kv_opts.js")
+			if err == nil {
+				var opts struct {
+					Metadata      *string `json:"metadata"`
+					ExpirationTtl *int    `json:"expirationTtl"`
+				}
+				if json.Unmarshal([]byte(optsResult.String()), &opts) == nil {
+					metadata = opts.Metadata
+					ttl = opts.ExpirationTtl
+				}
 			}
-			metaVal.Free()
-
-			ttlVal := opts.GetPropertyStr("expirationTtl")
-			if !ttlVal.IsUndefined() && !ttlVal.IsNull() {
-				t := int(ttlVal.Int32())
-				ttl = &t
-			}
-			ttlVal.Free()
 		}
 
 		if err := bridge.Put(key, value, metadata, ttl); err != nil {
-			promise.Reject(c.NewError(err))
-			return c.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, err.Error())
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
-		promise.Resolve(c.NewUndefined())
-		return c.NewUndefined(), nil
-	}, true)
-	kv.SetPropertyStr("put", putFn)
+		resolver.Resolve(v8.Undefined(iso))
+		return resolver.GetPromise().Value
+	}).GetFunction(ctx))
 
 	// delete(key) -> Promise<void>
-	delFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
-		promise := this.Promise()
+	kv.Set("delete", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		resolver, _ := v8.NewPromiseResolver(ctx)
+		args := info.Args()
 		if len(args) == 0 {
-			promise.Reject(c.NewError(fmt.Errorf("KV.delete requires a key argument")))
-			return c.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, "KV.delete requires a key argument")
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 		key := args[0].String()
 		if err := bridge.Delete(key); err != nil {
-			promise.Reject(c.NewError(err))
-			return c.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, err.Error())
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
-		promise.Resolve(c.NewUndefined())
-		return c.NewUndefined(), nil
-	}, true)
-	kv.SetPropertyStr("delete", delFn)
+		resolver.Resolve(v8.Undefined(iso))
+		return resolver.GetPromise().Value
+	}).GetFunction(ctx))
 
 	// list(options?) -> Promise<{keys: [{name, metadata?}]}>
-	listFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
-		promise := this.Promise()
+	kv.Set("list", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		resolver, _ := v8.NewPromiseResolver(ctx)
+		args := info.Args()
 
 		var prefix string
 		limit := 1000
 		if len(args) > 0 && args[0].IsObject() {
-			opts := args[0]
-			pVal := opts.GetPropertyStr("prefix")
-			if !pVal.IsUndefined() && !pVal.IsNull() {
-				prefix = pVal.String()
+			ctx.Global().Set("__tmp_kv_list_opts", args[0])
+			optsResult, err := ctx.RunScript(`(function() {
+				var o = globalThis.__tmp_kv_list_opts;
+				delete globalThis.__tmp_kv_list_opts;
+				return JSON.stringify({
+					prefix: o.prefix !== undefined && o.prefix !== null ? String(o.prefix) : "",
+					limit: o.limit !== undefined && o.limit !== null ? Number(o.limit) : 1000,
+				});
+			})()`, "kv_list_opts.js")
+			if err == nil {
+				var opts struct {
+					Prefix string `json:"prefix"`
+					Limit  int    `json:"limit"`
+				}
+				if json.Unmarshal([]byte(optsResult.String()), &opts) == nil {
+					prefix = opts.Prefix
+					limit = opts.Limit
+				}
 			}
-			pVal.Free()
-
-			lVal := opts.GetPropertyStr("limit")
-			if !lVal.IsUndefined() && !lVal.IsNull() {
-				limit = int(lVal.Int32())
-			}
-			lVal.Free()
 		}
 
 		entries, err := bridge.List(prefix, limit)
 		if err != nil {
-			promise.Reject(c.NewError(err))
-			return c.NewUndefined(), nil
+			errVal, _ := v8.NewValue(iso, err.Error())
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 
 		data, _ := json.Marshal(map[string]interface{}{
 			"keys": entries,
 		})
-		promise.Resolve(c.ParseJSON(string(data)))
-		return c.NewUndefined(), nil
-	}, true)
-	kv.SetPropertyStr("list", listFn)
+		// Parse JSON into a JS object.
+		jsResult, err := ctx.RunScript(fmt.Sprintf("JSON.parse(%q)", string(data)), "kv_list_result.js")
+		if err != nil {
+			errVal, _ := v8.NewValue(iso, err.Error())
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
+		}
+		resolver.Resolve(jsResult)
+		return resolver.GetPromise().Value
+	}).GetFunction(ctx))
 
-	return kv
+	return kv.Value, nil
 }

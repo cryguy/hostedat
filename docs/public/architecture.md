@@ -22,7 +22,7 @@ internal/
   models/           GORM models with nanoid PKs
   seaweedfs/        SeaweedFS IAM client (CreateUser, CreateAccessKey, PutUserPolicy, etc.)
   storage/          Local file storage manager (zip extraction, site paths, bytecode paths)
-  worker/           QuickJS/Wazero JS runtime, bindings, pool management
+  worker/           V8/v8go JS runtime, bindings, pool management
 web/
   src/              React + Vite frontend
   dist/             Build output (embedded into binary)
@@ -36,9 +36,9 @@ web/
 
 Incoming HTTP requests are routed based on the `Host` header:
 
-1. `example.com` → API server + dashboard (Echo router, bare domain)
-2. `storage.example.com` → S3 reverse proxy (proxies to SeaweedFS/MinIO)
-3. `<slug>.example.com` → Static site serving or worker execution
+1. `example.com` ↁEAPI server + dashboard (Echo router, bare domain)
+2. `storage.example.com` ↁES3 reverse proxy (proxies to SeaweedFS/MinIO)
+3. `<slug>.example.com` ↁEStatic site serving or worker execution
 
 For subdomain traffic:
 - The subdomain slug is extracted from the host
@@ -148,12 +148,11 @@ The `RequireSiteOwner(db)` middleware is available but handlers perform inline c
 4. **Extract**: Zip extracted to `{storagePath}/{siteID}/{deployID}/`
 5. **Worker detection**: If `_worker.js` present:
    - Size checked against `MaxScriptSizeKB` (default 1024 KB)
-   - Compiled to QuickJS bytecode via `Engine.CompileAndCache()`
-   - Bytecode saved to `{storagePath}/{siteID}/{deployID}/.bytecode/bytecode.bin`
+   - Validated and cached via `Engine.CompileAndCache()`
 6. **DB transaction**: `Deployment` record created, `Site.active_version` and `Site.active_deploy_id` updated atomically
 7. **Pool invalidation**: Old worker pool for the previous deploy is invalidated
 
-**Rollback** works by updating `Site.active_version` and `Site.active_deploy_id` to point at a previous deployment. The bytecode for that deployment is already on disk.
+**Rollback** works by updating `Site.active_version` and `Site.active_deploy_id` to point at a previous deployment. The source for that deployment is already on disk.
 
 ---
 
@@ -161,13 +160,13 @@ The `RequireSiteOwner(db)` middleware is available but handlers perform inline c
 
 ### Runtime Stack
 
-- **QuickJS** JavaScript engine (via `github.com/fastschema/qjs` — pure Go WASM bindings, zero CGO)
-- **Wazero** for WebAssembly execution (no external C dependencies)
-- QuickJS bytecode compilation happens at deploy time; execution uses pre-compiled bytecode
+- **V8** JavaScript engine (via `github.com/tommie/v8go`  ECGO bindings to the V8 engine)
+- V8 isolate pool with per-worker contexts for sandboxed execution
+- Script validation happens at deploy time; execution uses pre-warmed V8 isolates
 
 ### Pool Management
 
-Each deployed worker site gets a pool of pre-warmed QuickJS runtimes:
+Each deployed worker site gets a pool of pre-warmed V8 isolates:
 
 ```go
 type poolKey struct {
@@ -185,7 +184,7 @@ type poolKey struct {
 ### Execution Flow
 
 1. Request arrives for `<slug>.example.com`
-2. Site rules looked up (cache → DB)
+2. Site rules looked up (cache ↁEDB)
 3. Worker pool for `{siteID, activeDeployID}` checked out
 4. JS `fetch` handler called: `export default { fetch(request, env, ctx) }`
 5. `env` object built with: plain vars, secret vars, KV namespaces, storage buckets, `ASSETS` binding
@@ -264,7 +263,7 @@ Config is loaded from a YAML file (path passed as CLI arg). Key settings:
 | `listen` | `:8080` | HTTP listen address |
 | `storage_path` | `./data/sites` | Local file storage root |
 | `jwt_secret` | required (32+ chars) | HMAC secret for JWTs |
-| `min_cli_version` | — | Minimum accepted CLI version (semver) |
+| `min_cli_version` |  E| Minimum accepted CLI version (semver) |
 | `database.driver` | `sqlite` | `sqlite`, `postgres`, or `mysql` |
 | `database.dsn` | required | Database connection string |
 | `worker.pool_size` | `4` | Runtimes per site pool |

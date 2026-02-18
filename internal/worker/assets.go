@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"encoding/json"
 	"fmt"
 	"mime"
 	"net/url"
@@ -9,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/cryguy/hostedat/internal/storage"
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 	minio "github.com/minio/minio-go/v7"
 	"gorm.io/gorm"
 )
@@ -194,109 +195,113 @@ func contentType(filePath string) string {
 
 // buildAssetsBinding creates a JS object with a fetch(request) method
 // that delegates to the given AssetsFetcher. This is synchronous because
-// Fetch is local file I/O, and calling the Response constructor from a
-// goroutine causes WASM thread-safety crashes.
-func buildAssetsBinding(ctx *qjs.Context, fetcher AssetsFetcher) *qjs.Value {
-	assets := ctx.NewObject()
+// Fetch is local file I/O.
+func buildAssetsBinding(iso *v8.Isolate, ctx *v8.Context, fetcher AssetsFetcher) (*v8.Value, error) {
+	assets, err := newJSObject(iso, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("creating assets object: %w", err)
+	}
 
-	fetchFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
-
+	assets.Set("fetch", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
 		if len(args) == 0 {
-			return nil, fmt.Errorf("ASSETS.fetch requires a request argument")
+			return throwError(iso, "ASSETS.fetch requires a request argument")
 		}
 
-		// Convert JS Request to Go WorkerRequest.
-		jsReq := args[0]
-		urlVal := jsReq.GetPropertyStr("url")
-		methodVal := jsReq.GetPropertyStr("method")
+		// Extract request data via JS.
+		ctx.Global().Set("__tmp_assets_req", args[0])
+		result, err := ctx.RunScript(`(function() {
+			var r = globalThis.__tmp_assets_req;
+			delete globalThis.__tmp_assets_req;
+			var headers = {};
+			if (r.headers && r.headers._map) {
+				var m = r.headers._map;
+				for (var k in m) { if (m.hasOwnProperty(k)) headers[k] = String(m[k]); }
+			}
+			var body = r._body != null ? String(r._body) : null;
+			return JSON.stringify({url: r.url || '', method: r.method || 'GET', headers: headers, body: body});
+		})()`, "assets_extract_req.js")
+		if err != nil {
+			return throwError(iso, fmt.Sprintf("ASSETS.fetch: extracting request: %s", err.Error()))
+		}
+
+		var reqData struct {
+			URL     string            `json:"url"`
+			Method  string            `json:"method"`
+			Headers map[string]string `json:"headers"`
+			Body    *string           `json:"body"`
+		}
+		if err := json.Unmarshal([]byte(result.String()), &reqData); err != nil {
+			return throwError(iso, fmt.Sprintf("ASSETS.fetch: parsing request: %s", err.Error()))
+		}
 
 		goReq := &WorkerRequest{
-			URL:     urlVal.String(),
-			Method:  methodVal.String(),
-			Headers: make(map[string]string),
+			URL:     reqData.URL,
+			Method:  reqData.Method,
+			Headers: reqData.Headers,
 		}
-		urlVal.Free()
-		methodVal.Free()
-
-		headersVal := jsReq.GetPropertyStr("headers")
-		if headersVal.IsObject() {
-			mapVal := headersVal.GetPropertyStr("_map")
-			if mapVal.IsObject() {
-				names, err := mapVal.GetOwnPropertyNames()
-				if err == nil {
-					for _, name := range names {
-						v := mapVal.GetPropertyStr(name)
-						goReq.Headers[name] = v.String()
-						v.Free()
-					}
-				}
-			}
-			mapVal.Free()
+		if reqData.Body != nil {
+			goReq.Body = []byte(*reqData.Body)
 		}
-		headersVal.Free()
-
-		bodyVal := jsReq.GetPropertyStr("_body")
-		if !bodyVal.IsNull() && !bodyVal.IsUndefined() {
-			goReq.Body = []byte(bodyVal.String())
-		}
-		bodyVal.Free()
 
 		resp, err := fetcher.Fetch(goReq)
 		if err != nil {
-			return nil, err
+			return throwError(iso, err.Error())
 		}
 
-		// Build JS Response from Go response on the JS thread.
-		headersObj := c.NewObject()
-		for k, v := range resp.Headers {
-			headersObj.SetPropertyStr(k, c.NewString(v))
-		}
-
-		initObj := c.NewObject()
-		initObj.SetPropertyStr("status", c.NewInt32(int32(resp.StatusCode)))
-		initObj.SetPropertyStr("headers", headersObj)
-
-		var bodyJS *qjs.Value
+		// Build Response via JS constructor.
+		headersJSON, _ := json.Marshal(resp.Headers)
 		if resp.Body != nil {
-			bodyJS = c.NewString(string(resp.Body))
+			bodyVal, _ := v8.NewValue(iso, string(resp.Body))
+			ctx.Global().Set("__tmp_assets_body", bodyVal)
 		} else {
-			bodyJS = c.NewNull()
+			ctx.Global().Set("__tmp_assets_body", v8.Null(iso))
+		}
+		statusVal, _ := v8.NewValue(iso, int32(resp.StatusCode))
+		ctx.Global().Set("__tmp_assets_status", statusVal)
+		hdrsVal, _ := v8.NewValue(iso, string(headersJSON))
+		ctx.Global().Set("__tmp_assets_headers", hdrsVal)
+
+		jsResp, err := ctx.RunScript(`(function() {
+			var body = globalThis.__tmp_assets_body;
+			var status = globalThis.__tmp_assets_status;
+			var hdrs = JSON.parse(globalThis.__tmp_assets_headers);
+			delete globalThis.__tmp_assets_body;
+			delete globalThis.__tmp_assets_status;
+			delete globalThis.__tmp_assets_headers;
+			return new Response(body, {status: status, headers: hdrs});
+		})()`, "assets_build_resp.js")
+		if err != nil {
+			return throwError(iso, fmt.Sprintf("ASSETS.fetch: creating Response: %s", err.Error()))
 		}
 
-		responseCtor := c.Global().GetPropertyStr("Response")
-		jsResp := responseCtor.CallConstructor(bodyJS, initObj)
-		responseCtor.Free()
+		return jsResp
+	}).GetFunction(ctx))
 
-		if jsResp.IsError() {
-			defer jsResp.Free()
-			return nil, fmt.Errorf("ASSETS.fetch: failed to create Response: %s", jsResp.String())
-		}
-
-		return jsResp, nil
-	}, false)
-	assets.SetPropertyStr("fetch", fetchFn)
-
-	return assets
+	return assets.Value, nil
 }
 
 // buildEnvObject creates the full env JS object passed to the worker's
 // fetch handler as the second argument.
-func buildEnvObject(ctx *qjs.Context, env *Env, db *gorm.DB, minioClient interface{}, presignClient interface{}, publicS3URL string) *qjs.Value {
-	envObj := ctx.NewObject()
+func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, minioClient interface{}, presignClient interface{}, publicS3URL string) (*v8.Value, error) {
+	envObj, err := newJSObject(iso, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("creating env object: %w", err)
+	}
 
 	// Plain environment variables.
 	if env.Vars != nil {
 		for k, v := range env.Vars {
-			envObj.SetPropertyStr(k, ctx.NewString(v))
+			val, _ := v8.NewValue(iso, v)
+			envObj.Set(k, val)
 		}
 	}
 
 	// Secrets (same shape, just from a different source).
 	if env.Secrets != nil {
 		for k, v := range env.Secrets {
-			envObj.SetPropertyStr(k, ctx.NewString(v))
+			val, _ := v8.NewValue(iso, v)
+			envObj.Set(k, val)
 		}
 	}
 
@@ -304,7 +309,11 @@ func buildEnvObject(ctx *qjs.Context, env *Env, db *gorm.DB, minioClient interfa
 	if env.KVBindings != nil && db != nil {
 		for name, nsID := range env.KVBindings {
 			bridge := &KVBridge{DB: db, NamespaceID: nsID}
-			envObj.SetPropertyStr(name, buildKVBinding(ctx, bridge))
+			kvVal, err := buildKVBinding(iso, ctx, bridge)
+			if err != nil {
+				return nil, fmt.Errorf("building KV binding %q: %w", name, err)
+			}
+			envObj.Set(name, kvVal)
 		}
 	}
 
@@ -323,34 +332,45 @@ func buildEnvObject(ctx *qjs.Context, env *Env, db *gorm.DB, minioClient interfa
 					BucketName:    bucketName,
 					PublicS3URL:   publicS3URL,
 				}
-				envObj.SetPropertyStr(name, buildStorageBinding(ctx, bridge))
+				storVal, err := buildStorageBinding(iso, ctx, bridge)
+				if err != nil {
+					return nil, fmt.Errorf("building storage binding %q: %w", name, err)
+				}
+				envObj.Set(name, storVal)
 			}
 		}
 	}
 
 	// ASSETS binding.
 	if env.Assets != nil {
-		envObj.SetPropertyStr("ASSETS", buildAssetsBinding(ctx, env.Assets))
+		assetsVal, err := buildAssetsBinding(iso, ctx, env.Assets)
+		if err != nil {
+			return nil, fmt.Errorf("building assets binding: %w", err)
+		}
+		envObj.Set("ASSETS", assetsVal)
 	}
 
-	return envObj
+	return envObj.Value, nil
 }
 
 // buildExecContext creates the ctx JS object (third argument to fetch handler).
-// Currently provides a no-op waitUntil.
-func buildExecContext(ctx *qjs.Context) *qjs.Value {
-	execCtx := ctx.NewObject()
+// Currently provides no-op waitUntil and passThroughOnException.
+func buildExecContext(iso *v8.Isolate, ctx *v8.Context) (*v8.Value, error) {
+	execCtx, err := newJSObject(iso, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("creating exec context: %w", err)
+	}
 
-	waitUntilFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
+	waitUntilFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		// No-op: we don't support background tasks beyond the request lifetime.
-		return this.Context().NewUndefined(), nil
-	}, false)
-	execCtx.SetPropertyStr("waitUntil", waitUntilFn)
+		return v8.Undefined(iso)
+	})
+	execCtx.Set("waitUntil", waitUntilFT.GetFunction(ctx))
 
-	passThroughOnExceptionFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-		return this.Context().NewUndefined(), nil
-	}, false)
-	execCtx.SetPropertyStr("passThroughOnException", passThroughOnExceptionFn)
+	passThroughFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		return v8.Undefined(iso)
+	})
+	execCtx.Set("passThroughOnException", passThroughFT.GetFunction(ctx))
 
-	return execCtx
+	return execCtx.Value, nil
 }

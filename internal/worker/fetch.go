@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -11,147 +12,115 @@ import (
 	"time"
 
 	"github.com/cryguy/hostedat/internal/config"
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 )
 
-// setupFetch registers the global fetch() function as a Go-backed async
-// function. It enforces per-request rate limits and blocks requests to
-// private/loopback addresses.
+// setupFetch registers the global fetch() function as a Go-backed function
+// backed by a PromiseResolver. It enforces per-request rate limits and blocks
+// requests to private/loopback addresses.
 //
-// The HTTP request runs synchronously on the JS thread. QuickJS/Wazero is
-// not thread-safe — building JS objects from goroutines causes WASM
-// out-of-bounds crashes. Each runtime serves one request at a time, so
-// blocking during the HTTP call is acceptable.
-func setupFetch(rt *qjs.Runtime, cfg config.WorkerConfig) error {
-	ctx := rt.Context()
+// The HTTP request runs synchronously on the JS thread. V8 is not thread-safe,
+// and each worker serves one request at a time, so blocking during the HTTP
+// call is acceptable.
+func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.WorkerConfig) error {
+	fetchFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		resolver, _ := v8.NewPromiseResolver(ctx)
+		args := info.Args()
 
-	ctx.SetAsyncFunc("fetch", func(this *qjs.This) {
-		args := this.Args()
-		promise := this.Promise()
-		c := this.Context()
-
-		// Read per-request state for rate limiting.
-		reqIDVal := c.Global().GetPropertyStr("__requestID")
-		reqID := uint64(reqIDVal.Int64())
-		reqIDVal.Free()
-
+		// Rate limit check.
+		reqID := getReqIDFromJS(ctx)
 		state := getRequestState(reqID)
 		if state != nil && state.fetchCount >= state.maxFetches {
-			promise.Reject(c.NewError(fmt.Errorf("exceeded maximum fetch requests (%d)", state.maxFetches)))
-			return
+			errVal, _ := v8.NewValue(iso, fmt.Sprintf("exceeded maximum fetch requests (%d)", state.maxFetches))
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 		if state != nil {
 			state.fetchCount++
 		}
 
-		// Extract URL and options from arguments.
-		var fetchURL, method string
-		headers := make(map[string]string)
-		var body string
-
 		if len(args) == 0 {
-			promise.Reject(c.NewError(fmt.Errorf("fetch requires at least 1 argument")))
-			return
+			errVal, _ := v8.NewValue(iso, "fetch requires at least 1 argument")
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 
-		if args[0].IsString() {
-			fetchURL = args[0].String()
-			method = "GET"
-		} else if args[0].IsObject() {
-			// Request object
-			urlVal := args[0].GetPropertyStr("url")
-			fetchURL = urlVal.String()
-			urlVal.Free()
-			methodVal := args[0].GetPropertyStr("method")
-			method = methodVal.String()
-			methodVal.Free()
+		// Set arguments as temp globals and extract via JS.
+		ctx.Global().Set("__tmp_fetch_arg0", args[0])
+		if len(args) > 1 {
+			ctx.Global().Set("__tmp_fetch_arg1", args[1])
+		}
 
-			headersVal := args[0].GetPropertyStr("headers")
-			if headersVal.IsObject() {
-				mapVal := headersVal.GetPropertyStr("_map")
-				if mapVal.IsObject() {
-					names, err := mapVal.GetOwnPropertyNames()
-					if err == nil {
-						for _, name := range names {
-							v := mapVal.GetPropertyStr(name)
-							headers[name] = v.String()
-							v.Free()
-						}
+		extractResult, err := ctx.RunScript(`(function() {
+			var a0 = globalThis.__tmp_fetch_arg0;
+			var a1 = globalThis.__tmp_fetch_arg1;
+			delete globalThis.__tmp_fetch_arg0;
+			delete globalThis.__tmp_fetch_arg1;
+			var url = '', method = 'GET', headers = {}, body = null;
+			if (typeof a0 === 'string') {
+				url = a0;
+			} else if (a0 && typeof a0 === 'object') {
+				url = a0.url || '';
+				method = a0.method || 'GET';
+				if (a0.headers && a0.headers._map) {
+					var m = a0.headers._map;
+					for (var k in m) { if (m.hasOwnProperty(k)) headers[k] = String(m[k]); }
+				}
+				if (a0._body != null) body = String(a0._body);
+			}
+			if (a1 && typeof a1 === 'object') {
+				if (a1.method !== undefined) method = String(a1.method).toUpperCase();
+				if (a1.headers) {
+					var src = a1.headers._map || a1.headers;
+					if (typeof src === 'object') {
+						for (var k in src) { if (src.hasOwnProperty(k)) headers[k.toLowerCase()] = String(src[k]); }
 					}
 				}
-				mapVal.Free()
+				if (a1.body != null) body = String(a1.body);
 			}
-			headersVal.Free()
-
-			bodyVal := args[0].GetPropertyStr("_body")
-			if !bodyVal.IsNull() && !bodyVal.IsUndefined() {
-				body = bodyVal.String()
-			}
-			bodyVal.Free()
+			if (!method) method = 'GET';
+			return JSON.stringify({url: url, method: method, headers: headers, body: body});
+		})()`, "fetch_extract.js")
+		if err != nil {
+			errVal, _ := v8.NewValue(iso, fmt.Sprintf("fetch: extracting arguments: %s", err.Error()))
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 
-		// Apply overrides from second argument (init object).
-		if len(args) > 1 && args[1].IsObject() {
-			init := args[1]
-			mVal := init.GetPropertyStr("method")
-			if !mVal.IsUndefined() {
-				method = strings.ToUpper(mVal.String())
-			}
-			mVal.Free()
-
-			hVal := init.GetPropertyStr("headers")
-			if hVal.IsObject() {
-				// Could be a Headers instance or a plain object.
-				mapVal := hVal.GetPropertyStr("_map")
-				source := hVal
-				if mapVal.IsObject() {
-					source = mapVal
-				}
-				names, err := source.GetOwnPropertyNames()
-				if err == nil {
-					for _, name := range names {
-						v := source.GetPropertyStr(name)
-						headers[strings.ToLower(name)] = v.String()
-						v.Free()
-					}
-				}
-				if mapVal.IsObject() {
-					mapVal.Free()
-				}
-			}
-			hVal.Free()
-
-			bVal := init.GetPropertyStr("body")
-			if !bVal.IsUndefined() && !bVal.IsNull() {
-				body = bVal.String()
-			}
-			bVal.Free()
+		var fetchArgs struct {
+			URL     string            `json:"url"`
+			Method  string            `json:"method"`
+			Headers map[string]string `json:"headers"`
+			Body    *string           `json:"body"`
+		}
+		if err := json.Unmarshal([]byte(extractResult.String()), &fetchArgs); err != nil {
+			errVal, _ := v8.NewValue(iso, fmt.Sprintf("fetch: parsing arguments: %s", err.Error()))
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 
-		if method == "" {
-			method = "GET"
-		}
-
-		// Block obviously private hostnames before even attempting a connection.
-		if isPrivateHostname(fetchURL) {
-			promise.Reject(c.NewError(fmt.Errorf("fetch to private IP addresses is not allowed")))
-			return
+		// Block private hostnames before connecting.
+		if isPrivateHostname(fetchArgs.URL) {
+			errVal, _ := v8.NewValue(iso, "fetch to private IP addresses is not allowed")
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 
 		timeout := time.Duration(cfg.FetchTimeoutSec) * time.Second
 		maxBytes := int64(cfg.MaxResponseBytes)
 
 		var bodyReader io.Reader
-		if body != "" {
-			bodyReader = strings.NewReader(body)
+		if fetchArgs.Body != nil && *fetchArgs.Body != "" {
+			bodyReader = strings.NewReader(*fetchArgs.Body)
 		}
 
-		httpReq, err := http.NewRequest(method, fetchURL, bodyReader)
+		httpReq, err := http.NewRequest(fetchArgs.Method, fetchArgs.URL, bodyReader)
 		if err != nil {
-			promise.Reject(c.NewError(fmt.Errorf("fetch: %w", err)))
-			return
+			errVal, _ := v8.NewValue(iso, fmt.Sprintf("fetch: %s", err.Error()))
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
-		for k, v := range headers {
+		for k, v := range fetchArgs.Headers {
 			httpReq.Header.Set(k, v)
 		}
 
@@ -175,45 +144,71 @@ func setupFetch(rt *qjs.Runtime, cfg config.WorkerConfig) error {
 		}
 		resp, err := client.Do(httpReq)
 		if err != nil {
-			promise.Reject(c.NewError(fmt.Errorf("fetch: %w", err)))
-			return
+			errVal, _ := v8.NewValue(iso, fmt.Sprintf("fetch: %s", err.Error()))
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 		defer resp.Body.Close()
 
 		limitedReader := io.LimitReader(resp.Body, maxBytes+1)
 		respBody, err := io.ReadAll(limitedReader)
 		if err != nil {
-			promise.Reject(c.NewError(fmt.Errorf("fetch: reading body: %w", err)))
-			return
+			errVal, _ := v8.NewValue(iso, fmt.Sprintf("fetch: reading body: %s", err.Error()))
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 		if int64(len(respBody)) > maxBytes {
 			respBody = respBody[:maxBytes]
 		}
 
-		// Build Response-compatible JS object via constructor.
-		respHeaders := c.NewObject()
+		// Build response headers as JSON.
+		respHeaders := make(map[string]string)
 		for k, vals := range resp.Header {
-			respHeaders.SetPropertyStr(strings.ToLower(k), c.NewString(strings.Join(vals, ", ")))
+			respHeaders[strings.ToLower(k)] = strings.Join(vals, ", ")
+		}
+		headersJSON, _ := json.Marshal(respHeaders)
+
+		// Set temp globals and build Response via JS constructor.
+		bodyVal, _ := v8.NewValue(iso, string(respBody))
+		ctx.Global().Set("__tmp_fetch_resp_body", bodyVal)
+		statusVal, _ := v8.NewValue(iso, int32(resp.StatusCode))
+		ctx.Global().Set("__tmp_fetch_resp_status", statusVal)
+		statusTextVal, _ := v8.NewValue(iso, resp.Status)
+		ctx.Global().Set("__tmp_fetch_resp_statusText", statusTextVal)
+		headersJSONVal, _ := v8.NewValue(iso, string(headersJSON))
+		ctx.Global().Set("__tmp_fetch_resp_headers", headersJSONVal)
+		fetchURLVal, _ := v8.NewValue(iso, fetchArgs.URL)
+		ctx.Global().Set("__tmp_fetch_resp_url", fetchURLVal)
+
+		jsResp, err := ctx.RunScript(`(function() {
+			var body = globalThis.__tmp_fetch_resp_body;
+			var status = globalThis.__tmp_fetch_resp_status;
+			var statusText = globalThis.__tmp_fetch_resp_statusText;
+			var hdrs = JSON.parse(globalThis.__tmp_fetch_resp_headers);
+			var url = globalThis.__tmp_fetch_resp_url;
+			delete globalThis.__tmp_fetch_resp_body;
+			delete globalThis.__tmp_fetch_resp_status;
+			delete globalThis.__tmp_fetch_resp_statusText;
+			delete globalThis.__tmp_fetch_resp_headers;
+			delete globalThis.__tmp_fetch_resp_url;
+			return new Response(body, {status: status, statusText: statusText, headers: hdrs, url: url});
+		})()`, "fetch_response.js")
+		if err != nil {
+			errVal, _ := v8.NewValue(iso, fmt.Sprintf("fetch: building response: %s", err.Error()))
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
 		}
 
-		initObj := c.NewObject()
-		initObj.SetPropertyStr("status", c.NewInt32(int32(resp.StatusCode)))
-		initObj.SetPropertyStr("statusText", c.NewString(resp.Status))
-		initObj.SetPropertyStr("headers", respHeaders)
-		initObj.SetPropertyStr("url", c.NewString(fetchURL))
-
-		responseCtor := c.Global().GetPropertyStr("Response")
-		jsResp := responseCtor.CallConstructor(c.NewString(string(respBody)), initObj)
-		responseCtor.Free()
-
-		promise.Resolve(jsResp)
+		resolver.Resolve(jsResp)
+		return resolver.GetPromise().Value
 	})
 
+	ctx.Global().Set("fetch", fetchFT.GetFunction(ctx))
 	return nil
 }
 
 // isPrivateHostname performs a fast, non-resolving pre-check for obviously
-// private hostnames and literal IP addresses. It does NOT resolve DNS — the
+// private hostnames and literal IP addresses. It does NOT resolve DNS  Ethe
 // actual SSRF protection happens in ssrfSafeDialContext at connect time.
 func isPrivateHostname(rawURL string) bool {
 	u, err := url.Parse(rawURL)

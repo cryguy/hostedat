@@ -3,7 +3,7 @@ package worker
 import (
 	"fmt"
 
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 )
 
 // abortJS defines EventTarget, Event, AbortSignal, and AbortController as
@@ -115,8 +115,8 @@ globalThis.AbortController = AbortController;
 `
 
 // setupAbort evaluates the AbortController/AbortSignal polyfills.
-func setupAbort(rt *qjs.Runtime) error {
-	if _, err := rt.Eval("abort.js", qjs.Code(abortJS)); err != nil {
+func setupAbort(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+	if _, err := ctx.RunScript(abortJS, "abort.js"); err != nil {
 		return fmt.Errorf("evaluating abort.js: %w", err)
 	}
 	return nil

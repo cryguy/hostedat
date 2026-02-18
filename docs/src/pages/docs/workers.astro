@@ -19,8 +19,8 @@ import CodeBlock from '../../components/CodeBlock.astro';
     of a single-command deploy.
   </p>
   <p>
-    The runtime is powered by QuickJS (ES2023) compiled to WebAssembly via Wazero, providing a pure-Go,
-    zero-CGO implementation with fast cold starts and predictable performance.
+    The runtime is powered by V8 (via v8go CGO bindings), providing native JavaScript execution
+    with fast cold starts and predictable performance.
   </p>
 
   <h2>Basic example</h2>
@@ -655,10 +655,10 @@ hostedat storage update <site> <bucket-id> --public`}
   <ol>
     <li>
       <strong>Deploy</strong> — When you upload a site with <code>_worker.js</code>, the server detects it
-      and compiles the script to QuickJS bytecode
+      and validates the script for V8 execution
     </li>
     <li>
-      <strong>Bytecode storage</strong> — Compiled bytecode is saved to disk for fast restarts
+      <strong>Source caching</strong> — The script source is cached to disk for fast restarts
     </li>
     <li>
       <strong>Runtime pool</strong> — A pool of pre-warmed JavaScript runtimes is created (size configurable

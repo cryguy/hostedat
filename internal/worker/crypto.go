@@ -12,23 +12,17 @@ import (
 	"fmt"
 	"hash"
 
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 )
 
 // cryptoJS wires up the global crypto object with getRandomValues and randomUUID
 // backed by Go helper functions, plus a crypto.subtle proxy that delegates
 // digest/sign/verify/encrypt/decrypt/importKey/exportKey to Go-backed functions.
 //
-// Key material is scoped per-request via __requestID — no global key store.
-// Key IDs are allocated by Go (not JS) to prevent cross-request collisions.
+// Key material is scoped per-request via __requestID  Eno global key store.
 const cryptoJS = `
 (function() {
 	// Pure-JS base64 encode/decode for the crypto internals.
-	// We intentionally avoid atob/btoa here because binary strings containing
-	// null bytes (0x00) get truncated when crossing the QJS/Go C-string boundary
-	// (JS_ToCString and JS_NewString are null-terminated). By encoding/decoding
-	// base64 directly from byte arrays we never create an intermediate binary
-	// string, eliminating the corruption entirely.
 	const _b64e = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 	const _b64d = new Uint8Array(128);
 	for (let i = 0; i < _b64e.length; i++) _b64d[_b64e.charCodeAt(i)] = i;
@@ -40,7 +34,6 @@ const cryptoJS = `
 			throw new TypeError('getRandomValues requires a TypedArray');
 		}
 		const b64 = __cryptoGetRandomBytes(typedArray.length);
-		// Decode base64 directly to byte values — no atob binary string.
 		let j = 0;
 		for (let i = 0; i < b64.length; i += 4) {
 			const a = _b64d[b64.charCodeAt(i)];
@@ -134,8 +127,6 @@ const cryptoJS = `
 	};
 
 	// Helper: convert any BufferSource or TypedArray to base64.
-	// Uses pure JS base64 encoding directly from byte values to avoid
-	// the String.fromCharCode + btoa path that corrupts null bytes.
 	function __bufferSourceToB64(data) {
 		let arr;
 		if (data instanceof ArrayBuffer) {
@@ -163,8 +154,6 @@ const cryptoJS = `
 	}
 
 	// Helper: convert base64 to ArrayBuffer.
-	// Uses pure JS base64 decoding directly to byte values to avoid
-	// the atob path that corrupts null bytes.
 	function __b64ToBuffer(b64) {
 		let pad = 0;
 		if (b64.length > 0 && b64[b64.length - 1] === '=') pad++;
@@ -197,67 +186,66 @@ const cryptoJS = `
 const gcmStandardNonceSize = 12
 
 // getReqIDFromJS reads the __requestID global from the JS context.
-func getReqIDFromJS(c *qjs.Context) uint64 {
-	v := c.Global().GetPropertyStr("__requestID")
-	id := uint64(v.Int64())
-	v.Free()
-	return id
+func getReqIDFromJS(ctx *v8.Context) uint64 {
+	v, err := ctx.Global().Get("__requestID")
+	if err != nil || v.IsUndefined() || v.IsNull() {
+		return 0
+	}
+	return uint64(v.Integer())
 }
 
-// setupCrypto registers Go-backed crypto helpers and evaluates the JS wrapper
-// that builds the crypto global object with getRandomValues, randomUUID,
-// and crypto.subtle methods. Key material is scoped per-request.
-func setupCrypto(rt *qjs.Runtime) error {
-	ctx := rt.Context()
+// throwError is a helper to throw a JS exception from a FunctionCallback.
+func throwError(iso *v8.Isolate, msg string) *v8.Value {
+	errVal, _ := v8.NewValue(iso, msg)
+	return iso.ThrowException(errVal)
+}
 
+// setupCrypto registers Go-backed crypto helpers and evaluates the JS wrapper.
+func setupCrypto(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	// __cryptoGetRandomBytes(n) -> base64 string of n random bytes.
-	ctx.SetFunc("__cryptoGetRandomBytes", func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
+	ctx.Global().Set("__cryptoGetRandomBytes", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
 		if len(args) < 1 {
-			return nil, errMissingArg("__cryptoGetRandomBytes", 1)
+			return throwError(iso, errMissingArg("__cryptoGetRandomBytes", 1).Error())
 		}
 		n := int(args[0].Int32())
 		if n <= 0 || n > 65536 {
-			return nil, errInvalidArg("getRandomValues", "byte length must be 1-65536")
+			return throwError(iso, errInvalidArg("getRandomValues", "byte length must be 1-65536").Error())
 		}
 		buf := make([]byte, n)
 		if _, err := rand.Read(buf); err != nil {
-			return nil, fmt.Errorf("crypto/rand: %w", err)
+			return throwError(iso, fmt.Sprintf("crypto/rand: %v", err))
 		}
-		return c.NewString(base64.StdEncoding.EncodeToString(buf)), nil
-	})
+		val, _ := v8.NewValue(iso, base64.StdEncoding.EncodeToString(buf))
+		return val
+	}).GetFunction(ctx))
 
 	// __cryptoRandomUUID() -> UUID v4 string.
-	ctx.SetFunc("__cryptoRandomUUID", func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
+	ctx.Global().Set("__cryptoRandomUUID", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		var uuid [16]byte
 		if _, err := rand.Read(uuid[:]); err != nil {
-			return nil, fmt.Errorf("crypto/rand: %w", err)
+			return throwError(iso, fmt.Sprintf("crypto/rand: %v", err))
 		}
-		// Set version (4) and variant (RFC 4122).
 		uuid[6] = (uuid[6] & 0x0f) | 0x40
 		uuid[8] = (uuid[8] & 0x3f) | 0x80
 		s := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 			uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:16])
-		return c.NewString(s), nil
-	})
+		val, _ := v8.NewValue(iso, s)
+		return val
+	}).GetFunction(ctx))
 
 	// __cryptoDigest(algorithm, dataBase64) -> resultBase64
-	ctx.SetFunc("__cryptoDigest", func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
+	ctx.Global().Set("__cryptoDigest", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
 		if len(args) < 2 {
-			return nil, errMissingArg("crypto.subtle.digest", 2)
+			return throwError(iso, errMissingArg("crypto.subtle.digest", 2).Error())
 		}
 		algo := args[0].String()
 		dataB64 := args[1].String()
-
 		data, err := base64.StdEncoding.DecodeString(dataB64)
 		if err != nil {
-			return nil, fmt.Errorf("digest: invalid base64 data")
+			return throwError(iso, "digest: invalid base64 data")
 		}
-
 		var h hash.Hash
 		switch normalizeAlgo(algo) {
 		case "SHA-1":
@@ -269,237 +257,215 @@ func setupCrypto(rt *qjs.Runtime) error {
 		case "SHA-512":
 			h = sha512.New()
 		default:
-			return nil, fmt.Errorf("digest: unsupported algorithm %q", algo)
+			return throwError(iso, fmt.Sprintf("digest: unsupported algorithm %q", algo))
 		}
-
 		h.Write(data)
-		result := h.Sum(nil)
-		return c.NewString(base64.StdEncoding.EncodeToString(result)), nil
-	})
+		val, _ := v8.NewValue(iso, base64.StdEncoding.EncodeToString(h.Sum(nil)))
+		return val
+	}).GetFunction(ctx))
 
 	// __cryptoImportKey(algoName, hashAlgo, dataBase64) -> keyID
-	// Key material is stored in the per-request state, not in a global map.
-	ctx.SetFunc("__cryptoImportKey", func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
+	ctx.Global().Set("__cryptoImportKey", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
 		if len(args) < 3 {
-			return nil, errMissingArg("importKey", 3)
+			return throwError(iso, errMissingArg("importKey", 3).Error())
 		}
 		hashAlgo := args[1].String()
 		dataB64 := args[2].String()
-
 		keyData, err := base64.StdEncoding.DecodeString(dataB64)
 		if err != nil {
-			return nil, fmt.Errorf("importKey: invalid base64")
+			return throwError(iso, "importKey: invalid base64")
 		}
-
-		reqID := getReqIDFromJS(c)
+		reqID := getReqIDFromJS(ctx)
 		id := importCryptoKey(reqID, hashAlgo, keyData)
 		if id < 0 {
-			return nil, fmt.Errorf("importKey: no active request state")
+			return throwError(iso, "importKey: no active request state")
 		}
-
-		return c.NewInt64(id), nil
-	})
+		val, _ := v8.NewValue(iso, int32(id))
+		return val
+	}).GetFunction(ctx))
 
 	// __cryptoExportKey(keyID) -> base64
-	ctx.SetFunc("__cryptoExportKey", func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
+	ctx.Global().Set("__cryptoExportKey", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
 		if len(args) < 1 {
-			return nil, errMissingArg("exportKey", 1)
+			return throwError(iso, errMissingArg("exportKey", 1).Error())
 		}
-		keyID := args[0].Int64()
-
-		reqID := getReqIDFromJS(c)
+		keyID := args[0].Integer()
+		reqID := getReqIDFromJS(ctx)
 		entry := getCryptoKey(reqID, keyID)
 		if entry == nil {
-			return nil, fmt.Errorf("exportKey: key not found")
+			return throwError(iso, "exportKey: key not found")
 		}
-
-		return c.NewString(base64.StdEncoding.EncodeToString(entry.data)), nil
-	})
+		val, _ := v8.NewValue(iso, base64.StdEncoding.EncodeToString(entry.data))
+		return val
+	}).GetFunction(ctx))
 
 	// __cryptoSign(algorithm, keyID, dataBase64) -> signatureBase64
-	// Uses the hash algorithm stored at importKey time.
-	ctx.SetFunc("__cryptoSign", func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
+	ctx.Global().Set("__cryptoSign", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
 		if len(args) < 3 {
-			return nil, errMissingArg("sign", 3)
+			return throwError(iso, errMissingArg("sign", 3).Error())
 		}
 		algo := args[0].String()
-		keyID := args[1].Int64()
+		keyID := args[1].Integer()
 		dataB64 := args[2].String()
-
 		data, err := base64.StdEncoding.DecodeString(dataB64)
 		if err != nil {
-			return nil, fmt.Errorf("sign: invalid base64")
+			return throwError(iso, "sign: invalid base64")
 		}
-
-		reqID := getReqIDFromJS(c)
+		reqID := getReqIDFromJS(ctx)
 		entry := getCryptoKey(reqID, keyID)
 		if entry == nil {
-			return nil, fmt.Errorf("sign: key not found")
+			return throwError(iso, "sign: key not found")
 		}
-
 		switch normalizeAlgo(algo) {
 		case "HMAC":
 			hashFn := hashFuncFromAlgo(entry.hashAlgo)
 			if hashFn == nil {
-				return nil, fmt.Errorf("sign: unsupported HMAC hash %q", entry.hashAlgo)
+				return throwError(iso, fmt.Sprintf("sign: unsupported HMAC hash %q", entry.hashAlgo))
 			}
 			mac := hmac.New(hashFn, entry.data)
 			mac.Write(data)
-			sig := mac.Sum(nil)
-			return c.NewString(base64.StdEncoding.EncodeToString(sig)), nil
+			val, _ := v8.NewValue(iso, base64.StdEncoding.EncodeToString(mac.Sum(nil)))
+			return val
 		default:
-			return nil, fmt.Errorf("sign: unsupported algorithm %q", algo)
+			return throwError(iso, fmt.Sprintf("sign: unsupported algorithm %q", algo))
 		}
-	})
+	}).GetFunction(ctx))
 
 	// __cryptoVerify(algorithm, keyID, signatureBase64, dataBase64) -> bool
-	// Uses the hash algorithm stored at importKey time.
-	ctx.SetFunc("__cryptoVerify", func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
+	ctx.Global().Set("__cryptoVerify", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
 		if len(args) < 4 {
-			return nil, errMissingArg("verify", 4)
+			return throwError(iso, errMissingArg("verify", 4).Error())
 		}
 		algo := args[0].String()
-		keyID := args[1].Int64()
+		keyID := args[1].Integer()
 		sigB64 := args[2].String()
 		dataB64 := args[3].String()
-
 		sig, err := base64.StdEncoding.DecodeString(sigB64)
 		if err != nil {
-			return nil, fmt.Errorf("verify: invalid signature base64")
+			return throwError(iso, "verify: invalid signature base64")
 		}
 		data, err := base64.StdEncoding.DecodeString(dataB64)
 		if err != nil {
-			return nil, fmt.Errorf("verify: invalid data base64")
+			return throwError(iso, "verify: invalid data base64")
 		}
-
-		reqID := getReqIDFromJS(c)
+		reqID := getReqIDFromJS(ctx)
 		entry := getCryptoKey(reqID, keyID)
 		if entry == nil {
-			return nil, fmt.Errorf("verify: key not found")
+			return throwError(iso, "verify: key not found")
 		}
-
 		switch normalizeAlgo(algo) {
 		case "HMAC":
 			hashFn := hashFuncFromAlgo(entry.hashAlgo)
 			if hashFn == nil {
-				return nil, fmt.Errorf("verify: unsupported HMAC hash %q", entry.hashAlgo)
+				return throwError(iso, fmt.Sprintf("verify: unsupported HMAC hash %q", entry.hashAlgo))
 			}
 			mac := hmac.New(hashFn, entry.data)
 			mac.Write(data)
 			expected := mac.Sum(nil)
-			return c.NewBool(hmac.Equal(sig, expected)), nil
+			val, _ := v8.NewValue(iso, hmac.Equal(sig, expected))
+			return val
 		default:
-			return nil, fmt.Errorf("verify: unsupported algorithm %q", algo)
+			return throwError(iso, fmt.Sprintf("verify: unsupported algorithm %q", algo))
 		}
-	})
+	}).GetFunction(ctx))
 
 	// __cryptoEncrypt(algorithm, keyID, dataBase64, ivBase64) -> ciphertextBase64
-	ctx.SetFunc("__cryptoEncrypt", func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
+	ctx.Global().Set("__cryptoEncrypt", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
 		if len(args) < 4 {
-			return nil, errMissingArg("encrypt", 4)
+			return throwError(iso, errMissingArg("encrypt", 4).Error())
 		}
 		algo := args[0].String()
-		keyID := args[1].Int64()
+		keyID := args[1].Integer()
 		dataB64 := args[2].String()
 		ivB64 := args[3].String()
-
 		data, err := base64.StdEncoding.DecodeString(dataB64)
 		if err != nil {
-			return nil, fmt.Errorf("encrypt: invalid base64 data")
+			return throwError(iso, "encrypt: invalid base64 data")
 		}
-
-		reqID := getReqIDFromJS(c)
+		reqID := getReqIDFromJS(ctx)
 		entry := getCryptoKey(reqID, keyID)
 		if entry == nil {
-			return nil, fmt.Errorf("encrypt: key not found")
+			return throwError(iso, "encrypt: key not found")
 		}
-
 		switch normalizeAlgo(algo) {
 		case "AES-GCM":
 			iv, err := base64.StdEncoding.DecodeString(ivB64)
 			if err != nil {
-				return nil, fmt.Errorf("encrypt: invalid IV base64")
+				return throwError(iso, "encrypt: invalid IV base64")
 			}
 			if len(iv) != gcmStandardNonceSize {
-				return nil, fmt.Errorf("encrypt: AES-GCM IV must be exactly %d bytes, got %d", gcmStandardNonceSize, len(iv))
+				return throwError(iso, fmt.Sprintf("encrypt: AES-GCM IV must be exactly %d bytes, got %d", gcmStandardNonceSize, len(iv)))
 			}
 			block, err := aes.NewCipher(entry.data)
 			if err != nil {
-				return nil, fmt.Errorf("encrypt: %w", err)
+				return throwError(iso, fmt.Sprintf("encrypt: %v", err))
 			}
 			gcm, err := cipher.NewGCM(block)
 			if err != nil {
-				return nil, fmt.Errorf("encrypt: %w", err)
+				return throwError(iso, fmt.Sprintf("encrypt: %v", err))
 			}
-			ciphertext := gcm.Seal(nil, iv, data, nil)
-			return c.NewString(base64.StdEncoding.EncodeToString(ciphertext)), nil
+			ct := gcm.Seal(nil, iv, data, nil)
+			val, _ := v8.NewValue(iso, base64.StdEncoding.EncodeToString(ct))
+			return val
 		default:
-			return nil, fmt.Errorf("encrypt: unsupported algorithm %q", algo)
+			return throwError(iso, fmt.Sprintf("encrypt: unsupported algorithm %q", algo))
 		}
-	})
+	}).GetFunction(ctx))
 
 	// __cryptoDecrypt(algorithm, keyID, dataBase64, ivBase64) -> plaintextBase64
-	ctx.SetFunc("__cryptoDecrypt", func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
+	ctx.Global().Set("__cryptoDecrypt", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
 		if len(args) < 4 {
-			return nil, errMissingArg("decrypt", 4)
+			return throwError(iso, errMissingArg("decrypt", 4).Error())
 		}
 		algo := args[0].String()
-		keyID := args[1].Int64()
+		keyID := args[1].Integer()
 		dataB64 := args[2].String()
 		ivB64 := args[3].String()
-
 		data, err := base64.StdEncoding.DecodeString(dataB64)
 		if err != nil {
-			return nil, fmt.Errorf("decrypt: invalid base64 data")
+			return throwError(iso, "decrypt: invalid base64 data")
 		}
-
-		reqID := getReqIDFromJS(c)
+		reqID := getReqIDFromJS(ctx)
 		entry := getCryptoKey(reqID, keyID)
 		if entry == nil {
-			return nil, fmt.Errorf("decrypt: key not found")
+			return throwError(iso, "decrypt: key not found")
 		}
-
 		switch normalizeAlgo(algo) {
 		case "AES-GCM":
 			iv, err := base64.StdEncoding.DecodeString(ivB64)
 			if err != nil {
-				return nil, fmt.Errorf("decrypt: invalid IV base64")
+				return throwError(iso, "decrypt: invalid IV base64")
 			}
 			if len(iv) != gcmStandardNonceSize {
-				return nil, fmt.Errorf("decrypt: AES-GCM IV must be exactly %d bytes, got %d", gcmStandardNonceSize, len(iv))
+				return throwError(iso, fmt.Sprintf("decrypt: AES-GCM IV must be exactly %d bytes, got %d", gcmStandardNonceSize, len(iv)))
 			}
 			block, err := aes.NewCipher(entry.data)
 			if err != nil {
-				return nil, fmt.Errorf("decrypt: %w", err)
+				return throwError(iso, fmt.Sprintf("decrypt: %v", err))
 			}
 			gcm, err := cipher.NewGCM(block)
 			if err != nil {
-				return nil, fmt.Errorf("decrypt: %w", err)
+				return throwError(iso, fmt.Sprintf("decrypt: %v", err))
 			}
-			plaintext, err := gcm.Open(nil, iv, data, nil)
+			pt, err := gcm.Open(nil, iv, data, nil)
 			if err != nil {
-				return nil, fmt.Errorf("decrypt: %w", err)
+				return throwError(iso, fmt.Sprintf("decrypt: %v", err))
 			}
-			return c.NewString(base64.StdEncoding.EncodeToString(plaintext)), nil
+			val, _ := v8.NewValue(iso, base64.StdEncoding.EncodeToString(pt))
+			return val
 		default:
-			return nil, fmt.Errorf("decrypt: unsupported algorithm %q", algo)
+			return throwError(iso, fmt.Sprintf("decrypt: unsupported algorithm %q", algo))
 		}
-	})
+	}).GetFunction(ctx))
 
 	// Evaluate the JS wrapper that builds the crypto global.
-	if _, err := rt.Eval("crypto.js", qjs.Code(cryptoJS)); err != nil {
+	if _, err := ctx.RunScript(cryptoJS, "crypto.js"); err != nil {
 		return fmt.Errorf("evaluating crypto.js: %w", err)
 	}
 
@@ -518,7 +484,6 @@ func hashFuncFromAlgo(algo string) func() hash.Hash {
 	case "SHA-512":
 		return sha512.New
 	default:
-		// Default to SHA-256 for backward compatibility when no hash is specified.
 		if algo == "" {
 			return sha256.New
 		}
