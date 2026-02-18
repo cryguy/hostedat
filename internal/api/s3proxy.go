@@ -25,12 +25,10 @@ func NewS3Proxy(s3Endpoint string, requireSigV4 bool) http.Handler {
 		})
 	}
 	proxy := httputil.NewSingleHostReverseProxy(target)
-	// Preserve the target host for SigV4 compatibility.
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		req.Host = target.Host
-	}
+	// Do NOT rewrite req.Host — SigV4 signatures include the Host header,
+	// so the forwarded request must preserve the original Host that the
+	// client (or presigned URL) was signed for. The proxy routes to the
+	// backend via req.URL.Host (set by the default Director).
 
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if requireSigV4 && !hasSigV4Signature(req) {

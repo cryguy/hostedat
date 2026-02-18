@@ -78,6 +78,7 @@ func main() {
 
 	// Object storage (SeaweedFS)
 	var s3Client *minio.Client
+	var presignClient *minio.Client
 	var iamClient *seaweedfs.Client
 	var s3Proxy http.Handler
 	if cfg.ObjectStorage.Enabled {
@@ -128,6 +129,21 @@ func main() {
 			s3Client = minioClient
 			workerEngine.SetMinioClient(minioClient)
 			workerEngine.SetPublicS3URL("https://storage." + cfg.Domain)
+
+			// Create a presign-only minio client configured with the public
+			// S3 endpoint so presigned URLs are signed with the correct Host.
+			publicS3Host := "storage." + cfg.Domain
+			presignCreds := creds
+			pc, err := minio.New(publicS3Host, &minio.Options{
+				Secure: true,
+				Region: cfg.ObjectStorage.Region,
+				Creds:  presignCreds,
+			})
+			if err != nil {
+				log.Printf("Warning: failed to create presign S3 client: %v", err)
+			} else {
+				presignClient = pc
+			}
 
 			// Wrap S3 proxy to serve public bucket objects without auth.
 			if s3Proxy != nil {
@@ -185,7 +201,7 @@ func main() {
 	// Subdomain router must come before API routes
 	e.Use(api.SubdomainRouter(db, store, rulesCache, cfg.Domain, workerEngine, s3Proxy))
 
-	api.RegisterRoutes(e, db, cfg, store, version, workerEngine, s3Client, iamClient, cfg.ObjectStorage.Region)
+	api.RegisterRoutes(e, db, cfg, store, version, workerEngine, s3Client, presignClient, iamClient, cfg.ObjectStorage.Region)
 
 	// Serve embedded frontend (SPA fallback)
 	distFS, err := fs.Sub(web.DistFS, "dist")

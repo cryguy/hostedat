@@ -64,7 +64,7 @@ func setupTestEnvWithMinVersion(t *testing.T, minVersion string) *testEnv {
 	e := echo.New()
 	e.HTTPErrorHandler = CustomErrorHandler
 	e.Use(SubdomainRouter(db, store, cache, cfg.Domain, nil, nil))
-	RegisterRoutes(e, db, cfg, store, "0.1.0", nil, nil, nil, "")
+	RegisterRoutes(e, db, cfg, store, "0.1.0", nil, nil, nil, nil, "")
 
 	return &testEnv{
 		e:         e,
