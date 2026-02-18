@@ -125,15 +125,12 @@ func (c *Client) PutUserPolicy(userName, policyName, policyJSON string) error {
 }
 
 // Health checks if the SeaweedFS S3 endpoint is reachable.
+// Any HTTP response (even 403 when auth is enabled) means the server is up.
 func (c *Client) Health() error {
 	resp, err := c.HTTPClient.Get(c.Endpoint)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("SeaweedFS health check returned %d", resp.StatusCode)
-	}
 	return nil
 }

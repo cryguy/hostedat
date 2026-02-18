@@ -145,7 +145,8 @@ func TestClientErrorHandling(t *testing.T) {
 	if err := client.CreateUser("fail"); err == nil {
 		t.Fatal("expected error for 500 response")
 	}
-	if err := client.Health(); err == nil {
-		t.Fatal("expected error for health 500")
+	// Health only checks reachability — any HTTP response means the server is up.
+	if err := client.Health(); err != nil {
+		t.Fatalf("Health should succeed for reachable server: %v", err)
 	}
 }
