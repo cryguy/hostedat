@@ -1029,9 +1029,9 @@ func TestCrypto_RSAExportImportJWK(t *testing.T) {
 
 	var data struct {
 		Valid    bool   `json:"valid"`
-		PubKty  string `json:"pubKty"`
-		PrivHasD bool  `json:"privHasD"`
-		PubAlg  string `json:"pubAlg"`
+		PubKty   string `json:"pubKty"`
+		PrivHasD bool   `json:"privHasD"`
+		PubAlg   string `json:"pubAlg"`
 	}
 	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -1237,9 +1237,9 @@ func TestCrypto_ECDSAExportImportJWK(t *testing.T) {
 
 	var data struct {
 		Valid    bool   `json:"valid"`
-		PubKty  string `json:"pubKty"`
-		PubCrv  string `json:"pubCrv"`
-		PrivHasD bool  `json:"privHasD"`
+		PubKty   string `json:"pubKty"`
+		PubCrv   string `json:"pubCrv"`
+		PrivHasD bool   `json:"privHasD"`
 	}
 	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -1367,9 +1367,9 @@ func TestCrypto_Ed25519ExportImportJWK(t *testing.T) {
 
 	var data struct {
 		Valid    bool   `json:"valid"`
-		PubKty  string `json:"pubKty"`
-		PubCrv  string `json:"pubCrv"`
-		PrivHasD bool  `json:"privHasD"`
+		PubKty   string `json:"pubKty"`
+		PubCrv   string `json:"pubCrv"`
+		PrivHasD bool   `json:"privHasD"`
 	}
 	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -2774,12 +2774,12 @@ func TestCrypto_ExportKeyJWK_ECDSA(t *testing.T) {
 	assertOK(t, r)
 
 	var data struct {
-		PubKty  string `json:"pubKty"`
-		PubCrv  string `json:"pubCrv"`
-		PubHasX bool   `json:"pubHasX"`
-		PubHasY bool   `json:"pubHasY"`
-		PubHasD bool   `json:"pubHasD"`
-		PrivHasD bool  `json:"privHasD"`
+		PubKty   string `json:"pubKty"`
+		PubCrv   string `json:"pubCrv"`
+		PubHasX  bool   `json:"pubHasX"`
+		PubHasY  bool   `json:"pubHasY"`
+		PubHasD  bool   `json:"pubHasD"`
+		PrivHasD bool   `json:"privHasD"`
 	}
 	json.Unmarshal(r.Response.Body, &data)
 	if data.PubKty != "EC" {
@@ -2968,5 +2968,331 @@ func TestCrypto_ExportKeyJWK_HMAC_HS512(t *testing.T) {
 	json.Unmarshal(r.Response.Body, &data)
 	if data.Alg != "HS512" {
 		t.Errorf("jwk.alg = %q, want HS512", data.Alg)
+	}
+}
+
+func TestCrypto_WrapKey(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    // Generate an HMAC key to wrap
+    const hmacKey = await crypto.subtle.generateKey(
+      { name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"]
+    );
+    // Generate an AES-GCM wrapping key
+    const wrappingKey = await crypto.subtle.generateKey(
+      { name: "AES-GCM" }, true, ["encrypt", "decrypt", "wrapKey", "unwrapKey"]
+    );
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    // Wrap the HMAC key
+    const wrapped = await crypto.subtle.wrapKey(
+      "raw", hmacKey, wrappingKey, { name: "AES-GCM", iv }
+    );
+    return Response.json({
+      wrappedLength: new Uint8Array(wrapped).length,
+      isArrayBuffer: wrapped instanceof ArrayBuffer,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		WrappedLength int  `json:"wrappedLength"`
+		IsArrayBuffer bool `json:"isArrayBuffer"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.WrappedLength == 0 {
+		t.Error("wrapKey should return non-empty wrapped data")
+	}
+	if !data.IsArrayBuffer {
+		t.Error("wrapKey should return an ArrayBuffer")
+	}
+}
+
+func TestCrypto_UnwrapKey(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    // Generate an HMAC key to wrap
+    const hmacKey = await crypto.subtle.generateKey(
+      { name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"]
+    );
+    // Generate an AES-GCM wrapping key
+    const wrappingKey = await crypto.subtle.generateKey(
+      { name: "AES-GCM" }, true, ["encrypt", "decrypt", "wrapKey", "unwrapKey"]
+    );
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    // Wrap the HMAC key
+    const wrapped = await crypto.subtle.wrapKey(
+      "raw", hmacKey, wrappingKey, { name: "AES-GCM", iv }
+    );
+    // Unwrap it back
+    const unwrappedKey = await crypto.subtle.unwrapKey(
+      "raw", wrapped, wrappingKey, { name: "AES-GCM", iv },
+      { name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"]
+    );
+    // Use the unwrapped key to sign data
+    const data = new TextEncoder().encode("test message");
+    const sig = await crypto.subtle.sign("HMAC", unwrappedKey, data);
+    // Verify using the original key
+    const valid = await crypto.subtle.verify("HMAC", hmacKey, sig, data);
+    return Response.json({
+      valid,
+      hasKey: unwrappedKey !== null && unwrappedKey !== undefined,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Valid  bool `json:"valid"`
+		HasKey bool `json:"hasKey"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Valid {
+		t.Error("signature from unwrapped key should verify with original key")
+	}
+	if !data.HasKey {
+		t.Error("unwrapKey should return a valid CryptoKey")
+	}
+}
+
+func TestCrypto_WrapUnwrapRoundtrip(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    // Generate an HMAC key
+    const hmacKey = await crypto.subtle.generateKey(
+      { name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"]
+    );
+    // Export the original key
+    const originalExport = await crypto.subtle.exportKey("raw", hmacKey);
+    const originalBytes = new Uint8Array(originalExport);
+
+    // Generate an AES-GCM wrapping key
+    const wrappingKey = await crypto.subtle.generateKey(
+      { name: "AES-GCM" }, true, ["encrypt", "decrypt", "wrapKey", "unwrapKey"]
+    );
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+
+    // Wrap and unwrap
+    const wrapped = await crypto.subtle.wrapKey(
+      "raw", hmacKey, wrappingKey, { name: "AES-GCM", iv }
+    );
+    const unwrappedKey = await crypto.subtle.unwrapKey(
+      "raw", wrapped, wrappingKey, { name: "AES-GCM", iv },
+      { name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"]
+    );
+
+    // Export the unwrapped key
+    const unwrappedExport = await crypto.subtle.exportKey("raw", unwrappedKey);
+    const unwrappedBytes = new Uint8Array(unwrappedExport);
+
+    // Compare bytes
+    let match = originalBytes.length === unwrappedBytes.length;
+    if (match) {
+      for (let i = 0; i < originalBytes.length; i++) {
+        if (originalBytes[i] !== unwrappedBytes[i]) {
+          match = false;
+          break;
+        }
+      }
+    }
+    return Response.json({
+      match,
+      originalLength: originalBytes.length,
+      unwrappedLength: unwrappedBytes.length,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Match           bool `json:"match"`
+		OriginalLength  int  `json:"originalLength"`
+		UnwrappedLength int  `json:"unwrappedLength"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Match {
+		t.Errorf("round-trip key bytes should match: original=%d, unwrapped=%d",
+			data.OriginalLength, data.UnwrappedLength)
+	}
+}
+
+func TestCrypto_WrapKeyNonExtractable(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    // Generate a NON-extractable HMAC key
+    const hmacKey = await crypto.subtle.generateKey(
+      { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]
+    );
+    // Generate an AES-GCM wrapping key
+    const wrappingKey = await crypto.subtle.generateKey(
+      { name: "AES-GCM" }, true, ["encrypt", "decrypt", "wrapKey", "unwrapKey"]
+    );
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    try {
+      await crypto.subtle.wrapKey(
+        "raw", hmacKey, wrappingKey, { name: "AES-GCM", iv }
+      );
+      return Response.json({ threw: false });
+    } catch (e) {
+      return Response.json({ threw: true, message: e.message });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw   bool   `json:"threw"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Threw {
+		t.Error("wrapKey should throw when key is not extractable")
+	}
+}
+
+func TestCrypto_WrapUnwrapAESCBC(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    // Generate an HMAC key to wrap
+    const hmacKey = await crypto.subtle.generateKey(
+      { name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"]
+    );
+    // Export original for comparison
+    const originalExport = new Uint8Array(await crypto.subtle.exportKey("raw", hmacKey));
+
+    // Generate an AES-CBC wrapping key
+    const wrappingKey = await crypto.subtle.generateKey(
+      { name: "AES-CBC" }, true, ["encrypt", "decrypt", "wrapKey", "unwrapKey"]
+    );
+    const iv = crypto.getRandomValues(new Uint8Array(16));
+
+    // Wrap with AES-CBC
+    const wrapped = await crypto.subtle.wrapKey(
+      "raw", hmacKey, wrappingKey, { name: "AES-CBC", iv }
+    );
+    // Unwrap with AES-CBC
+    const unwrappedKey = await crypto.subtle.unwrapKey(
+      "raw", wrapped, wrappingKey, { name: "AES-CBC", iv },
+      { name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"]
+    );
+    const unwrappedExport = new Uint8Array(await crypto.subtle.exportKey("raw", unwrappedKey));
+
+    // Compare bytes
+    let match = originalExport.length === unwrappedExport.length;
+    for (let i = 0; match && i < originalExport.length; i++) {
+      if (originalExport[i] !== unwrappedExport[i]) match = false;
+    }
+
+    // Verify the unwrapped key actually works
+    const data = new TextEncoder().encode("test");
+    const sig = await crypto.subtle.sign("HMAC", unwrappedKey, data);
+    const valid = await crypto.subtle.verify("HMAC", hmacKey, sig, data);
+
+    return Response.json({ match, valid, wrappedLength: new Uint8Array(wrapped).length });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Match         bool `json:"match"`
+		Valid         bool `json:"valid"`
+		WrappedLength int  `json:"wrappedLength"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Match {
+		t.Error("AES-CBC wrap/unwrap roundtrip should preserve key bytes")
+	}
+	if !data.Valid {
+		t.Error("unwrapped key should produce valid signatures")
+	}
+	if data.WrappedLength == 0 {
+		t.Error("wrapped data should not be empty")
+	}
+}
+
+func TestCrypto_UnwrapKeyWrongKey(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    // Generate an HMAC key to wrap
+    const hmacKey = await crypto.subtle.generateKey(
+      { name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"]
+    );
+    // Generate two different AES-GCM keys
+    const wrappingKey = await crypto.subtle.generateKey(
+      { name: "AES-GCM" }, true, ["encrypt", "decrypt", "wrapKey", "unwrapKey"]
+    );
+    const wrongKey = await crypto.subtle.generateKey(
+      { name: "AES-GCM" }, true, ["encrypt", "decrypt", "wrapKey", "unwrapKey"]
+    );
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+
+    // Wrap with the correct key
+    const wrapped = await crypto.subtle.wrapKey(
+      "raw", hmacKey, wrappingKey, { name: "AES-GCM", iv }
+    );
+
+    // Try to unwrap with the wrong key
+    let caught = false;
+    try {
+      await crypto.subtle.unwrapKey(
+        "raw", wrapped, wrongKey, { name: "AES-GCM", iv },
+        { name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"]
+      );
+    } catch(e) {
+      caught = true;
+    }
+    return Response.json({ caught });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Caught bool `json:"caught"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Caught {
+		t.Error("unwrapKey with wrong key should throw")
 	}
 }

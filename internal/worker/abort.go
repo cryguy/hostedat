@@ -108,10 +108,23 @@ if (typeof DOMException === 'undefined') {
 	};
 }
 
+class ScheduledEvent extends Event {
+	constructor(scheduledTime, cron) {
+		super('scheduled');
+		this.scheduledTime = scheduledTime;
+		this.cron = cron;
+		this._waitUntilPromises = [];
+	}
+	waitUntil(promise) {
+		this._waitUntilPromises.push(Promise.resolve(promise));
+	}
+}
+
 globalThis.Event = Event;
 globalThis.EventTarget = EventTarget;
 globalThis.AbortSignal = AbortSignal;
 globalThis.AbortController = AbortController;
+globalThis.ScheduledEvent = ScheduledEvent;
 `
 
 // setupAbort evaluates the AbortController/AbortSignal polyfills.

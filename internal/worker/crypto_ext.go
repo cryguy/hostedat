@@ -89,6 +89,32 @@ subtle.verify = async function(algorithm, key, signature, data) {
 	return __cryptoVerify(algo.name, key._id, sigB64, dataB64, hashName);
 };
 
+subtle.wrapKey = async function(format, key, wrappingKey, wrapAlgorithm) {
+	var exported = await subtle.exportKey(format, key);
+	var data;
+	if (format === 'raw') {
+		data = exported;
+	} else if (format === 'jwk') {
+		data = new TextEncoder().encode(JSON.stringify(exported));
+	} else {
+		data = exported;
+	}
+	var wrapAlgo = typeof wrapAlgorithm === 'string' ? { name: wrapAlgorithm } : wrapAlgorithm;
+	return subtle.encrypt(wrapAlgo, wrappingKey, data);
+};
+
+subtle.unwrapKey = async function(format, wrappedKey, unwrappingKey, unwrapAlgorithm, unwrappedKeyAlgorithm, extractable, keyUsages) {
+	var unwrapAlgo = typeof unwrapAlgorithm === 'string' ? { name: unwrapAlgorithm } : unwrapAlgorithm;
+	var decrypted = await subtle.decrypt(unwrapAlgo, unwrappingKey, wrappedKey);
+	var keyData;
+	if (format === 'jwk') {
+		keyData = JSON.parse(new TextDecoder().decode(decrypted));
+	} else {
+		keyData = decrypted;
+	}
+	return subtle.importKey(format, keyData, unwrappedKeyAlgorithm, extractable, keyUsages);
+};
+
 })();
 `
 

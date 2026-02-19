@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"runtime"
@@ -530,17 +531,21 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
 	ctx.Global().Set("__requestID", reqIDVal)
 
-	// Build the scheduled event object.
-	event, err := newJSObject(iso, ctx)
+	// Build the scheduled event using the ScheduledEvent class.
+	scheduledTimeMs := float64(time.Now().UnixMilli())
+	eventScript := fmt.Sprintf(`new ScheduledEvent(%f, %q)`, scheduledTimeMs, cron)
+	eventVal, err := ctx.RunScript(eventScript, "scheduled_event.js")
 	if err != nil {
 		clearRequestState(reqID)
-		result.Error = fmt.Errorf("creating event object: %w", err)
+		result.Error = fmt.Errorf("creating ScheduledEvent: %w", err)
 		return result
 	}
-	scheduledTimeVal, _ := v8.NewValue(iso, float64(time.Now().UnixMilli()))
-	event.Set("scheduledTime", scheduledTimeVal)
-	cronVal, _ := v8.NewValue(iso, cron)
-	event.Set("cron", cronVal)
+	event, err := eventVal.AsObject()
+	if err != nil {
+		clearRequestState(reqID)
+		result.Error = fmt.Errorf("ScheduledEvent is not an object: %w", err)
+		return result
+	}
 
 	jsEnv, err := buildEnvObject(iso, ctx, env, e.db, e.minioClient, e.presignMinioClient, e.publicS3URL)
 	if err != nil {
@@ -628,6 +633,188 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 				result.Logs = state.logs
 			}
 			result.Error = fmt.Errorf("awaiting scheduled handler: %w", err)
+			return result
+		}
+	}
+
+	state := clearRequestState(reqID)
+	if state != nil {
+		result.Logs = state.logs
+	}
+	return result
+}
+
+// ExecuteTail runs the worker's tail handler for log forwarding.
+func (e *Engine) ExecuteTail(siteID string, deployKey string, env *Env, events []TailEvent) (result *WorkerResult) {
+	start := time.Now()
+	result = &WorkerResult{}
+
+	if err := e.EnsureSource(siteID, deployKey); err != nil {
+		result.Error = err
+		result.Duration = time.Since(start)
+		return result
+	}
+
+	pool, err := e.GetOrCreatePool(siteID, deployKey, env)
+	if err != nil {
+		result.Error = err
+		result.Duration = time.Since(start)
+		return result
+	}
+
+	w, err := pool.get()
+	if err != nil {
+		result.Error = fmt.Errorf("acquiring worker from pool: %w", err)
+		result.Duration = time.Since(start)
+		return result
+	}
+
+	var timedOut atomic.Bool
+	timeout := time.Duration(e.config.ExecutionTimeout) * time.Millisecond
+	watchdog := time.AfterFunc(timeout, func() {
+		timedOut.Store(true)
+		w.iso.TerminateExecution()
+	})
+
+	var panicked bool
+	defer func() {
+		stopped := watchdog.Stop()
+		if r := recover(); r != nil {
+			panicked = true
+			if timedOut.Load() {
+				result.Error = fmt.Errorf("worker execution timed out (limit: %v)", timeout)
+			} else {
+				result.Error = fmt.Errorf("worker panic: %v", r)
+			}
+		}
+		result.Duration = time.Since(start)
+		if stopped && !timedOut.Load() && !panicked {
+			pool.put(w)
+		} else {
+			log.Printf("worker: discarding tail worker for site %s deploy %s (timed out or panicked)", siteID, deployKey)
+			w.ctx.Close()
+			w.iso.Dispose()
+			key := poolKey{SiteID: siteID, DeployKey: deployKey}
+			if val, ok := e.pools.Load(key); ok {
+				sp := val.(*sitePool)
+				sp.markInvalid()
+			}
+		}
+	}()
+
+	iso := w.iso
+	ctx := w.ctx
+
+	// Set up per-request state.
+	reqID := newRequestState(e.config.MaxFetchRequests, env)
+	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
+	ctx.Global().Set("__requestID", reqIDVal)
+
+	// Serialize tail events to JSON and inject into JS context.
+	eventsJSON, err := json.Marshal(events)
+	if err != nil {
+		clearRequestState(reqID)
+		result.Error = fmt.Errorf("marshaling tail events: %w", err)
+		return result
+	}
+	eventsScript := fmt.Sprintf(`JSON.parse(%q)`, string(eventsJSON))
+	jsEvents, err := ctx.RunScript(eventsScript, "tail_events.js")
+	if err != nil {
+		clearRequestState(reqID)
+		result.Error = fmt.Errorf("creating tail events array: %w", err)
+		return result
+	}
+
+	jsEnv, err := buildEnvObject(iso, ctx, env, e.db, e.minioClient, e.presignMinioClient, e.publicS3URL)
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("building JS env: %w", err)
+		return result
+	}
+
+	jsCtx, err := buildExecContext(iso, ctx)
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("building JS context: %w", err)
+		return result
+	}
+
+	// Call __worker_module__.tail(events, env, ctx).
+	moduleVal, err := ctx.Global().Get("__worker_module__")
+	if err != nil || moduleVal.IsUndefined() || moduleVal.IsNull() {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("worker module has no default export")
+		return result
+	}
+
+	moduleObj, err := moduleVal.AsObject()
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("worker module is not an object: %w", err)
+		return result
+	}
+
+	tailVal, err := moduleObj.Get("tail")
+	if err != nil || tailVal.IsUndefined() {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("worker module has no tail handler")
+		return result
+	}
+
+	tailFn, err := tailVal.AsFunction()
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("worker tail is not a function: %w", err)
+		return result
+	}
+
+	tailResult, err := tailFn.Call(moduleObj, jsEvents, jsEnv, jsCtx)
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		if timedOut.Load() {
+			result.Error = fmt.Errorf("worker execution timed out (limit: %v)", timeout)
+		} else {
+			result.Error = fmt.Errorf("invoking worker tail: %w", err)
+		}
+		return result
+	}
+
+	// Pump microtasks and drain event loop.
+	ctx.PerformMicrotaskCheckpoint()
+	deadline := start.Add(timeout)
+	if w.eventLoop.hasPending() {
+		w.eventLoop.drain(iso, ctx, deadline)
+	}
+
+	// Await if the handler returns a promise.
+	if tailResult != nil && tailResult.IsPromise() {
+		if _, err := awaitValue(ctx, tailResult, deadline); err != nil {
+			state := clearRequestState(reqID)
+			if state != nil {
+				result.Logs = state.logs
+			}
+			result.Error = fmt.Errorf("awaiting tail handler: %w", err)
 			return result
 		}
 	}

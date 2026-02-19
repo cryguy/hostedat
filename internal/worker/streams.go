@@ -73,7 +73,7 @@ class ReadableStreamDefaultReader {
 				stream._pulling = true;
 				Promise.resolve().then(() => {
 					stream._pulling = false;
-					try { stream._pullFn(stream._controller); } catch(e) { stream._errorInternal(e); }
+					try { var r = stream._pullFn(stream._controller); if (r && typeof r.then === "function") r.then(undefined, function(e) { stream._errorInternal(e); }); } catch(e) { stream._errorInternal(e); }
 				});
 			}
 		});
@@ -347,11 +347,74 @@ class TransformStream {
 	}
 }
 
+// --- ReadableStream.from() ---
+
+ReadableStream.from = function(asyncIterable) {
+	if (asyncIterable == null) {
+		throw new TypeError('ReadableStream.from called on null or undefined');
+	}
+	const asyncIteratorMethod = asyncIterable[Symbol.asyncIterator];
+	const iteratorMethod = asyncIterable[Symbol.iterator];
+	if (typeof asyncIteratorMethod !== 'function' && typeof iteratorMethod !== 'function') {
+		throw new TypeError('ReadableStream.from requires an iterable or async iterable');
+	}
+	const iterator = typeof asyncIteratorMethod === 'function'
+		? asyncIterable[Symbol.asyncIterator]()
+		: asyncIterable[Symbol.iterator]();
+	return new ReadableStream({
+		async pull(controller) {
+			const { value, done } = await iterator.next();
+			if (done) {
+				controller.close();
+			} else {
+				controller.enqueue(value);
+			}
+		}
+	});
+};
+
+// --- FixedLengthStream ---
+
+class FixedLengthStream {
+	constructor(expectedLength) {
+		if (typeof expectedLength !== 'number' || expectedLength < 0) {
+			throw new TypeError('FixedLengthStream requires a non-negative number');
+		}
+		this._expectedLength = expectedLength;
+		let bytesWritten = 0;
+		const expected = expectedLength;
+		const ts = new TransformStream({
+			transform(chunk, controller) {
+				const len = (chunk && typeof chunk.byteLength === 'number')
+					? chunk.byteLength
+					: (chunk && typeof chunk.length === 'number' ? chunk.length : 0);
+				bytesWritten += len;
+				if (bytesWritten > expected) {
+					throw new TypeError(
+						'FixedLengthStream: exceeded expected length of ' + expected + ' bytes (wrote ' + bytesWritten + ')'
+					);
+				}
+				controller.enqueue(chunk);
+			},
+			flush(controller) {
+				if (bytesWritten !== expected) {
+					throw new TypeError(
+						'FixedLengthStream: expected ' + expected + ' bytes but received ' + bytesWritten
+					);
+				}
+			}
+		});
+		this.readable = ts.readable;
+		this.writable = ts.writable;
+	}
+}
+
 globalThis.ReadableStream = ReadableStream;
 globalThis.ReadableStreamDefaultReader = ReadableStreamDefaultReader;
 globalThis.WritableStream = WritableStream;
 globalThis.WritableStreamDefaultWriter = WritableStreamDefaultWriter;
 globalThis.TransformStream = TransformStream;
+globalThis.FixedLengthStream = FixedLengthStream;
 
 })();
 `

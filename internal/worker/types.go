@@ -34,6 +34,15 @@ type LogEntry struct {
 	Time    time.Time `json:"time"`
 }
 
+// TailEvent represents a log event forwarded to a tail worker.
+type TailEvent struct {
+	ScriptName string     `json:"scriptName"`
+	Logs       []LogEntry `json:"logs"`
+	Exceptions []string   `json:"exceptions"`
+	Outcome    string     `json:"outcome"`
+	Timestamp  time.Time  `json:"timestamp"`
+}
+
 // Env holds all bindings passed to the worker as the second argument.
 type Env struct {
 	Vars            map[string]string

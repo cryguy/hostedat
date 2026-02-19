@@ -602,6 +602,470 @@ func TestStreams_TransformStreamWithTransformAndFlush(t *testing.T) {
 	}
 }
 
+func TestReadableStreamFrom(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	t.Run("from sync iterable array", func(t *testing.T) {
+		source := `export default {
+  async fetch(request, env) {
+    const stream = ReadableStream.from([1, 2, 3]);
+    const reader = stream.getReader();
+    const chunks = [];
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    return Response.json({ chunks });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			Chunks []int `json:"chunks"`
+		}
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if len(data.Chunks) != 3 || data.Chunks[0] != 1 || data.Chunks[1] != 2 || data.Chunks[2] != 3 {
+			t.Errorf("chunks = %v, want [1,2,3]", data.Chunks)
+		}
+	})
+
+	t.Run("from async iterable generator", func(t *testing.T) {
+		source := `export default {
+  async fetch(request, env) {
+    async function* gen() {
+      yield "a";
+      yield "b";
+      yield "c";
+    }
+    const stream = ReadableStream.from(gen());
+    const reader = stream.getReader();
+    let result = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      result += value;
+    }
+    return new Response(result);
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		if string(r.Response.Body) != "abc" {
+			t.Errorf("body = %q, want 'abc'", r.Response.Body)
+		}
+	})
+
+	t.Run("from null throws", func(t *testing.T) {
+		source := `export default {
+  fetch(request, env) {
+    let caught = false;
+    try {
+      ReadableStream.from(null);
+    } catch(e) {
+      caught = true;
+    }
+    return Response.json({ caught });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			Caught bool `json:"caught"`
+		}
+		json.Unmarshal(r.Response.Body, &data)
+		if !data.Caught {
+			t.Error("ReadableStream.from(null) should throw")
+		}
+	})
+
+	t.Run("from non-iterable throws", func(t *testing.T) {
+		source := `export default {
+  fetch(request, env) {
+    let caught = false;
+    try {
+      ReadableStream.from(42);
+    } catch(e) {
+      caught = true;
+    }
+    return Response.json({ caught });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			Caught bool `json:"caught"`
+		}
+		json.Unmarshal(r.Response.Body, &data)
+		if !data.Caught {
+			t.Error("ReadableStream.from(42) should throw")
+		}
+	})
+}
+
+func TestFixedLengthStream(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	t.Run("exact length passes through", func(t *testing.T) {
+		source := `export default {
+  async fetch(request, env) {
+    const fls = new FixedLengthStream(5);
+    const writer = fls.writable.getWriter();
+    const reader = fls.readable.getReader();
+
+    writer.write("hello");
+    writer.close();
+
+    let result = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      result += value;
+    }
+    return new Response(result);
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		if string(r.Response.Body) != "hello" {
+			t.Errorf("body = %q, want 'hello'", r.Response.Body)
+		}
+	})
+
+	t.Run("exceeding length errors", func(t *testing.T) {
+		source := `export default {
+  async fetch(request, env) {
+    const fls = new FixedLengthStream(3);
+    const writer = fls.writable.getWriter();
+
+    let caught = false;
+    let msg = "";
+    try {
+      await writer.write("hello");
+    } catch(e) {
+      caught = true;
+      msg = e.message || String(e);
+    }
+    return Response.json({ caught, msg });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			Caught bool   `json:"caught"`
+			Msg    string `json:"msg"`
+		}
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if !data.Caught {
+			t.Error("writing beyond expected length should error")
+		}
+	})
+
+	t.Run("under length errors on close", func(t *testing.T) {
+		source := `export default {
+  async fetch(request, env) {
+    const fls = new FixedLengthStream(10);
+    const writer = fls.writable.getWriter();
+    const reader = fls.readable.getReader();
+
+    await writer.write("hi");
+
+    let caught = false;
+    let msg = "";
+    try {
+      await writer.close();
+      // Drain to trigger the flush
+      while (true) {
+        const { done } = await reader.read();
+        if (done) break;
+      }
+    } catch(e) {
+      caught = true;
+      msg = e.message || String(e);
+    }
+    return Response.json({ caught, msg });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			Caught bool   `json:"caught"`
+			Msg    string `json:"msg"`
+		}
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if !data.Caught {
+			t.Error("closing with fewer bytes than expected should error")
+		}
+	})
+
+	t.Run("zero length empty write", func(t *testing.T) {
+		source := `export default {
+  async fetch(request, env) {
+    const fls = new FixedLengthStream(0);
+    const writer = fls.writable.getWriter();
+    const reader = fls.readable.getReader();
+
+    writer.close();
+
+    const { done } = await reader.read();
+    return Response.json({ done });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			Done bool `json:"done"`
+		}
+		json.Unmarshal(r.Response.Body, &data)
+		if !data.Done {
+			t.Error("zero-length stream should close immediately")
+		}
+	})
+
+	t.Run("invalid constructor throws", func(t *testing.T) {
+		source := `export default {
+  fetch(request, env) {
+    let caught = false;
+    try {
+      new FixedLengthStream(-1);
+    } catch(e) {
+      caught = true;
+    }
+    return Response.json({ caught });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			Caught bool `json:"caught"`
+		}
+		json.Unmarshal(r.Response.Body, &data)
+		if !data.Caught {
+			t.Error("FixedLengthStream(-1) should throw")
+		}
+	})
+}
+
+func TestReadableStreamFrom_EmptyIterable(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const stream = ReadableStream.from([]);
+    const reader = stream.getReader();
+    const { done } = await reader.read();
+    return Response.json({ done });
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Done bool `json:"done"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Done {
+		t.Error("empty iterable should produce a stream that is immediately done")
+	}
+}
+
+func TestReadableStreamFrom_SetIterable(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const s = new Set(["a", "b", "c"]);
+    const stream = ReadableStream.from(s);
+    const reader = stream.getReader();
+    const chunks = [];
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    return Response.json({ chunks });
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Chunks []string `json:"chunks"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if len(data.Chunks) != 3 || data.Chunks[0] != "a" || data.Chunks[1] != "b" || data.Chunks[2] != "c" {
+		t.Errorf("chunks = %v, want [a b c]", data.Chunks)
+	}
+}
+
+func TestReadableStreamFrom_IteratorThrows(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const iterable = {
+      [Symbol.iterator]() {
+        let i = 0;
+        return {
+          next() {
+            if (i++ === 0) return { value: "first", done: false };
+            throw new Error("iterator failure");
+          }
+        };
+      }
+    };
+    const stream = ReadableStream.from(iterable);
+    const reader = stream.getReader();
+    const first = await reader.read();
+    let caught = false;
+    try {
+      await reader.read();
+    } catch(e) {
+      caught = true;
+    }
+    return Response.json({ firstValue: first.value, caught });
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		FirstValue string `json:"firstValue"`
+		Caught     bool   `json:"caught"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if data.FirstValue != "first" {
+		t.Errorf("firstValue = %q, want 'first'", data.FirstValue)
+	}
+	if !data.Caught {
+		t.Error("iterator error should propagate to reader")
+	}
+}
+
+func TestFixedLengthStream_MultipleWrites(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const fls = new FixedLengthStream(11);
+    const writer = fls.writable.getWriter();
+    const reader = fls.readable.getReader();
+
+    writer.write("hello");
+    writer.write(" ");
+    writer.write("world");
+    writer.close();
+
+    let result = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      result += value;
+    }
+    return new Response(result);
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	if string(r.Response.Body) != "hello world" {
+		t.Errorf("body = %q, want 'hello world'", r.Response.Body)
+	}
+}
+
+func TestFixedLengthStream_BinaryData(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const fls = new FixedLengthStream(8);
+    const writer = fls.writable.getWriter();
+    const reader = fls.readable.getReader();
+
+    const chunk1 = new Uint8Array([1, 2, 3]);
+    const chunk2 = new Uint8Array([4, 5, 6, 7, 8]);
+    await writer.write(chunk1);
+    await writer.write(chunk2);
+    writer.close();
+
+    const chunks = [];
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      chunks.push(value.length);
+    }
+    return Response.json({ chunkLengths: chunks, total: chunks.reduce((a,b) => a+b, 0) });
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		ChunkLengths []int `json:"chunkLengths"`
+		Total        int   `json:"total"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if data.Total != 8 {
+		t.Errorf("total = %d, want 8", data.Total)
+	}
+}
+
+func TestFixedLengthStream_BoundaryOverflow(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const fls = new FixedLengthStream(5);
+    const writer = fls.writable.getWriter();
+
+    // Write exactly 5 bytes (OK)
+    await writer.write("hello");
+
+    // Write 1 more byte (should fail)
+    let caught = false;
+    try {
+      await writer.write("!");
+    } catch(e) {
+      caught = true;
+    }
+    return Response.json({ caught });
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Caught bool `json:"caught"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Caught {
+		t.Error("writing past exact boundary should error")
+	}
+}
+
 func TestStreams_WritableStreamReady(t *testing.T) {
 	db := testDB(t)
 	e := newTestEngine(t, db)

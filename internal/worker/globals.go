@@ -42,7 +42,10 @@ globalThis.queueMicrotask = function(fn) {
 };
 
 Object.defineProperty(globalThis, 'navigator', {
-	value: { userAgent: "hostedat-worker/1.0" },
+	value: {
+		userAgent: "hostedat-worker/1.0",
+		scheduling: { isInputPending: function() { return false; } },
+	},
 	writable: true,
 	configurable: true,
 });
