@@ -18,7 +18,7 @@ Self-hosted static site hosting platform with server-side JavaScript workers. Up
 - **Dashboard** — React frontend for managing sites, deployments, users, and settings
 - **CLI client** — deploy from anywhere, integrates with CI/CD
 - **Reproducible builds** — deterministic binaries with `-trimpath` and zero build IDs
-- **Portable** — single binary, SQLite by default, swap to Postgres/MySQL via config
+- **Portable** — single server binary (requires CGO for V8), pure-Go CLI, SQLite by default, swap to Postgres/MySQL via config
 
 ## Quick Start
 
@@ -124,7 +124,7 @@ Include a `404.html` in your upload and it will be served for requests that don'
 
 Workers let you run server-side JavaScript on your site. Include a `_worker.js` file in your upload to handle requests dynamically — the API is compatible with Cloudflare Workers.
 
-Workers run in a sandboxed QuickJS (ES2023) runtime compiled to WASM via Wazero — pure Go, zero CGO dependencies.
+Workers run in a sandboxed V8 JavaScript engine via [tommie/v8go](https://github.com/tommie/v8go). The server binary requires `CGO_ENABLED=1` (the default on Linux/macOS). V8 prebuilt libraries are available for Linux (amd64, arm64), macOS (amd64, arm64), and Android — Windows is not supported for the server binary. The CLI remains pure Go and works on all platforms including Windows.
 
 ### Basic Worker
 
@@ -148,11 +148,14 @@ export default {
 Workers have access to standard Web APIs:
 
 - `fetch()` — outbound HTTP requests
-- `Request`, `Response`, `Headers`, `URL`
-- `crypto.getRandomValues()`, `crypto.subtle`, `crypto.randomUUID()`
+- `Request`, `Response`, `Headers`, `URL`, `URLSearchParams`
+- `crypto.getRandomValues()`, `crypto.subtle` (ECDSA, RSA, Ed25519, HKDF, PBKDF2, AES), `crypto.randomUUID()`
 - `ReadableStream`, `WritableStream`, `TransformStream`
+- `CompressionStream`, `DecompressionStream` (gzip, deflate, deflate-raw)
 - `FormData`, `Blob`, `File`
 - `AbortController`, `AbortSignal`
+- `WebSocket` — client WebSocket connections from workers
+- `HTMLRewriter` — streaming HTML transformation (Cloudflare-compatible API)
 - `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`
 - `atob`, `btoa`
 - `structuredClone`
@@ -212,6 +215,26 @@ export default {
 };
 ```
 
+### Tail Handler
+
+Receive log events from your worker for observability:
+
+```js
+export default {
+  async fetch(request, env) {
+    console.log("handling request");
+    return new Response("OK");
+  },
+
+  async tail(events) {
+    // Process log events (e.g., send to external logging service)
+    for (const event of events) {
+      console.log(event.logs);
+    }
+  },
+};
+```
+
 ### Worker Configuration
 
 Configure worker resource limits in `config.yaml`:
@@ -241,6 +264,9 @@ make release      # Full release (binaries + checksums + docs)
 
 - Go 1.25+
 - Node.js 18+ (for frontend)
+- C/C++ toolchain with `CGO_ENABLED=1` (for server binary — V8 engine requires CGO)
+- **Supported server platforms:** Linux (amd64, arm64), macOS (amd64, arm64)
+- **CLI works on all platforms** including Windows (pure Go, no CGO)
 
 ## Project Structure
 
@@ -254,7 +280,7 @@ internal/auth/     Authentication (JWT, API keys)
 internal/config/   Configuration loading
 internal/client/   API client (used by CLI)
 internal/certs/    TLS certificate management
-internal/worker/   Server-side JS engine (QuickJS/WASM)
+internal/worker/   Server-side JS engine (V8 via tommie/v8go)
 web/               React + Vite frontend
 docs/              Documentation site (Astro)
 scripts/           Build and release scripts

@@ -12,12 +12,15 @@ import CodeBlock from '../../components/CodeBlock.astro';
 
   <h2>Quick start</h2>
   <p>Download the server binary for your platform from the <a href="/downloads">downloads page</a>, create a config file, and run it.</p>
+  <p class="text-sm text-zinc-400">
+    <strong>Note:</strong> The server binary is available for <strong>Linux</strong> and <strong>macOS</strong> only.
+    The worker runtime uses V8, which requires a native build per platform. The <a href="/docs/cli">CLI</a> still supports all platforms including Windows.
+  </p>
 
   <div class="platform-tabs">
     <div class="flex gap-px bg-zinc-800/40 rounded-t-lg border border-b-0 border-zinc-800 overflow-hidden">
       <button class="platform-tab active" data-platform="linux">Linux</button>
       <button class="platform-tab" data-platform="macos">macOS</button>
-      <button class="platform-tab" data-platform="windows">Windows</button>
     </div>
     <div class="platform-panel active" data-platform="linux">
       <CodeBlock
@@ -41,16 +44,6 @@ curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-server-darwin-amd6
 
 chmod +x hostedat-server`}
         lang="bash"
-      />
-    </div>
-    <div class="platform-panel" data-platform="windows">
-      <CodeBlock
-        code={`# amd64
-Invoke-WebRequest -Uri https://docs.hostedat.ditto.moe/downloads/hostedat-server-windows-amd64.exe -OutFile hostedat-server.exe
-
-# or arm64
-Invoke-WebRequest -Uri https://docs.hostedat.ditto.moe/downloads/hostedat-server-windows-arm64.exe -OutFile hostedat-server.exe`}
-        lang="powershell"
       />
     </div>
   </div>

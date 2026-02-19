@@ -185,14 +185,18 @@ new URLSearchParams(init?: string)
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `get` | `(name: string) => string \| null` | First value for name |
+| `getAll` | `(name: string) => string[]` | All values for name |
 | `has` | `(name: string) => boolean` | Check existence |
+| `set` | `(name: string, value: string) => void` | Set parameter (replaces existing) |
+| `append` | `(name: string, value: string) => void` | Append parameter |
+| `delete` | `(name: string) => void` | Remove parameter |
 | `toString` | `() => string` | Encode to query string |
 | `forEach` | `(cb) => void` | Iterate entries |
 | `entries` | `() => Iterator` | `[name, value]` pairs |
 | `keys` | `() => Iterator` | Param names |
 | `values` | `() => Iterator` | Param values |
 
-Note: `URLSearchParams` is read-only in the current implementation (no `set`, `append`, or `delete`).
+Full read-write support: `get`, `set`, `has`, `append`, `delete`, `toString`, `forEach`, `entries`, `keys`, `values`.
 
 ---
 
@@ -323,9 +327,9 @@ const key = await crypto.subtle.importKey(
 );
 ```
 
-**Restriction:** Only `"raw"` format is supported. Other formats (`"pkcs8"`, `"spki"`, `"jwk"`) throw `TypeError`.
+Supported formats: `"raw"`, `"jwk"`. For RSA keys: `"jwk"`, `"spki"` (public), `"pkcs8"` (private). For Ed25519: `"raw"`, `"jwk"`.
 
-Supported algorithms for import: `HMAC` (with hash: `SHA-1`, `SHA-256`, `SHA-384`, `SHA-512`), `AES-GCM`.
+Supported algorithms for import: `HMAC`, `AES-GCM`, `AES-CBC`, `ECDSA` (P-256, P-384), `RSASSA-PKCS1-v1_5`, `RSA-PSS`, `RSA-OAEP`, `Ed25519`.
 
 Returns `Promise<CryptoKey>`.
 
@@ -337,7 +341,7 @@ Returns `Promise<CryptoKey>`.
 const keyBytes = await crypto.subtle.exportKey("raw", key);
 ```
 
-**Restriction:** Only `"raw"` format is supported. Key must have been imported with `extractable: true`.
+Supported formats: `"raw"`, `"jwk"`. For RSA keys: `"jwk"`, `"spki"` (public), `"pkcs8"` (private). For Ed25519: `"raw"`, `"jwk"`. Key must have been imported with `extractable: true`.
 
 Returns `Promise<ArrayBuffer>`.
 
@@ -353,7 +357,7 @@ const signature = await crypto.subtle.sign("HMAC", key, data);
 const valid = await crypto.subtle.verify("HMAC", key, signature, data);
 ```
 
-**Supported algorithm:** `"HMAC"` only. RSA and ECDSA are not supported.
+Supported algorithms: `HMAC`, `ECDSA` (P-256, P-384 with SHA-256/384/512), `RSASSA-PKCS1-v1_5`, `RSA-PSS`, `Ed25519`.
 
 `data`: BufferSource. Returns `Promise<ArrayBuffer>` for sign, `Promise<boolean>` for verify.
 
@@ -391,11 +395,74 @@ const plaintext = await crypto.subtle.decrypt(
 );
 ```
 
-**Supported algorithm:** `"AES-GCM"` only. The `iv` must be exactly 12 bytes.
+Supported algorithms: `AES-GCM` (iv must be 12 bytes), `AES-CBC` (iv must be 16 bytes), `RSA-OAEP`.
 
 Returns `Promise<ArrayBuffer>`.
 
-**Difference from Cloudflare:** Only `HMAC` sign/verify and `AES-GCM` encrypt/decrypt are supported. RSA-OAEP, ECDSA, ECDH, and AES-CBC are not available.
+**Difference from Cloudflare:** Most common algorithms are supported (HMAC, ECDSA, RSA, Ed25519, AES-GCM, AES-CBC, RSA-OAEP). ECDH is not available.
+
+---
+
+### `crypto.subtle.generateKey(algorithm, extractable, usages)`
+
+```js
+const keyPair = await crypto.subtle.generateKey(
+  { name: "ECDSA", namedCurve: "P-256" },
+  true,
+  ["sign", "verify"]
+);
+// keyPair.publicKey, keyPair.privateKey
+```
+
+Supported algorithms:
+- `ECDSA` (P-256, P-384) — returns `CryptoKeyPair`
+- `HMAC` (with hash) — returns `CryptoKey`
+- `AES-GCM`, `AES-CBC` (with length: 128, 256) — returns `CryptoKey`
+- `RSASSA-PKCS1-v1_5`, `RSA-PSS`, `RSA-OAEP` (with modulusLength, publicExponent, hash) — returns `CryptoKeyPair`
+- `Ed25519` — returns `CryptoKeyPair`
+
+---
+
+### `crypto.subtle.deriveBits(algorithm, baseKey, length)` / `crypto.subtle.deriveKey(...)`
+
+```js
+// HKDF
+const derived = await crypto.subtle.deriveBits(
+  { name: "HKDF", hash: "SHA-256", salt: saltBytes, info: infoBytes },
+  baseKey,
+  256
+);
+
+// PBKDF2
+const derived = await crypto.subtle.deriveBits(
+  { name: "PBKDF2", hash: "SHA-256", salt: saltBytes, iterations: 100000 },
+  baseKey,
+  256
+);
+```
+
+Supported algorithms: `HKDF` (with hash, salt, info), `PBKDF2` (with hash, salt, iterations).
+
+`deriveBits` returns `Promise<ArrayBuffer>`. `deriveKey` returns `Promise<CryptoKey>` with the derived key imported for the specified target algorithm.
+
+---
+
+### `crypto.subtle.wrapKey(format, key, wrappingKey, wrapAlgorithm)` / `crypto.subtle.unwrapKey(...)`
+
+```js
+// Wrap a key
+const wrapped = await crypto.subtle.wrapKey("raw", keyToWrap, wrappingKey, { name: "AES-GCM", iv });
+
+// Unwrap a key
+const unwrapped = await crypto.subtle.unwrapKey(
+  "raw", wrappedKeyData, wrappingKey,
+  { name: "AES-GCM", iv },
+  { name: "AES-GCM" },
+  true, ["encrypt", "decrypt"]
+);
+```
+
+Wraps/unwraps a key for secure transport. Combines `exportKey` + `encrypt` (wrap) or `decrypt` + `importKey` (unwrap).
 
 ---
 
@@ -408,11 +475,9 @@ setInterval(fn, delay)  // -> id
 clearInterval(id)
 ```
 
-**Important:** Timers are microtask-based, not wall-clock. All timers (regardless of `delay`) fire on the next microtask tick during Promise resolution. There is no real wall-clock delay in the single-threaded WASM environment.
+Timers use Go-backed wall-clock delays via the event loop. Timer delays are honored — `setTimeout(fn, 100)` will wait approximately 100ms before firing. `setInterval` has a minimum interval of 10ms.
 
-`setInterval` is capped at 1000 invocations to prevent infinite loops.
-
-**Difference from Cloudflare:** Timer delays are not honored; all timers fire at the next microtask checkpoint.
+**Difference from Cloudflare:** Timer semantics are similar. Both use real wall-clock delays.
 
 ---
 
@@ -467,11 +532,11 @@ console.log(navigator.userAgent); // "hostedat-worker/1.0"
 
 ### `AbortController` / `AbortSignal`
 
-Available (registered in the runtime). Accepted by `fetch()` but abort behavior may be limited in the synchronous WASM execution model.
+AbortController/AbortSignal are fully functional. Accepted by `fetch()` and integrated with the V8 event loop.
 
 ### `ReadableStream` / `WritableStream` / `TransformStream`
 
-Available as stubs. Sufficient for constructing Response bodies from stream sources, but streaming chunked responses are not fully supported — the body is read to completion before being sent.
+Full JS polyfill implementation. `ReadableStream`, `WritableStream`, and `TransformStream` support `start`/`pull`/`cancel` controllers, `getReader()`/`getWriter()`, piping, and `Symbol.asyncIterator`. Also includes `FixedLengthStream` and `ReadableStream.from()`. Streaming chunked responses are not fully supported — the body is read to completion before being sent.
 
 ### `Blob` / `File`
 
@@ -494,6 +559,119 @@ form.append("field", "value");
 ### `Event` / `EventTarget` / `DOMException`
 
 Base classes available. Used by the runtime internally (e.g., `AbortController` events, `DOMException` errors from `structuredClone`).
+
+---
+
+## WebSocket
+
+Client WebSocket connections from workers. Compatible with the Cloudflare Workers WebSocket API.
+
+```js
+export default {
+  async fetch(request, env) {
+    const resp = await fetch("https://echo.websocket.org", {
+      headers: { Upgrade: "websocket" },
+    });
+    const ws = resp.webSocket;
+    ws.accept();
+
+    ws.addEventListener("message", (event) => {
+      console.log("Received:", event.data);
+    });
+
+    ws.send("Hello from worker!");
+    ws.close();
+
+    return new Response("WebSocket session complete");
+  },
+};
+```
+
+`WebSocketPair` is also available for creating paired WebSocket connections:
+
+```js
+const [client, server] = Object.values(new WebSocketPair());
+server.accept();
+server.addEventListener("message", (event) => { /* ... */ });
+return new Response(null, { status: 101, webSocket: client });
+```
+
+---
+
+## HTMLRewriter
+
+Streaming HTML transformation using a Cloudflare-compatible API. Allows you to modify HTML responses on the fly using CSS selectors.
+
+```js
+export default {
+  async fetch(request, env) {
+    const response = await env.ASSETS.fetch(request);
+
+    return new HTMLRewriter()
+      .on("h1", {
+        element(el) {
+          el.setInnerContent("Modified Title");
+        },
+      })
+      .on("a[href]", {
+        element(el) {
+          const href = el.getAttribute("href");
+          if (href.startsWith("http://")) {
+            el.setAttribute("href", href.replace("http://", "https://"));
+          }
+        },
+      })
+      .transform(response);
+  },
+};
+```
+
+**Element handlers:** `element(el)`, `comments(comment)`, `text(text)`
+
+**Element methods:** `getAttribute(name)`, `setAttribute(name, value)`, `removeAttribute(name)`, `hasAttribute(name)`, `setInnerContent(content)`, `prepend(content)`, `append(content)`, `remove()`, `tagName` (read-only)
+
+**Document handlers:** `.onDocument({ doctype(dt), comments(c), text(t), end(end) })`
+
+---
+
+## CompressionStream / DecompressionStream
+
+Streaming compression and decompression using standard Web APIs.
+
+```js
+// Compress
+const compressed = new Response("Hello world").body
+  .pipeThrough(new CompressionStream("gzip"));
+
+// Decompress
+const decompressed = compressedStream
+  .pipeThrough(new DecompressionStream("gzip"));
+```
+
+Supported formats: `"gzip"`, `"deflate"`, `"deflate-raw"`.
+
+---
+
+## `tail()` Handler
+
+Receive log events from your worker for observability.
+
+```js
+export default {
+  async fetch(request, env) {
+    console.log("handling request");
+    return new Response("OK");
+  },
+
+  async tail(events) {
+    for (const event of events) {
+      console.log(event.logs);
+    }
+  },
+};
+```
+
+The `tail` handler is called with an array of trace events after the `fetch` or `scheduled` handler completes.
 
 ---
 
@@ -676,14 +854,13 @@ The `ctx` object is passed to both `fetch` and `scheduled` handlers.
 | KV value max size | 1 MB | hard-coded |
 | KV list max limit | 1000 | hard-coded |
 | `crypto.getRandomValues` max bytes | 65536 | hard-coded |
-| `setInterval` max ticks | 1000 | hard-coded |
 
 ---
 
 ## Lifecycle
 
 ```
-Deploy zip → extract files → compile _worker.js to bytecode → save bytecode.bin
+Deploy zip → extract files → parse _worker.js → create V8 context
                                                                       │
 Request arrives → check pool for {siteID, deployID} → checkout runtime
      │                                                                 │
@@ -698,7 +875,7 @@ Request arrives → check pool for {siteID, deployID} → checkout runtime
 
 **Pool invalidation:** When a new deployment is pushed, the old pool (keyed by the previous `deployID`) is marked invalid. The next request creates a new pool for the new `deployID`.
 
-**Server restart:** Bytecode is reloaded from disk (`bytecode.bin`). Pools are recreated lazily on first request.
+**Server restart:** V8 isolates are recreated lazily on first request. Source code is re-parsed from disk.
 
 ---
 
@@ -708,9 +885,9 @@ Request arrives → check pool for {siteID, deployID} → checkout runtime
 |---------|-----------|---------|
 | JS engine | V8 | V8 (via v8go) |
 | Module system | ESM (native V8) | ESM (wrapped via globalThis) |
-| `crypto.subtle` algorithms | Full Web Crypto API | HMAC, AES-GCM, digest only |
-| `importKey` formats | JWK, PKCS8, SPKI, raw | `raw` only |
-| Timer accuracy | Wall-clock | Microtask-based (no real delay) |
+| `crypto.subtle` algorithms | Full Web Crypto API | HMAC, ECDSA, RSA (PKCS1v15, PSS, OAEP), Ed25519, AES-GCM, AES-CBC, HKDF, PBKDF2, digest |
+| `importKey` formats | JWK, PKCS8, SPKI, raw | `raw`, `jwk`, `pkcs8`, `spki` |
+| Timer accuracy | Wall-clock | Wall-clock (Go event loop) |
 | `waitUntil` | Extends lifetime | No-op |
 | `fetch` rate limit | Aggregate billing | Per-invocation limit (default 50) |
 | KV consistency | Eventually consistent | Strongly consistent (DB) |

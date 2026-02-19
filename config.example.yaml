@@ -38,7 +38,7 @@ cloudflare:
   api_token: ""
 
 # Worker (server-side JavaScript) configuration.
-# Workers use QuickJS (ES2023) compiled to WASM via Wazero — pure Go, zero CGO.
+# Workers use the V8 JavaScript engine via tommie/v8go (requires CGO_ENABLED=1).
 worker:
   pool_size: 4               # Pre-warmed JS runtimes per site
   memory_limit_mb: 128       # Max memory per runtime

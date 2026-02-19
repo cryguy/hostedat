@@ -51,6 +51,8 @@ import CodeBlock from '../../components/CodeBlock.astro';
   <p>
     The <code>fetch()</code> handler is invoked for every HTTP request to your site's subdomain.
     The <code>scheduled()</code> handler is optional and is called by cron triggers.
+    The <code>tail()</code> handler is optional and receives log events from other worker executions
+    for log forwarding or analytics.
   </p>
 
   <h2>Available Web APIs</h2>
@@ -81,7 +83,7 @@ import CodeBlock from '../../components/CodeBlock.astro';
       <strong>atob() / btoa()</strong> — Base64 decode and encode (Latin-1 strings)
     </li>
     <li>
-      <strong>setTimeout / setInterval / clearTimeout / clearInterval</strong> — Timer functions; timing is microtask-based and approximate (see note below)
+      <strong>setTimeout / setInterval / clearTimeout / clearInterval</strong> — Timer functions backed by a real Go event loop with actual delays (see note below)
     </li>
     <li>
       <strong>AbortController / AbortSignal</strong> — Request cancellation; includes <code>AbortSignal.abort()</code> and <code>AbortSignal.timeout(ms)</code>
@@ -99,12 +101,17 @@ import CodeBlock from '../../components/CodeBlock.astro';
       <strong>crypto.subtle</strong> — Web Crypto API subset:
       <ul>
         <li><code>digest(algorithm, data)</code> — SHA-1, SHA-256, SHA-384, SHA-512</li>
-        <li><code>importKey(format, keyData, algorithm, extractable, usages)</code> — <code>raw</code> format only; supports HMAC (with SHA-1/256/384/512 hash) and AES-GCM</li>
-        <li><code>exportKey(format, key)</code> — <code>raw</code> format only; key must be extractable</li>
-        <li><code>sign(algorithm, key, data)</code> — HMAC only</li>
-        <li><code>verify(algorithm, key, signature, data)</code> — HMAC only</li>
-        <li><code>encrypt(algorithm, key, data)</code> — AES-GCM only; requires a 12-byte IV</li>
-        <li><code>decrypt(algorithm, key, data)</code> — AES-GCM only; requires a 12-byte IV</li>
+        <li><code>generateKey(algorithm, extractable, usages)</code> — HMAC, AES-GCM, AES-CBC, ECDSA (P-256, P-384), RSA-OAEP, RSASSA-PKCS1-v1_5, RSA-PSS, Ed25519</li>
+        <li><code>importKey(format, keyData, algorithm, extractable, usages)</code> — Formats: <code>raw</code>, <code>jwk</code>, <code>pkcs8</code> (RSA), <code>spki</code> (RSA). Algorithms: HMAC, AES-GCM, AES-CBC, ECDSA, RSA-OAEP, RSASSA-PKCS1-v1_5, RSA-PSS, Ed25519</li>
+        <li><code>exportKey(format, key)</code> — Formats: <code>raw</code>, <code>jwk</code>, <code>pkcs8</code> (RSA), <code>spki</code> (RSA); key must be extractable</li>
+        <li><code>sign(algorithm, key, data)</code> — HMAC, ECDSA, RSASSA-PKCS1-v1_5, RSA-PSS, Ed25519</li>
+        <li><code>verify(algorithm, key, signature, data)</code> — HMAC, ECDSA, RSASSA-PKCS1-v1_5, RSA-PSS, Ed25519</li>
+        <li><code>encrypt(algorithm, key, data)</code> — AES-GCM (12-byte IV), AES-CBC (16-byte IV), RSA-OAEP</li>
+        <li><code>decrypt(algorithm, key, data)</code> — AES-GCM (12-byte IV), AES-CBC (16-byte IV), RSA-OAEP</li>
+        <li><code>deriveBits(algorithm, baseKey, length)</code> — HKDF, PBKDF2</li>
+        <li><code>deriveKey(algorithm, baseKey, derivedKeyAlgorithm, extractable, usages)</code> — HKDF, PBKDF2</li>
+        <li><code>wrapKey(format, key, wrappingKey, wrapAlgorithm)</code> — Wraps via exportKey + encrypt</li>
+        <li><code>unwrapKey(format, wrappedKey, unwrappingKey, unwrapAlgo, unwrappedKeyAlgo, extractable, usages)</code> — Unwraps via decrypt + importKey</li>
       </ul>
     </li>
     <li>
@@ -112,6 +119,15 @@ import CodeBlock from '../../components/CodeBlock.astro';
     </li>
     <li>
       <strong>Blob / File / FormData</strong> — Binary data construction and multipart form handling; <code>Blob</code> and <code>File</code> support <code>.text()</code> and <code>.arrayBuffer()</code>
+    </li>
+    <li>
+      <strong>WebSocket / WebSocketPair</strong> — Server-side WebSocket support (Cloudflare Workers compatible). Create a <code>WebSocketPair</code> to get a client/server pair, call <code>server.accept()</code>, and return a 101 Response with the client <code>webSocket</code> property to upgrade the connection
+    </li>
+    <li>
+      <strong>HTMLRewriter</strong> — Streaming HTML transformation (Cloudflare Workers compatible). Chain <code>.on(selector, handler)</code> and <code>.onDocument(handler)</code> calls, then <code>.transform(response)</code> to rewrite HTML. Element handlers support <code>getAttribute</code>, <code>setAttribute</code>, <code>removeAttribute</code>, <code>before</code>, <code>after</code>, <code>prepend</code>, <code>append</code>, <code>setInnerContent</code>, <code>remove</code>, and <code>tagName</code> mutation
+    </li>
+    <li>
+      <strong>CompressionStream / DecompressionStream</strong> — Streaming compression and decompression. Supported formats: <code>gzip</code>, <code>deflate</code>, <code>deflate-raw</code>
     </li>
     <li>
       <strong>structuredClone(value)</strong> — Deep-clone JSON-serializable values; functions, symbols, Map, Set, WeakMap, and WeakSet are not supported
@@ -241,11 +257,10 @@ import CodeBlock from '../../components/CodeBlock.astro';
 
   <h3>Example: Timers and encoding</h3>
   <p>
-    <code>setTimeout</code> and <code>setInterval</code> are available but use microtask-based
-    scheduling. In the single-threaded WebAssembly environment, true wall-clock delays are not
-    achievable — all timers fire on the next microtask tick regardless of the delay value.
-    Use them for deferred work within a single request, not for precise timing.
-    <code>setInterval</code> is capped at 1000 ticks per interval to prevent infinite loops.
+    <code>setTimeout</code> and <code>setInterval</code> use a Go-backed event loop with real
+    wall-clock delays. A <code>setTimeout(fn, 500)</code> call will actually wait 500 ms before
+    firing. All timers are bounded by the worker execution timeout — any pending timers are
+    cancelled when the timeout is reached.
   </p>
 
   <CodeBlock
@@ -266,7 +281,7 @@ import CodeBlock from '../../components/CodeBlock.astro';
     code={`export default {
   async fetch(request) {
     const result = await new Promise((resolve) => {
-      setTimeout(() => resolve("done after microtask"), 0);
+      setTimeout(() => resolve("done after 100ms"), 100);
     });
     return new Response(result);
   }
@@ -648,6 +663,32 @@ hostedat storage update <site> <bucket-id> --public`}
     <li><code>0 0 * * *</code> — Daily at midnight</li>
     <li><code>0 9 * * 1</code> — Every Monday at 9:00 AM</li>
   </ul>
+
+  <h2>Tail handler</h2>
+  <p>
+    The optional <code>tail()</code> handler receives log events from other worker executions,
+    enabling log forwarding, alerting, or analytics pipelines. It is called with an array of
+    events, each containing script name, logs, exceptions, outcome, and timestamp.
+  </p>
+
+  <CodeBlock
+    code={`export default {
+  async fetch(request) {
+    return new Response("ok");
+  },
+
+  async tail(events, env, ctx) {
+    // events: array of { scriptName, logs, exceptions, outcome, timestamp }
+    for (const event of events) {
+      console.log("Tail:", event.scriptName, "outcome:", event.outcome);
+      for (const log of event.logs) {
+        console.log("  [" + log.level + "]", log.message);
+      }
+    }
+  }
+};`}
+    lang="js"
+  />
 
   <h2>Worker lifecycle</h2>
   <p>Understanding the worker lifecycle helps optimize performance and troubleshoot issues:</p>

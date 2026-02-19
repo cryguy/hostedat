@@ -179,7 +179,7 @@ type poolKey struct {
 - Pool size configurable (default 4 runtimes per site)
 - On request: checkout a runtime from the pool, execute, return
 - Pool invalidation: when a new deployment is pushed, the old pool is marked invalid; a fresh pool is created lazily for the new `deployKey`
-- On server restart: bytecode is reloaded from disk (`bytecode.bin`), pool recreated
+- On server restart: V8 isolates are recreated lazily on first request; source code is re-parsed from disk
 
 ### Execution Flow
 
