@@ -342,6 +342,30 @@ func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, min
 		}
 	}
 
+	// Queue bindings.
+	if env.QueueBindings != nil && db != nil {
+		bridge := &QueueBridge{DB: db}
+		for name, queueName := range env.QueueBindings {
+			qVal, err := buildQueueBinding(iso, ctx, bridge, queueName)
+			if err != nil {
+				return nil, fmt.Errorf("building queue binding %q: %w", name, err)
+			}
+			envObj.Set(name, qVal)
+		}
+	}
+
+	// Service bindings (worker-to-worker RPC).
+	if env.ServiceBindings != nil && env.engine != nil {
+		bridge := &ServiceBindingBridge{Engine: env.engine, Env: env}
+		for name, config := range env.ServiceBindings {
+			sbVal, err := buildServiceBinding(iso, ctx, bridge, config)
+			if err != nil {
+				return nil, fmt.Errorf("building service binding %q: %w", name, err)
+			}
+			envObj.Set(name, sbVal)
+		}
+	}
+
 	// ASSETS binding.
 	if env.Assets != nil {
 		assetsVal, err := buildAssetsBinding(iso, ctx, env.Assets)

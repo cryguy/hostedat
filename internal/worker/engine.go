@@ -222,6 +222,20 @@ func (e *Engine) GetOrCreatePool(siteID string, deployKey string, env *Env) (*v8
 		func(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 			return setupFetch(iso, ctx, el, cfg)
 		},
+		// BYOB Reader: ReadableStreamBYOBReader, ReadableByteStreamController
+		setupBYOBReader,
+		// MessageChannel: MessageChannel, MessagePort
+		setupMessageChannel,
+		// Unhandled Rejection: PromiseRejectionEvent, unhandledrejection tracking
+		setupUnhandledRejection,
+		// Scheduler: scheduler.wait()
+		setupScheduler,
+		// DigestStream: crypto.DigestStream for streaming hash computation
+		setupDigestStream,
+		// EventSource: Server-Sent Events client
+		setupEventSource,
+		// TCP Sockets: connect() for outbound TCP connections
+		setupTCPSocket,
 	}
 
 	pool, err := newV8Pool(cfg.PoolSize, source, setupFns, e.config.MemoryLimitMB)
@@ -239,6 +253,9 @@ func (e *Engine) GetOrCreatePool(siteID string, deployKey string, env *Env) (*v8
 func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerRequest) (result *WorkerResult) {
 	start := time.Now()
 	result = &WorkerResult{}
+
+	// Set engine reference so buildEnvObject can wire up service bindings.
+	env.engine = e
 
 	// Ensure source is loaded (handles server restart).
 	if err := e.EnsureSource(siteID, deployKey); err != nil {
@@ -475,6 +492,8 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 	start := time.Now()
 	result = &WorkerResult{}
 
+	env.engine = e
+
 	if err := e.EnsureSource(siteID, deployKey); err != nil {
 		result.Error = err
 		result.Duration = time.Since(start)
@@ -656,6 +675,8 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 func (e *Engine) ExecuteTail(siteID string, deployKey string, env *Env, events []TailEvent) (result *WorkerResult) {
 	start := time.Now()
 	result = &WorkerResult{}
+
+	env.engine = e
 
 	if err := e.EnsureSource(siteID, deployKey); err != nil {
 		result.Error = err

@@ -1,6 +1,10 @@
 package worker
 
 import (
+	"hash"
+	"io"
+	"net"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,6 +36,31 @@ type requestState struct {
 	wsConn   *websocket.Conn
 	wsMu     sync.Mutex
 	wsClosed bool
+
+	// DigestStream state: per-request hash instances keyed by stream ID.
+	digestStreams   map[string]hash.Hash
+	nextDigestID   int64
+
+	// EventSource state: per-request SSE connections keyed by source ID.
+	eventSources   map[string]*eventSourceState
+	nextSourceID   int64
+
+	// TCP socket state: per-request TCP connections keyed by socket ID.
+	tcpSockets       map[string]net.Conn
+	tcpSocketBuffers map[string]*tcpSocketBuffer
+	nextTCPSocketID  int64
+}
+
+// eventSourceState holds state for a single EventSource SSE connection.
+type eventSourceState struct {
+	url        string
+	events     []sseEvent
+	mu         sync.Mutex
+	closed     bool
+	connected  bool
+	resp       *http.Response
+	body       io.ReadCloser
+	cancelFunc func()
 }
 
 var (
@@ -59,12 +88,15 @@ func getRequestState(id uint64) *requestState {
 }
 
 // clearRequestState removes the state for the given request ID and returns it.
+// It also cleans up any open TCP sockets.
 func clearRequestState(id uint64) *requestState {
 	v, ok := requestStates.LoadAndDelete(id)
 	if !ok {
 		return nil
 	}
-	return v.(*requestState)
+	state := v.(*requestState)
+	cleanupTCPSockets(state)
+	return state
 }
 
 // importCryptoKey stores key material scoped to the request and returns its ID.

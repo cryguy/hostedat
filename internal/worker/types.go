@@ -47,9 +47,12 @@ type TailEvent struct {
 type Env struct {
 	Vars            map[string]string
 	Secrets         map[string]string
-	KVBindings      map[string]string // binding name -> namespace ID
-	StorageBindings map[string]string // binding name -> S3 bucket name
+	KVBindings      map[string]string              // binding name -> namespace ID
+	StorageBindings map[string]string              // binding name -> S3 bucket name
+	QueueBindings   map[string]string              // binding name -> queue name
+	ServiceBindings map[string]ServiceBindingConfig // binding name -> target config
 	Assets          AssetsFetcher
+	engine          *Engine // set internally for service binding dispatch
 }
 
 // AssetsFetcher is implemented by the static pipeline to handle env.ASSETS.fetch().
