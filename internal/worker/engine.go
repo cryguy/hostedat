@@ -202,6 +202,8 @@ func (e *Engine) GetOrCreatePool(siteID string, deployKey string, env *Env) (*v8
 		setupCryptoRSA,
 		// Crypto: Ed25519 sign/verify
 		setupCryptoEd25519,
+		// URLPattern: URL pattern matching API
+		setupURLPattern,
 		// Streams: ReadableStream, WritableStream, TransformStream
 		setupStreams,
 		// FormData: FormData, Blob, File
@@ -429,6 +431,9 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 		return result
 	}
 
+	// Drain waitUntil promises after the response is ready.
+	drainWaitUntil(ctx, deadline)
+
 	// WebSocket upgrade: if the response is 101 with a webSocket, hold the
 	// worker for the bridge loop instead of returning it to the pool.
 	if resp.HasWebSocket && resp.StatusCode == 101 {
@@ -637,6 +642,9 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 		}
 	}
 
+	// Drain waitUntil promises after the handler completes.
+	drainWaitUntil(ctx, deadline)
+
 	state := clearRequestState(reqID)
 	if state != nil {
 		result.Logs = state.logs
@@ -818,6 +826,9 @@ func (e *Engine) ExecuteTail(siteID string, deployKey string, env *Env, events [
 			return result
 		}
 	}
+
+	// Drain waitUntil promises after the handler completes.
+	drainWaitUntil(ctx, deadline)
 
 	state := clearRequestState(reqID)
 	if state != nil {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/cryguy/hostedat/internal/storage"
 	v8 "github.com/tommie/v8go"
@@ -354,15 +355,25 @@ func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, min
 }
 
 // buildExecContext creates the ctx JS object (third argument to fetch handler).
-// Currently provides no-op waitUntil and passThroughOnException.
+// waitUntil(promise) collects promises into globalThis.__waitUntilPromises
+// which are drained after the response is returned.
 func buildExecContext(iso *v8.Isolate, ctx *v8.Context) (*v8.Value, error) {
 	execCtx, err := newJSObject(iso, ctx)
 	if err != nil {
 		return nil, fmt.Errorf("creating exec context: %w", err)
 	}
 
+	// Initialize the promises array for this request.
+	if _, err := ctx.RunScript("globalThis.__waitUntilPromises = [];", "waituntil_init.js"); err != nil {
+		return nil, fmt.Errorf("initializing waitUntil array: %w", err)
+	}
+
 	waitUntilFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
-		// No-op: we don't support background tasks beyond the request lifetime.
+		args := info.Args()
+		if len(args) > 0 {
+			ctx.Global().Set("__tmp_wu_promise", args[0])
+			ctx.RunScript("globalThis.__waitUntilPromises.push(Promise.resolve(globalThis.__tmp_wu_promise)); delete globalThis.__tmp_wu_promise;", "waituntil_push.js")
+		}
 		return v8.Undefined(iso)
 	})
 	execCtx.Set("waitUntil", waitUntilFT.GetFunction(ctx))
@@ -373,4 +384,24 @@ func buildExecContext(iso *v8.Isolate, ctx *v8.Context) (*v8.Value, error) {
 	execCtx.Set("passThroughOnException", passThroughFT.GetFunction(ctx))
 
 	return execCtx.Value, nil
+}
+
+// drainWaitUntil awaits all promises collected by ctx.waitUntil().
+// It runs Promise.allSettled on the array so that rejections don't break
+// the response. Must be called on the isolate's goroutine.
+func drainWaitUntil(ctx *v8.Context, deadline time.Time) {
+	drainScript := `(async function() {
+		var promises = globalThis.__waitUntilPromises || [];
+		globalThis.__waitUntilPromises = [];
+		if (promises.length > 0) {
+			await Promise.allSettled(promises);
+		}
+	})()`
+	wuVal, err := ctx.RunScript(drainScript, "waituntil_drain.js")
+	if err != nil {
+		return
+	}
+	if wuVal != nil && wuVal.IsPromise() {
+		awaitValue(ctx, wuVal, deadline)
+	}
 }

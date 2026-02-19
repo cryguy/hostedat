@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -56,7 +57,43 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 			var a1 = globalThis.__tmp_fetch_arg1;
 			delete globalThis.__tmp_fetch_arg0;
 			delete globalThis.__tmp_fetch_arg1;
-			var url = '', method = 'GET', headers = {}, body = null;
+			var url = '', method = 'GET', headers = {}, body = null, bodyIsBase64 = false;
+			function extractBody(b) {
+				if (b == null) return;
+				if (b instanceof ArrayBuffer) {
+					body = __bufferSourceToB64(b);
+					bodyIsBase64 = true;
+				} else if (ArrayBuffer.isView(b)) {
+					body = __bufferSourceToB64(b);
+					bodyIsBase64 = true;
+				} else if (b instanceof ReadableStream) {
+					var chunks = [];
+					for (var i = 0; i < b._queue.length; i++) {
+						var c = b._queue[i];
+						if (typeof c === 'string') {
+							var enc = new TextEncoder();
+							var bytes = enc.encode(c);
+							for (var j = 0; j < bytes.length; j++) chunks.push(bytes[j]);
+						} else if (c instanceof Uint8Array || ArrayBuffer.isView(c)) {
+							var arr = new Uint8Array(c.buffer || c, c.byteOffset || 0, c.byteLength || c.length);
+							for (var j2 = 0; j2 < arr.length; j2++) chunks.push(arr[j2]);
+						} else if (c instanceof ArrayBuffer) {
+							var arr2 = new Uint8Array(c);
+							for (var j3 = 0; j3 < arr2.length; j3++) chunks.push(arr2[j3]);
+						} else {
+							var s = String(c);
+							for (var j4 = 0; j4 < s.length; j4++) chunks.push(s.charCodeAt(j4) & 0xFF);
+						}
+					}
+					b._queue = [];
+					if (chunks.length > 0) {
+						body = __bufferSourceToB64(new Uint8Array(chunks));
+						bodyIsBase64 = true;
+					}
+				} else {
+					body = String(b);
+				}
+			}
 			if (typeof a0 === 'string') {
 				url = a0;
 			} else if (a0 && typeof a0 === 'object') {
@@ -66,7 +103,7 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 					var m = a0.headers._map;
 					for (var k in m) { if (m.hasOwnProperty(k)) headers[k] = String(m[k]); }
 				}
-				if (a0._body != null) body = String(a0._body);
+				if (a0._body != null) extractBody(a0._body);
 			}
 			if (a1 && typeof a1 === 'object') {
 				if (a1.method !== undefined) method = String(a1.method).toUpperCase();
@@ -76,10 +113,10 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 						for (var k in src) { if (src.hasOwnProperty(k)) headers[k.toLowerCase()] = String(src[k]); }
 					}
 				}
-				if (a1.body != null) body = String(a1.body);
+				if (a1.body != null) extractBody(a1.body);
 			}
 			if (!method) method = 'GET';
-			return JSON.stringify({url: url, method: method, headers: headers, body: body});
+			return JSON.stringify({url: url, method: method, headers: headers, body: body, bodyIsBase64: bodyIsBase64});
 		})()`, "fetch_extract.js")
 		if err != nil {
 			errVal, _ := v8.NewValue(iso, fmt.Sprintf("fetch: extracting arguments: %s", err.Error()))
@@ -88,10 +125,11 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 		}
 
 		var fetchArgs struct {
-			URL     string            `json:"url"`
-			Method  string            `json:"method"`
-			Headers map[string]string `json:"headers"`
-			Body    *string           `json:"body"`
+			URL          string            `json:"url"`
+			Method       string            `json:"method"`
+			Headers      map[string]string `json:"headers"`
+			Body         *string           `json:"body"`
+			BodyIsBase64 bool              `json:"bodyIsBase64"`
 		}
 		if err := json.Unmarshal([]byte(extractResult.String()), &fetchArgs); err != nil {
 			errVal, _ := v8.NewValue(iso, fmt.Sprintf("fetch: parsing arguments: %s", err.Error()))
@@ -111,7 +149,17 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 
 		var bodyReader io.Reader
 		if fetchArgs.Body != nil && *fetchArgs.Body != "" {
-			bodyReader = strings.NewReader(*fetchArgs.Body)
+			if fetchArgs.BodyIsBase64 {
+				decoded, decErr := base64.StdEncoding.DecodeString(*fetchArgs.Body)
+				if decErr != nil {
+					errVal, _ := v8.NewValue(iso, fmt.Sprintf("fetch: decoding binary body: %s", decErr.Error()))
+					resolver.Reject(errVal)
+					return resolver.GetPromise().Value
+				}
+				bodyReader = strings.NewReader(string(decoded))
+			} else {
+				bodyReader = strings.NewReader(*fetchArgs.Body)
+			}
 		}
 
 		httpReq, err := http.NewRequest(fetchArgs.Method, fetchArgs.URL, bodyReader)
@@ -168,8 +216,9 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 		}
 		headersJSON, _ := json.Marshal(respHeaders)
 
-		// Set temp globals and build Response via JS constructor.
-		bodyVal, _ := v8.NewValue(iso, string(respBody))
+		// Base64-encode the response body to preserve binary data integrity.
+		bodyB64 := base64.StdEncoding.EncodeToString(respBody)
+		bodyVal, _ := v8.NewValue(iso, bodyB64)
 		ctx.Global().Set("__tmp_fetch_resp_body", bodyVal)
 		statusVal, _ := v8.NewValue(iso, int32(resp.StatusCode))
 		ctx.Global().Set("__tmp_fetch_resp_status", statusVal)
@@ -181,7 +230,7 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 		ctx.Global().Set("__tmp_fetch_resp_url", fetchURLVal)
 
 		jsResp, err := ctx.RunScript(`(function() {
-			var body = globalThis.__tmp_fetch_resp_body;
+			var b64Body = globalThis.__tmp_fetch_resp_body;
 			var status = globalThis.__tmp_fetch_resp_status;
 			var statusText = globalThis.__tmp_fetch_resp_statusText;
 			var hdrs = JSON.parse(globalThis.__tmp_fetch_resp_headers);
@@ -191,6 +240,18 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 			delete globalThis.__tmp_fetch_resp_statusText;
 			delete globalThis.__tmp_fetch_resp_headers;
 			delete globalThis.__tmp_fetch_resp_url;
+			var body = null;
+			if (b64Body && b64Body.length > 0) {
+				var buf = __b64ToBuffer(b64Body);
+				var ct = (hdrs['content-type'] || '').toLowerCase();
+				if (ct.indexOf('text/') === 0 || ct.indexOf('application/json') !== -1 ||
+				    ct.indexOf('application/xml') !== -1 || ct.indexOf('application/javascript') !== -1 ||
+				    ct.indexOf('application/x-www-form-urlencoded') !== -1) {
+					body = new TextDecoder().decode(buf);
+				} else {
+					body = buf;
+				}
+			}
 			return new Response(body, {status: status, statusText: statusText, headers: hdrs, url: url});
 		})()`, "fetch_response.js")
 		if err != nil {

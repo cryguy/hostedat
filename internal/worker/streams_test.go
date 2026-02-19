@@ -1066,6 +1066,581 @@ func TestFixedLengthStream_BoundaryOverflow(t *testing.T) {
 	}
 }
 
+func TestStreams_PipeTo(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	t.Run("basic pipe", func(t *testing.T) {
+		source := `export default {
+  async fetch(request, env) {
+    const chunks = [];
+    const readable = new ReadableStream({
+      start(controller) {
+        controller.enqueue("hello");
+        controller.enqueue(" world");
+        controller.close();
+      }
+    });
+    const writable = new WritableStream({
+      write(chunk) { chunks.push(chunk); },
+    });
+    await readable.pipeTo(writable);
+    return Response.json({ chunks, count: chunks.length });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			Chunks []string `json:"chunks"`
+			Count  int      `json:"count"`
+		}
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if data.Count != 2 {
+			t.Errorf("count = %d, want 2", data.Count)
+		}
+		if len(data.Chunks) >= 1 && data.Chunks[0] != "hello" {
+			t.Errorf("chunks[0] = %q, want 'hello'", data.Chunks[0])
+		}
+		if len(data.Chunks) >= 2 && data.Chunks[1] != " world" {
+			t.Errorf("chunks[1] = %q, want ' world'", data.Chunks[1])
+		}
+	})
+
+	t.Run("locked stream rejects", func(t *testing.T) {
+		source := `export default {
+  async fetch(request, env) {
+    const readable = new ReadableStream();
+    readable.getReader(); // lock it
+    let caught = false;
+    try {
+      await readable.pipeTo(new WritableStream());
+    } catch(e) {
+      caught = true;
+    }
+    return Response.json({ caught });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			Caught bool `json:"caught"`
+		}
+		json.Unmarshal(r.Response.Body, &data)
+		if !data.Caught {
+			t.Error("pipeTo on locked stream should reject")
+		}
+	})
+
+	t.Run("preventClose option", func(t *testing.T) {
+		source := `export default {
+  async fetch(request, env) {
+    const readable = new ReadableStream({
+      start(controller) {
+        controller.enqueue("data");
+        controller.close();
+      }
+    });
+    let writableClosed = false;
+    const writable = new WritableStream({
+      close() { writableClosed = true; },
+    });
+    await readable.pipeTo(writable, { preventClose: true });
+    return Response.json({ writableClosed });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			WritableClosed bool `json:"writableClosed"`
+		}
+		json.Unmarshal(r.Response.Body, &data)
+		if data.WritableClosed {
+			t.Error("writable should not be closed when preventClose is true")
+		}
+	})
+}
+
+func TestStreams_PipeThrough(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	t.Run("uppercase transform", func(t *testing.T) {
+		source := `export default {
+  async fetch(request, env) {
+    const readable = new ReadableStream({
+      start(controller) {
+        controller.enqueue("hello");
+        controller.enqueue(" world");
+        controller.close();
+      }
+    });
+    const ts = new TransformStream({
+      transform(chunk, controller) {
+        controller.enqueue(chunk.toUpperCase());
+      }
+    });
+    const transformed = readable.pipeThrough(ts);
+    const reader = transformed.getReader();
+    let result = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      result += value;
+    }
+    return new Response(result);
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		if string(r.Response.Body) != "HELLO WORLD" {
+			t.Errorf("body = %q, want 'HELLO WORLD'", r.Response.Body)
+		}
+	})
+
+	t.Run("locked stream throws", func(t *testing.T) {
+		source := `export default {
+  fetch(request, env) {
+    const readable = new ReadableStream();
+    readable.getReader(); // lock it
+    let caught = false;
+    try {
+      readable.pipeThrough(new TransformStream());
+    } catch(e) {
+      caught = true;
+    }
+    return Response.json({ caught });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			Caught bool `json:"caught"`
+		}
+		json.Unmarshal(r.Response.Body, &data)
+		if !data.Caught {
+			t.Error("pipeThrough on locked stream should throw")
+		}
+	})
+}
+
+func TestStreams_Tee(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	t.Run("both branches get same data", func(t *testing.T) {
+		source := `export default {
+  async fetch(request, env) {
+    const readable = new ReadableStream({
+      start(controller) {
+        controller.enqueue("a");
+        controller.enqueue("b");
+        controller.enqueue("c");
+        controller.close();
+      }
+    });
+    const [branch1, branch2] = readable.tee();
+    const reader1 = branch1.getReader();
+    const reader2 = branch2.getReader();
+    let result1 = '';
+    let result2 = '';
+    while (true) {
+      const { value, done } = await reader1.read();
+      if (done) break;
+      result1 += value;
+    }
+    while (true) {
+      const { value, done } = await reader2.read();
+      if (done) break;
+      result2 += value;
+    }
+    return Response.json({ result1, result2, same: result1 === result2 });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			Result1 string `json:"result1"`
+			Result2 string `json:"result2"`
+			Same    bool   `json:"same"`
+		}
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if data.Result1 != "abc" {
+			t.Errorf("result1 = %q, want 'abc'", data.Result1)
+		}
+		if data.Result2 != "abc" {
+			t.Errorf("result2 = %q, want 'abc'", data.Result2)
+		}
+		if !data.Same {
+			t.Error("both branches should produce the same data")
+		}
+	})
+
+	t.Run("tee returns array of two streams", func(t *testing.T) {
+		source := `export default {
+  fetch(request, env) {
+    const readable = new ReadableStream();
+    const branches = readable.tee();
+    return Response.json({
+      isArray: Array.isArray(branches),
+      length: branches.length,
+      areDifferent: branches[0] !== branches[1],
+    });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			IsArray      bool `json:"isArray"`
+			Length       int  `json:"length"`
+			AreDifferent bool `json:"areDifferent"`
+		}
+		json.Unmarshal(r.Response.Body, &data)
+		if !data.IsArray {
+			t.Error("tee should return an array")
+		}
+		if data.Length != 2 {
+			t.Errorf("tee should return 2 branches, got %d", data.Length)
+		}
+		if !data.AreDifferent {
+			t.Error("tee branches should be different objects")
+		}
+	})
+
+	t.Run("locked stream throws", func(t *testing.T) {
+		source := `export default {
+  fetch(request, env) {
+    const readable = new ReadableStream();
+    readable.getReader(); // lock it
+    let caught = false;
+    try {
+      readable.tee();
+    } catch(e) {
+      caught = true;
+    }
+    return Response.json({ caught });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			Caught bool `json:"caught"`
+		}
+		json.Unmarshal(r.Response.Body, &data)
+		if !data.Caught {
+			t.Error("tee on locked stream should throw")
+		}
+	})
+}
+
+func TestRequestBody_ReturnsReadableStream(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const req = new Request("http://example.com", { method: "POST", body: "hello world" });
+    const body = req.body;
+    const isStream = body instanceof ReadableStream;
+    const reader = body.getReader();
+    let result = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      result += new TextDecoder().decode(value);
+    }
+    return Response.json({ isStream, result });
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		IsStream bool   `json:"isStream"`
+		Result   string `json:"result"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.IsStream {
+		t.Error("Request.body should return a ReadableStream")
+	}
+	if data.Result != "hello world" {
+		t.Errorf("body content = %q, want 'hello world'", data.Result)
+	}
+}
+
+func TestResponseBody_ReturnsReadableStream(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const resp = new Response("test data");
+    const body = resp.body;
+    const isStream = body instanceof ReadableStream;
+    const reader = body.getReader();
+    let result = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      result += new TextDecoder().decode(value);
+    }
+    return Response.json({ isStream, result });
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		IsStream bool   `json:"isStream"`
+		Result   string `json:"result"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.IsStream {
+		t.Error("Response.body should return a ReadableStream")
+	}
+	if data.Result != "test data" {
+		t.Errorf("body content = %q, want 'test data'", data.Result)
+	}
+}
+
+func TestBody_NullForNullBody(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const req = new Request("http://example.com");
+    const resp = new Response(null);
+    return Response.json({
+      reqBodyNull: req.body === null,
+      respBodyNull: resp.body === null,
+    });
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		ReqBodyNull  bool `json:"reqBodyNull"`
+		RespBodyNull bool `json:"respBodyNull"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.ReqBodyNull {
+		t.Error("Request.body should be null for no body")
+	}
+	if !data.RespBodyNull {
+		t.Error("Response.body should be null for null body")
+	}
+}
+
+func TestBody_Idempotent(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const req = new Request("http://example.com", { method: "POST", body: "data" });
+    const body1 = req.body;
+    const body2 = req.body;
+    return Response.json({ same: body1 === body2 });
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Same bool `json:"same"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Same {
+		t.Error("Request.body should return the same ReadableStream on multiple accesses")
+	}
+}
+
+func TestBodyUsed_Tracking(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const req = new Request("http://example.com", { method: "POST", body: "data" });
+    const beforeAccess = req.bodyUsed;
+    const body = req.body;
+    const afterAccess = req.bodyUsed;
+    const reader = body.getReader();
+    const afterLock = req.bodyUsed;
+    while (true) {
+      const { done } = await reader.read();
+      if (done) break;
+    }
+    const afterRead = req.bodyUsed;
+    return Response.json({ beforeAccess, afterAccess, afterLock, afterRead });
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		BeforeAccess bool `json:"beforeAccess"`
+		AfterAccess  bool `json:"afterAccess"`
+		AfterLock    bool `json:"afterLock"`
+		AfterRead    bool `json:"afterRead"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if data.BeforeAccess {
+		t.Error("bodyUsed should be false before accessing body")
+	}
+	if data.AfterAccess {
+		t.Error("bodyUsed should be false after just accessing .body (not locked yet)")
+	}
+	if !data.AfterLock {
+		t.Error("bodyUsed should be true after getReader() locks the stream")
+	}
+	if !data.AfterRead {
+		t.Error("bodyUsed should be true after reading the body")
+	}
+}
+
+func TestFetch_BinaryRequestBodyExtraction(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	t.Run("ArrayBuffer body is base64 encoded", func(t *testing.T) {
+		source := `export default {
+  async fetch(request, env) {
+    // Simulate what fetch extraction does with an ArrayBuffer body
+    const buf = new Uint8Array([0, 1, 2, 255, 254, 253]).buffer;
+    const req = new Request("http://example.com", { method: "POST", body: buf });
+    // Verify the body can be base64 encoded
+    const b64 = __bufferSourceToB64(new Uint8Array(buf));
+    const roundtrip = __b64ToBuffer(b64);
+    const arr = new Uint8Array(roundtrip);
+    return Response.json({
+      b64Length: b64.length,
+      roundtripLength: arr.length,
+      byte0: arr[0],
+      byte3: arr[3],
+      byte5: arr[5],
+    });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			B64Length       int `json:"b64Length"`
+			RoundtripLength int `json:"roundtripLength"`
+			Byte0           int `json:"byte0"`
+			Byte3           int `json:"byte3"`
+			Byte5           int `json:"byte5"`
+		}
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if data.RoundtripLength != 6 {
+			t.Errorf("roundtrip length = %d, want 6", data.RoundtripLength)
+		}
+		if data.Byte0 != 0 {
+			t.Errorf("byte0 = %d, want 0", data.Byte0)
+		}
+		if data.Byte3 != 255 {
+			t.Errorf("byte3 = %d, want 255", data.Byte3)
+		}
+		if data.Byte5 != 253 {
+			t.Errorf("byte5 = %d, want 253", data.Byte5)
+		}
+	})
+
+	t.Run("TypedArray body is base64 encoded", func(t *testing.T) {
+		source := `export default {
+  async fetch(request, env) {
+    const arr = new Uint8Array([72, 101, 108, 108, 111]);
+    const b64 = __bufferSourceToB64(arr);
+    const roundtrip = new Uint8Array(__b64ToBuffer(b64));
+    let result = '';
+    for (let i = 0; i < roundtrip.length; i++) result += String.fromCharCode(roundtrip[i]);
+    return Response.json({ result, length: roundtrip.length });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			Result string `json:"result"`
+			Length int    `json:"length"`
+		}
+		json.Unmarshal(r.Response.Body, &data)
+		if data.Result != "Hello" {
+			t.Errorf("result = %q, want 'Hello'", data.Result)
+		}
+		if data.Length != 5 {
+			t.Errorf("length = %d, want 5", data.Length)
+		}
+	})
+
+	t.Run("ReadableStream body extracted as base64", func(t *testing.T) {
+		source := `export default {
+  async fetch(request, env) {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.enqueue(new Uint8Array([4, 5]));
+        controller.close();
+      }
+    });
+    // Simulate extraction: read queue, collect bytes, base64-encode
+    var chunks = [];
+    for (var i = 0; i < stream._queue.length; i++) {
+      var c = stream._queue[i];
+      if (c instanceof Uint8Array || ArrayBuffer.isView(c)) {
+        var arr = new Uint8Array(c.buffer || c, c.byteOffset || 0, c.byteLength || c.length);
+        for (var j = 0; j < arr.length; j++) chunks.push(arr[j]);
+      }
+    }
+    var combined = new Uint8Array(chunks);
+    var b64 = __bufferSourceToB64(combined);
+    var rt = new Uint8Array(__b64ToBuffer(b64));
+    return Response.json({
+      length: rt.length,
+      bytes: Array.from(rt),
+    });
+  },
+};`
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+
+		var data struct {
+			Length int   `json:"length"`
+			Bytes  []int `json:"bytes"`
+		}
+		json.Unmarshal(r.Response.Body, &data)
+		if data.Length != 5 {
+			t.Errorf("length = %d, want 5", data.Length)
+		}
+		expected := []int{1, 2, 3, 4, 5}
+		for i, b := range expected {
+			if i < len(data.Bytes) && data.Bytes[i] != b {
+				t.Errorf("bytes[%d] = %d, want %d", i, data.Bytes[i], b)
+			}
+		}
+	})
+}
+
 func TestStreams_WritableStreamReady(t *testing.T) {
 	db := testDB(t)
 	e := newTestEngine(t, db)

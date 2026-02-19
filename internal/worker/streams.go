@@ -134,6 +134,85 @@ class ReadableStream {
 
 	get locked() { return this._locked; }
 
+	pipeTo(destination, options) {
+		if (this._locked) return Promise.reject(new TypeError('ReadableStream is locked'));
+		if (!(destination instanceof WritableStream)) return Promise.reject(new TypeError('pipeTo requires a WritableStream'));
+		options = options || {};
+		const preventClose = !!options.preventClose;
+		const preventAbort = !!options.preventAbort;
+		const preventCancel = !!options.preventCancel;
+		const reader = this.getReader();
+		const writer = destination.getWriter();
+		async function pump() {
+			try {
+				while (true) {
+					const { value, done } = await reader.read();
+					if (done) {
+						if (!preventClose) await writer.close();
+						else writer.releaseLock();
+						break;
+					}
+					await writer.write(value);
+				}
+			} catch(e) {
+				if (!preventAbort) {
+					try { await writer.abort(e); } catch(_) {}
+				}
+				if (!preventCancel) {
+					try { await reader.cancel(e); } catch(_) {}
+				}
+				throw e;
+			} finally {
+				reader.releaseLock();
+			}
+		}
+		return pump();
+	}
+
+	pipeThrough(transform, options) {
+		if (this._locked) throw new TypeError('ReadableStream is locked');
+		if (!transform || typeof transform !== 'object') throw new TypeError('pipeThrough requires a transform object');
+		if (!(transform.writable instanceof WritableStream)) throw new TypeError('pipeThrough requires transform.writable to be a WritableStream');
+		this.pipeTo(transform.writable, options);
+		return transform.readable;
+	}
+
+	tee() {
+		if (this._locked) throw new TypeError('ReadableStream is locked');
+		const reader = this.getReader();
+		let closed = false;
+		let branch1Controller;
+		let branch2Controller;
+		const branch1 = new ReadableStream({
+			start(controller) { branch1Controller = controller; },
+		});
+		const branch2 = new ReadableStream({
+			start(controller) { branch2Controller = controller; },
+		});
+		async function pump() {
+			try {
+				while (true) {
+					const { value, done } = await reader.read();
+					if (done) {
+						if (!closed) {
+							closed = true;
+							branch1Controller.close();
+							branch2Controller.close();
+						}
+						return;
+					}
+					branch1Controller.enqueue(value);
+					branch2Controller.enqueue(value);
+				}
+			} catch(e) {
+				branch1Controller.error(e);
+				branch2Controller.error(e);
+			}
+		}
+		pump();
+		return [branch1, branch2];
+	}
+
 	_pull() {
 		// Deliver queued chunks to pending reads.
 		while (this._queue.length > 0 && this._pendingReads.length > 0) {

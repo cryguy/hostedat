@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"strconv"
@@ -29,6 +30,7 @@ class WebSocket {
 		this._protocol = '';
 		this._extensions = '';
 		this._peer = null;
+		this.binaryType = 'arraybuffer';
 	}
 
 	accept() {
@@ -39,7 +41,15 @@ class WebSocket {
 		if (this._readyState !== 1) {
 			throw new DOMException('WebSocket is not open', 'InvalidStateError');
 		}
-		__wsSend(String(data));
+		if (typeof data === 'string') {
+			__wsSend(data, false);
+		} else if (data instanceof ArrayBuffer) {
+			__wsSend(__bufferSourceToB64(data), true);
+		} else if (ArrayBuffer.isView(data)) {
+			__wsSend(__bufferSourceToB64(data), true);
+		} else {
+			__wsSend(String(data), false);
+		}
 	}
 
 	close(code, reason) {
@@ -102,13 +112,15 @@ globalThis.WebSocketPair = WebSocketPair;
 // setupWebSocket registers the WebSocket/WebSocketPair JS classes and the
 // Go-backed __wsSend/__wsClose functions that bridge to the HTTP WebSocket.
 func setupWebSocket(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
-	// __wsSend(data) — sends a text message to the HTTP WebSocket client.
+	// __wsSend(data, isBinary) — sends a message to the HTTP WebSocket client.
+	// If isBinary is true, data is base64-encoded and sent as a binary message.
 	sendFn := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 1 {
 			return nil
 		}
 		data := args[0].String()
+		isBinary := len(args) >= 2 && args[1].Boolean()
 
 		reqIDVal, err := info.Context().Global().Get("__requestID")
 		if err != nil {
@@ -128,8 +140,20 @@ func setupWebSocket(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 
 		writeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := state.wsConn.Write(writeCtx, websocket.MessageText, []byte(data)); err != nil {
-			log.Printf("worker: ws send error: %v", err)
+
+		if isBinary {
+			decoded, decErr := base64.StdEncoding.DecodeString(data)
+			if decErr != nil {
+				log.Printf("worker: ws send base64 decode error: %v", decErr)
+				return nil
+			}
+			if writeErr := state.wsConn.Write(writeCtx, websocket.MessageBinary, decoded); writeErr != nil {
+				log.Printf("worker: ws send error: %v", writeErr)
+			}
+		} else {
+			if writeErr := state.wsConn.Write(writeCtx, websocket.MessageText, []byte(data)); writeErr != nil {
+				log.Printf("worker: ws send error: %v", writeErr)
+			}
 		}
 		return nil
 	})
@@ -253,18 +277,36 @@ func (wsh *WebSocketHandler) Bridge(ctx context.Context, httpConn *websocket.Con
 				return // connection closed
 			}
 			// Dispatch message to the server WebSocket's handlers.
-			dataStr := string(msg.data)
-			dataVal, _ := v8.NewValue(iso, dataStr)
-			v8ctx.Global().Set("__ws_incoming_data", dataVal)
-			v8ctx.RunScript(`
-				(function() {
-					var data = globalThis.__ws_incoming_data;
-					delete globalThis.__ws_incoming_data;
-					if (globalThis.__ws_active_server) {
-						globalThis.__ws_active_server._dispatch('message', { data: data });
-					}
-				})();
-			`, "ws_dispatch.js")
+			if msg.typ == websocket.MessageBinary {
+				// Binary message: base64-encode and convert to ArrayBuffer in JS.
+				b64 := base64.StdEncoding.EncodeToString(msg.data)
+				b64Val, _ := v8.NewValue(iso, b64)
+				v8ctx.Global().Set("__ws_incoming_data", b64Val)
+				v8ctx.RunScript(`
+					(function() {
+						var b64 = globalThis.__ws_incoming_data;
+						delete globalThis.__ws_incoming_data;
+						var binary = __b64ToBuffer(b64);
+						if (globalThis.__ws_active_server) {
+							globalThis.__ws_active_server._dispatch('message', { data: binary });
+						}
+					})();
+				`, "ws_dispatch_binary.js")
+			} else {
+				// Text message: dispatch as string.
+				dataStr := string(msg.data)
+				dataVal, _ := v8.NewValue(iso, dataStr)
+				v8ctx.Global().Set("__ws_incoming_data", dataVal)
+				v8ctx.RunScript(`
+					(function() {
+						var data = globalThis.__ws_incoming_data;
+						delete globalThis.__ws_incoming_data;
+						if (globalThis.__ws_active_server) {
+							globalThis.__ws_active_server._dispatch('message', { data: data });
+						}
+					})();
+				`, "ws_dispatch.js")
+			}
 			v8ctx.PerformMicrotaskCheckpoint()
 
 			// Fire any pending timers (for setTimeout in WS handlers).

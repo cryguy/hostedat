@@ -298,3 +298,318 @@ func TestWebSocket_PeerLinked(t *testing.T) {
 		t.Error("WebSocketPair members should be linked as peers")
 	}
 }
+
+func TestWebSocket_BinaryType(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    var pair = new WebSocketPair();
+    return Response.json({
+      defaultBinaryType: pair[0].binaryType,
+      serverBinaryType: pair[1].binaryType,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		DefaultBinaryType string `json:"defaultBinaryType"`
+		ServerBinaryType  string `json:"serverBinaryType"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.DefaultBinaryType != "arraybuffer" {
+		t.Errorf("default binaryType = %q, want 'arraybuffer'", data.DefaultBinaryType)
+	}
+	if data.ServerBinaryType != "arraybuffer" {
+		t.Errorf("server binaryType = %q, want 'arraybuffer'", data.ServerBinaryType)
+	}
+}
+
+func TestWebSocket_SendStringCallsTextMode(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Test that send() with a string passes the string directly and isBinary=false.
+	// Since __wsSend requires a wsConn (which we don't have in unit tests),
+	// we override __wsSend to capture the arguments.
+	source := `export default {
+  fetch(request, env) {
+    var captured = {};
+    globalThis.__wsSend = function(data, isBinary) {
+      captured.data = data;
+      captured.isBinary = isBinary;
+      captured.dataType = typeof data;
+    };
+
+    var pair = new WebSocketPair();
+    var server = pair[1];
+    server.accept();
+    server.send("hello text");
+
+    return Response.json(captured);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Data     string `json:"data"`
+		IsBinary bool   `json:"isBinary"`
+		DataType string `json:"dataType"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Data != "hello text" {
+		t.Errorf("data = %q, want 'hello text'", data.Data)
+	}
+	if data.IsBinary {
+		t.Error("isBinary should be false for string data")
+	}
+	if data.DataType != "string" {
+		t.Errorf("dataType = %q, want 'string'", data.DataType)
+	}
+}
+
+func TestWebSocket_SendArrayBufferCallsBinaryMode(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Test that send() with ArrayBuffer base64-encodes and passes isBinary=true.
+	source := `export default {
+  fetch(request, env) {
+    var captured = {};
+    globalThis.__wsSend = function(data, isBinary) {
+      captured.data = data;
+      captured.isBinary = isBinary;
+      captured.dataType = typeof data;
+    };
+
+    var pair = new WebSocketPair();
+    var server = pair[1];
+    server.accept();
+
+    // Create an ArrayBuffer with bytes [1, 2, 3, 4]
+    var buf = new ArrayBuffer(4);
+    var view = new Uint8Array(buf);
+    view[0] = 1; view[1] = 2; view[2] = 3; view[3] = 4;
+    server.send(buf);
+
+    return Response.json(captured);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Data     string `json:"data"`
+		IsBinary bool   `json:"isBinary"`
+		DataType string `json:"dataType"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.IsBinary {
+		t.Error("isBinary should be true for ArrayBuffer data")
+	}
+	if data.DataType != "string" {
+		t.Errorf("dataType = %q, want 'string' (base64-encoded)", data.DataType)
+	}
+	// Verify the base64 round-trips correctly: [1,2,3,4] -> "AQIDBA=="
+	if data.Data != "AQIDBA==" {
+		t.Errorf("base64 data = %q, want 'AQIDBA=='", data.Data)
+	}
+}
+
+func TestWebSocket_SendTypedArrayCallsBinaryMode(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Test that send() with a Uint8Array (TypedArray view) also uses binary mode.
+	source := `export default {
+  fetch(request, env) {
+    var captured = {};
+    globalThis.__wsSend = function(data, isBinary) {
+      captured.data = data;
+      captured.isBinary = isBinary;
+    };
+
+    var pair = new WebSocketPair();
+    var server = pair[1];
+    server.accept();
+
+    var arr = new Uint8Array([10, 20, 30]);
+    server.send(arr);
+
+    return Response.json(captured);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Data     string `json:"data"`
+		IsBinary bool   `json:"isBinary"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.IsBinary {
+		t.Error("isBinary should be true for Uint8Array data")
+	}
+	// [10, 20, 30] -> "ChQe"
+	if data.Data != "ChQe" {
+		t.Errorf("base64 data = %q, want 'ChQe'", data.Data)
+	}
+}
+
+func TestWebSocket_SendNonStringFallback(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Test that send() with a non-string, non-buffer value falls back to String(data) text mode.
+	source := `export default {
+  fetch(request, env) {
+    var captured = {};
+    globalThis.__wsSend = function(data, isBinary) {
+      captured.data = data;
+      captured.isBinary = isBinary;
+    };
+
+    var pair = new WebSocketPair();
+    var server = pair[1];
+    server.accept();
+    server.send(42);
+
+    return Response.json(captured);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Data     string `json:"data"`
+		IsBinary bool   `json:"isBinary"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.IsBinary {
+		t.Error("isBinary should be false for number data")
+	}
+	if data.Data != "42" {
+		t.Errorf("data = %q, want '42'", data.Data)
+	}
+}
+
+func TestWebSocket_BinaryDispatchCreatesArrayBuffer(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Test that dispatching a binary message (simulated via _dispatch with ArrayBuffer)
+	// creates an ArrayBuffer data value that can be read back as bytes.
+	source := `export default {
+  fetch(request, env) {
+    var pair = new WebSocketPair();
+    var server = pair[1];
+    var result = {};
+
+    server.addEventListener('message', function(event) {
+      result.isArrayBuffer = event.data instanceof ArrayBuffer;
+      if (event.data instanceof ArrayBuffer) {
+        var view = new Uint8Array(event.data);
+        result.bytes = Array.from(view);
+        result.byteLength = event.data.byteLength;
+      }
+    });
+    server.accept();
+
+    // Simulate what Bridge() does for binary messages:
+    // base64-encode, set global, run the dispatch script.
+    var b64 = __bufferSourceToB64(new Uint8Array([72, 101, 108, 108, 111]));
+    var binary = __b64ToBuffer(b64);
+    server._dispatch('message', { data: binary });
+
+    return Response.json(result);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		IsArrayBuffer bool  `json:"isArrayBuffer"`
+		Bytes         []int `json:"bytes"`
+		ByteLength    int   `json:"byteLength"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.IsArrayBuffer {
+		t.Error("binary message data should be an ArrayBuffer")
+	}
+	if data.ByteLength != 5 {
+		t.Errorf("byteLength = %d, want 5", data.ByteLength)
+	}
+	expected := []int{72, 101, 108, 108, 111} // "Hello"
+	if len(data.Bytes) != len(expected) {
+		t.Fatalf("bytes length = %d, want %d", len(data.Bytes), len(expected))
+	}
+	for i, b := range expected {
+		if data.Bytes[i] != b {
+			t.Errorf("byte[%d] = %d, want %d", i, data.Bytes[i], b)
+		}
+	}
+}
+
+func TestWebSocket_TextDispatchRemainsString(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Verify that text message dispatch still delivers string data.
+	source := `export default {
+  fetch(request, env) {
+    var pair = new WebSocketPair();
+    var server = pair[1];
+    var result = {};
+
+    server.addEventListener('message', function(event) {
+      result.isString = typeof event.data === 'string';
+      result.data = event.data;
+    });
+    server.accept();
+
+    // Simulate text message dispatch (same as Bridge() text path).
+    server._dispatch('message', { data: 'hello text' });
+
+    return Response.json(result);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		IsString bool   `json:"isString"`
+		Data     string `json:"data"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.IsString {
+		t.Error("text message data should be a string")
+	}
+	if data.Data != "hello text" {
+		t.Errorf("data = %q, want 'hello text'", data.Data)
+	}
+}

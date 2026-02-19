@@ -103,6 +103,31 @@ class Request {
 		if (init.headers) this.headers = new Headers(init.headers);
 		if (init.body !== undefined) this._body = init.body;
 	}
+	get body() {
+		if (this._body === null || this._body === undefined) return null;
+		if (this._body instanceof ReadableStream) return this._body;
+		const content = this._body;
+		const stream = new ReadableStream({
+			start(controller) {
+				if (typeof content === 'string') {
+					controller.enqueue(new TextEncoder().encode(content));
+				} else if (content instanceof ArrayBuffer) {
+					controller.enqueue(new Uint8Array(content));
+				} else if (ArrayBuffer.isView(content)) {
+					controller.enqueue(new Uint8Array(content.buffer, content.byteOffset, content.byteLength));
+				} else {
+					controller.enqueue(new TextEncoder().encode(String(content)));
+				}
+				controller.close();
+			}
+		});
+		this._body = stream;
+		return stream;
+	}
+	get bodyUsed() {
+		if (this._body instanceof ReadableStream) return this._body._locked;
+		return false;
+	}
 	async text() { return this._body !== null && this._body !== undefined ? String(this._body) : ''; }
 	async json() { return JSON.parse(await this.text()); }
 	async arrayBuffer() {
@@ -123,6 +148,31 @@ class Response {
 		this.ok = this.status >= 200 && this.status < 300;
 		this.url = init.url || '';
 		this.webSocket = init.webSocket || null;
+	}
+	get body() {
+		if (this._body === null || this._body === undefined) return null;
+		if (this._body instanceof ReadableStream) return this._body;
+		const content = this._body;
+		const stream = new ReadableStream({
+			start(controller) {
+				if (typeof content === 'string') {
+					controller.enqueue(new TextEncoder().encode(content));
+				} else if (content instanceof ArrayBuffer) {
+					controller.enqueue(new Uint8Array(content));
+				} else if (ArrayBuffer.isView(content)) {
+					controller.enqueue(new Uint8Array(content.buffer, content.byteOffset, content.byteLength));
+				} else {
+					controller.enqueue(new TextEncoder().encode(String(content)));
+				}
+				controller.close();
+			}
+		});
+		this._body = stream;
+		return stream;
+	}
+	get bodyUsed() {
+		if (this._body instanceof ReadableStream) return this._body._locked;
+		return false;
 	}
 	async text() { return this._body !== null && this._body !== undefined ? String(this._body) : ''; }
 	async json() { return JSON.parse(await this.text()); }
