@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -430,13 +431,48 @@ func jsResponseToGo(ctx *v8.Context, val *v8.Value) (*WorkerResponse, error) {
 			}
 		}
 		var body = '';
+		var bodyIsBase64 = false;
 		if (r._body !== null && r._body !== undefined) {
-			body = String(r._body);
+			if (r._body instanceof ReadableStream) {
+				var _q = r._body._queue;
+				var _allBytes = [];
+				for (var _i = 0; _i < _q.length; _i++) {
+					var _chunk = _q[_i];
+					if (typeof _chunk === 'string') {
+						var _enc = new TextEncoder();
+						var _bytes = _enc.encode(_chunk);
+						for (var _k = 0; _k < _bytes.length; _k++) _allBytes.push(_bytes[_k]);
+					} else if (_chunk instanceof Uint8Array || ArrayBuffer.isView(_chunk)) {
+						var _arr = new Uint8Array(_chunk.buffer || _chunk, _chunk.byteOffset || 0, _chunk.byteLength || _chunk.length);
+						for (var _j = 0; _j < _arr.length; _j++) _allBytes.push(_arr[_j]);
+					} else if (_chunk instanceof ArrayBuffer) {
+						var _arr2 = new Uint8Array(_chunk);
+						for (var _j2 = 0; _j2 < _arr2.length; _j2++) _allBytes.push(_arr2[_j2]);
+					} else {
+						var _s = String(_chunk);
+						for (var _j3 = 0; _j3 < _s.length; _j3++) _allBytes.push(_s.charCodeAt(_j3) & 0xFF);
+					}
+				}
+				r._body._queue = [];
+				if (_allBytes.length > 0) {
+					body = __bufferSourceToB64(new Uint8Array(_allBytes));
+					bodyIsBase64 = true;
+				}
+			} else if (r._body instanceof ArrayBuffer) {
+				body = __bufferSourceToB64(r._body);
+				bodyIsBase64 = true;
+			} else if (ArrayBuffer.isView(r._body)) {
+				body = __bufferSourceToB64(r._body);
+				bodyIsBase64 = true;
+			} else {
+				body = String(r._body);
+			}
 		}
 		return JSON.stringify({
 			status: r.status || 200,
 			headers: headers,
 			body: body,
+			bodyIsBase64: bodyIsBase64,
 		});
 	})()`, "jsResponseToGo.js")
 	if err != nil {
@@ -444,9 +480,10 @@ func jsResponseToGo(ctx *v8.Context, val *v8.Value) (*WorkerResponse, error) {
 	}
 
 	var resp struct {
-		Status  int               `json:"status"`
-		Headers map[string]string `json:"headers"`
-		Body    string            `json:"body"`
+		Status       int               `json:"status"`
+		Headers      map[string]string `json:"headers"`
+		Body         string            `json:"body"`
+		BodyIsBase64 bool              `json:"bodyIsBase64"`
 	}
 	if err := json.Unmarshal([]byte(result.String()), &resp); err != nil {
 		return nil, fmt.Errorf("parsing response JSON: %w", err)
@@ -454,7 +491,14 @@ func jsResponseToGo(ctx *v8.Context, val *v8.Value) (*WorkerResponse, error) {
 
 	var body []byte
 	if resp.Body != "" {
-		body = []byte(resp.Body)
+		if resp.BodyIsBase64 {
+			body, err = base64.StdEncoding.DecodeString(resp.Body)
+			if err != nil {
+				return nil, fmt.Errorf("decoding base64 body: %w", err)
+			}
+		} else {
+			body = []byte(resp.Body)
+		}
 	}
 
 	return &WorkerResponse{

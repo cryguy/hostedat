@@ -188,10 +188,18 @@ func (e *Engine) GetOrCreatePool(siteID string, deployKey string, env *Env) (*v8
 		setupCrypto,
 		// Crypto extensions: JWK, ECDSA, AES-CBC, generateKey
 		setupCryptoExt,
+		// Crypto: HKDF, PBKDF2 deriveBits/deriveKey
+		setupCryptoDerive,
+		// Crypto: RSA-OAEP, RSASSA-PKCS1-v1_5, RSA-PSS
+		setupCryptoRSA,
+		// Crypto: Ed25519 sign/verify
+		setupCryptoEd25519,
 		// Streams: ReadableStream, WritableStream, TransformStream
 		setupStreams,
 		// FormData: FormData, Blob, File
 		setupFormData,
+		// Compression: CompressionStream, DecompressionStream
+		setupCompression,
 		// Body types: patches Request/Response for non-string bodies
 		setupBodyTypes,
 		// Console: log/info/warn/error/debug capture

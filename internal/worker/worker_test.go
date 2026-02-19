@@ -657,11 +657,11 @@ func TestKV_Metadata(t *testing.T) {
 }
 
 func TestKV_ExpirationTTL(t *testing.T) {
-	e, env, _ := kvTestSetup(t)
+	e, env, db := kvTestSetup(t)
 
 	source := `export default {
   async fetch(request, env) {
-    await env.NS.put("expiring", "gone-soon", { expirationTtl: 1 });
+    await env.NS.put("expiring", "gone-soon", { expirationTtl: 60 });
     return new Response("stored");
   },
 };`
@@ -669,8 +669,9 @@ func TestKV_ExpirationTTL(t *testing.T) {
 	r := execJS(t, e, source, env, getReq("http://localhost/"))
 	assertOK(t, r)
 
-	// Wait for TTL to expire.
-	time.Sleep(2 * time.Second)
+	// Force the expiry into the past instead of sleeping, making the test deterministic.
+	db.Model(&models.KVEntry{}).Where("\"key\" = ?", "expiring").
+		Update("expires_at", time.Now().Add(-1*time.Second))
 
 	// Read it back via a second execution.
 	readSource := `export default {

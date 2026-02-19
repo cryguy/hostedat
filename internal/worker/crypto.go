@@ -510,6 +510,18 @@ func normalizeAlgo(name string) string {
 		return "AES-CBC"
 	case "ecdsa", "ECDSA", "Ecdsa":
 		return "ECDSA"
+	case "hkdf", "HKDF", "Hkdf":
+		return "HKDF"
+	case "pbkdf2", "PBKDF2", "Pbkdf2":
+		return "PBKDF2"
+	case "rsa-oaep", "RSA-OAEP", "Rsa-Oaep":
+		return "RSA-OAEP"
+	case "rsassa-pkcs1-v1_5", "RSASSA-PKCS1-v1_5", "RSASSA-PKCS1-V1_5":
+		return "RSASSA-PKCS1-v1_5"
+	case "rsa-pss", "RSA-PSS", "Rsa-Pss":
+		return "RSA-PSS"
+	case "ed25519", "Ed25519", "ED25519":
+		return "Ed25519"
 	default:
 		return name
 	}
