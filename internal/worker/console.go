@@ -2,6 +2,7 @@ package worker
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	v8 "github.com/tommie/v8go"
@@ -22,7 +23,7 @@ func setupConsole(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 			reqIDVal, _ := ctx.Global().Get("__requestID")
 			var reqID uint64
 			if reqIDVal != nil && !reqIDVal.IsUndefined() && !reqIDVal.IsNull() {
-				reqID = uint64(reqIDVal.Integer())
+				reqID, _ = strconv.ParseUint(reqIDVal.String(), 10, 64)
 			}
 
 			args := info.Args()

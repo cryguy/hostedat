@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/coder/websocket"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
 	"github.com/cryguy/hostedat/internal/worker"
@@ -19,9 +20,9 @@ import (
 // internalFiles are files that should never be served directly to visitors.
 // These are configuration/runtime files similar to Cloudflare Pages behavior.
 var internalFiles = map[string]bool{
-	"/_worker.js":  true,
-	"/_headers":    true,
-	"/_redirects":  true,
+	"/_worker.js":   true,
+	"/_headers":     true,
+	"/_redirects":   true,
 	"/_routes.json": true,
 }
 
@@ -290,6 +291,18 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 		log.Printf("worker error for site %s: fetch returned nil response without error", site.ID)
 		return errorJSON(c, http.StatusInternalServerError, "worker returned empty response")
 	}
+
+	// WebSocket upgrade: bridge the HTTP connection to the worker's WebSocket.
+	if result.WebSocket != nil && resp.HasWebSocket && resp.StatusCode == 101 {
+		conn, err := websocket.Accept(c.Response(), c.Request(), nil)
+		if err != nil {
+			log.Printf("worker ws upgrade error for site %s: %v", site.ID, err)
+			return errorJSON(c, http.StatusInternalServerError, "websocket upgrade failed")
+		}
+		result.WebSocket.Bridge(c.Request().Context(), conn)
+		return nil
+	}
+
 	for k, v := range resp.Headers {
 		c.Response().Header().Set(k, v)
 	}

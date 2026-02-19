@@ -122,6 +122,7 @@ class Response {
 		this.headers = new Headers(init.headers);
 		this.ok = this.status >= 200 && this.status < 300;
 		this.url = init.url || '';
+		this.webSocket = init.webSocket || null;
 	}
 	async text() { return this._body !== null && this._body !== undefined ? String(this._body) : ''; }
 	async json() { return JSON.parse(await this.text()); }
@@ -430,6 +431,10 @@ func jsResponseToGo(ctx *v8.Context, val *v8.Value) (*WorkerResponse, error) {
 				if (m.hasOwnProperty(k)) headers[k] = m[k];
 			}
 		}
+		var hasWebSocket = !!(r.webSocket);
+		if (hasWebSocket) {
+			globalThis.__ws_check_resp = r.webSocket;
+		}
 		var body = '';
 		var bodyIsBase64 = false;
 		if (r._body !== null && r._body !== undefined) {
@@ -473,6 +478,7 @@ func jsResponseToGo(ctx *v8.Context, val *v8.Value) (*WorkerResponse, error) {
 			headers: headers,
 			body: body,
 			bodyIsBase64: bodyIsBase64,
+			hasWebSocket: hasWebSocket,
 		});
 	})()`, "jsResponseToGo.js")
 	if err != nil {
@@ -484,6 +490,7 @@ func jsResponseToGo(ctx *v8.Context, val *v8.Value) (*WorkerResponse, error) {
 		Headers      map[string]string `json:"headers"`
 		Body         string            `json:"body"`
 		BodyIsBase64 bool              `json:"bodyIsBase64"`
+		HasWebSocket bool              `json:"hasWebSocket"`
 	}
 	if err := json.Unmarshal([]byte(result.String()), &resp); err != nil {
 		return nil, fmt.Errorf("parsing response JSON: %w", err)
@@ -502,8 +509,9 @@ func jsResponseToGo(ctx *v8.Context, val *v8.Value) (*WorkerResponse, error) {
 	}
 
 	return &WorkerResponse{
-		StatusCode: resp.Status,
-		Headers:    resp.Headers,
-		Body:       body,
+		StatusCode:   resp.Status,
+		Headers:      resp.Headers,
+		Body:         body,
+		HasWebSocket: resp.HasWebSocket,
 	}, nil
 }

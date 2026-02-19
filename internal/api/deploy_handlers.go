@@ -13,6 +13,7 @@ import (
 
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
+	"github.com/cryguy/hostedat/internal/worker"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
@@ -95,10 +96,13 @@ func (h *DeployHandler) Deploy(c echo.Context) error {
 	// Check for _worker.js and compile if present
 	hasWorker := h.Storage.HasWorkerScript(siteID, deployID)
 	if hasWorker && h.WorkerEngine != nil {
-		source, err := h.Storage.GetWorkerScript(siteID, deployID)
+		// Bundle ES module imports (if any) via esbuild before compilation.
+		deployPath := h.Storage.GetDeploymentPath(siteID, deployID)
+		source, err := worker.BundleWorkerScript(deployPath)
 		if err != nil {
-			_ = os.RemoveAll(h.Storage.GetDeploymentPath(siteID, deployID))
-			return errorJSON(c, http.StatusBadRequest, "failed to read _worker.js: "+err.Error())
+			log.Printf("deploy: bundle error for site %s: %v", siteID, err)
+			_ = os.RemoveAll(deployPath)
+			return errorJSON(c, http.StatusBadRequest, "worker script bundling failed: check your import paths")
 		}
 
 		maxScriptBytes := h.MaxScriptSizeKB * 1024
@@ -112,8 +116,9 @@ func (h *DeployHandler) Deploy(c echo.Context) error {
 
 		bytecode, err := h.WorkerEngine.CompileAndCache(siteID, deployID, source)
 		if err != nil {
+			log.Printf("deploy: compilation error for site %s: %v", siteID, err)
 			_ = os.RemoveAll(h.Storage.GetDeploymentPath(siteID, deployID))
-			return errorJSON(c, http.StatusBadRequest, "worker compilation failed: "+err.Error())
+			return errorJSON(c, http.StatusBadRequest, "worker compilation failed: check your script syntax")
 		}
 
 		bcDir := h.Storage.GetWorkerBytecodeDir(siteID, deployID)

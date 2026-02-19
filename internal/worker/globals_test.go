@@ -187,6 +187,84 @@ func TestGlobals_Navigator(t *testing.T) {
 	}
 }
 
+func TestGlobals_StructuredCloneRejectsUndefined(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    try {
+      structuredClone(undefined);
+      return Response.json({ threw: false });
+    } catch(e) {
+      return Response.json({ threw: true, name: e.name });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw bool   `json:"threw"`
+		Name  string `json:"name"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Threw {
+		t.Error("structuredClone(undefined) should throw")
+	}
+}
+
+func TestGlobals_StructuredClonePrimitives(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    return Response.json({
+      num: structuredClone(42),
+      str: structuredClone("hello"),
+      bool: structuredClone(true),
+      nil: structuredClone(null),
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Num  int    `json:"num"`
+		Str  string `json:"str"`
+		Bool bool   `json:"bool"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if data.Num != 42 {
+		t.Errorf("num = %d, want 42", data.Num)
+	}
+	if data.Str != "hello" {
+		t.Errorf("str = %q, want hello", data.Str)
+	}
+	if !data.Bool {
+		t.Error("bool should be true")
+	}
+}
+
+// Pure Go helper tests
+func TestErrMissingArg(t *testing.T) {
+	err := errMissingArg("foo", 2)
+	if err.Error() != "foo requires at least 2 argument(s)" {
+		t.Errorf("errMissingArg = %q", err.Error())
+	}
+}
+
+func TestErrInvalidArg(t *testing.T) {
+	err := errInvalidArg("bar", "must be positive")
+	if err.Error() != "bar: must be positive" {
+		t.Errorf("errInvalidArg = %q", err.Error())
+	}
+}
+
 func TestGlobals_QueueMicrotask(t *testing.T) {
 	db := testDB(t)
 	e := newTestEngine(t, db)
@@ -213,5 +291,143 @@ func TestGlobals_QueueMicrotask(t *testing.T) {
 
 	if !data.Called {
 		t.Error("queueMicrotask callback was not called")
+	}
+}
+
+func TestGlobals_StructuredCloneRejectsSet(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    try {
+      structuredClone(new Set([1, 2, 3]));
+      return Response.json({ threw: false });
+    } catch(e) {
+      return Response.json({ threw: true, name: e.name });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw bool   `json:"threw"`
+		Name  string `json:"name"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Threw {
+		t.Error("structuredClone(Set) should throw DataCloneError")
+	}
+}
+
+func TestGlobals_StructuredCloneRejectsWeakMap(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    try {
+      structuredClone(new WeakMap());
+      return Response.json({ threw: false });
+    } catch(e) {
+      return Response.json({ threw: true, name: e.name });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw bool `json:"threw"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Threw {
+		t.Error("structuredClone(WeakMap) should throw DataCloneError")
+	}
+}
+
+func TestGlobals_StructuredCloneRejectsWeakSet(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    try {
+      structuredClone(new WeakSet());
+      return Response.json({ threw: false });
+    } catch(e) {
+      return Response.json({ threw: true, name: e.name });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw bool `json:"threw"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Threw {
+		t.Error("structuredClone(WeakSet) should throw DataCloneError")
+	}
+}
+
+func TestGlobals_StructuredCloneRejectsSymbol(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    try {
+      structuredClone(Symbol("test"));
+      return Response.json({ threw: false });
+    } catch(e) {
+      return Response.json({ threw: true, name: e.name });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw bool `json:"threw"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Threw {
+		t.Error("structuredClone(Symbol) should throw DataCloneError")
+	}
+}
+
+func TestGlobals_StructuredCloneCircularThrows(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    try {
+      var obj = {};
+      obj.self = obj;
+      structuredClone(obj);
+      return Response.json({ threw: false });
+    } catch(e) {
+      return Response.json({ threw: true, name: e.name });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw bool `json:"threw"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Threw {
+		t.Error("structuredClone with circular reference should throw DataCloneError")
 	}
 }

@@ -251,6 +251,27 @@ func TestContentType(t *testing.T) {
 	}
 }
 
+func TestContentType_UppercaseExtension(t *testing.T) {
+	got := contentType("file.HTML")
+	if got == "application/octet-stream" {
+		t.Error("contentType should handle uppercase extension")
+	}
+}
+
+func TestContentType_UnknownExtension(t *testing.T) {
+	got := contentType("file.xyz999")
+	if got != "application/octet-stream" {
+		t.Errorf("contentType(unknown ext) = %q, want application/octet-stream", got)
+	}
+}
+
+func TestContentType_DeepPath(t *testing.T) {
+	got := contentType("/a/b/c/d.json")
+	if got != "application/json" {
+		t.Errorf("contentType(deep path) = %q, want application/json", got)
+	}
+}
+
 func TestFilterRedirects(t *testing.T) {
 	rules := []storage.RedirectRule{
 		{From: "/a", To: "/b", StatusCode: 301},
@@ -270,6 +291,19 @@ func TestFilterRedirects(t *testing.T) {
 	}
 }
 
+func TestFilterRedirects_Empty(t *testing.T) {
+	if len(filterRedirects(nil)) != 0 {
+		t.Error("filterRedirects(nil) should return empty")
+	}
+}
+
+func TestFilterRedirects_NoMatches(t *testing.T) {
+	rules := []storage.RedirectRule{{From: "/a", To: "/b", StatusCode: 200}}
+	if len(filterRedirects(rules)) != 0 {
+		t.Error("filterRedirects with only 200s should return empty")
+	}
+}
+
 func TestFilterRewrites(t *testing.T) {
 	rules := []storage.RedirectRule{
 		{From: "/a", To: "/b", StatusCode: 301},
@@ -286,5 +320,123 @@ func TestFilterRewrites(t *testing.T) {
 		if r.StatusCode != 200 {
 			t.Errorf("filterRewrites included rule with status %d", r.StatusCode)
 		}
+	}
+}
+
+func TestFilterRewrites_Empty(t *testing.T) {
+	if len(filterRewrites(nil)) != 0 {
+		t.Error("filterRewrites(nil) should return empty")
+	}
+}
+
+func TestFilterRewrites_NoMatches(t *testing.T) {
+	rules := []storage.RedirectRule{{From: "/a", To: "/b", StatusCode: 301}}
+	if len(filterRewrites(rules)) != 0 {
+		t.Error("filterRewrites with only 301s should return empty")
+	}
+}
+
+func TestAssetsFetcher_BadURL(t *testing.T) {
+	dir := t.TempDir()
+	siteID := "test-badurl"
+	deployKey := "deploy1"
+
+	deployPath := filepath.Join(dir, siteID, deployKey)
+	os.MkdirAll(deployPath, 0755)
+
+	store := storage.NewManager(dir)
+	cache := storage.NewSiteRulesCache()
+
+	fetcher := &StaticAssetsFetcher{
+		Store:     store,
+		Cache:     cache,
+		SiteID:    siteID,
+		DeployKey: deployKey,
+		SPAMode:   false,
+		Domain:    "test.local",
+	}
+
+	req := &WorkerRequest{Method: "GET", URL: ":%invalid", Headers: map[string]string{}}
+	resp, err := fetcher.Fetch(req)
+	if err != nil {
+		t.Fatalf("Fetch should not error on bad URL: %v", err)
+	}
+	if resp.StatusCode != 400 {
+		t.Errorf("status = %d, want 400 for bad URL", resp.StatusCode)
+	}
+}
+
+func TestAssetsFetcher_EmptyPath(t *testing.T) {
+	dir := t.TempDir()
+	siteID := "test-emptypath"
+	deployKey := "deploy1"
+
+	deployPath := filepath.Join(dir, siteID, deployKey)
+	os.MkdirAll(deployPath, 0755)
+	os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<h1>Root</h1>"), 0644)
+
+	store := storage.NewManager(dir)
+	cache := storage.NewSiteRulesCache()
+
+	fetcher := &StaticAssetsFetcher{
+		Store:     store,
+		Cache:     cache,
+		SiteID:    siteID,
+		DeployKey: deployKey,
+		SPAMode:   false,
+		Domain:    "test.local",
+	}
+
+	// Request with empty path (just domain)
+	req := &WorkerRequest{Method: "GET", URL: "http://test.local", Headers: map[string]string{}}
+	resp, err := fetcher.Fetch(req)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	// Should try to resolve "/" which may or may not find index.html depending on store behavior
+	if resp == nil {
+		t.Fatal("response should not be nil")
+	}
+}
+
+func TestAssetsFetcher_CacheHit(t *testing.T) {
+	dir := t.TempDir()
+	siteID := "test-cache"
+	deployKey := "deploy1"
+
+	deployPath := filepath.Join(dir, siteID, deployKey)
+	os.MkdirAll(deployPath, 0755)
+	os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<h1>Cached</h1>"), 0644)
+
+	store := storage.NewManager(dir)
+	cache := storage.NewSiteRulesCache()
+
+	fetcher := &StaticAssetsFetcher{
+		Store:     store,
+		Cache:     cache,
+		SiteID:    siteID,
+		DeployKey: deployKey,
+		SPAMode:   false,
+		Domain:    "test.local",
+	}
+
+	req := &WorkerRequest{Method: "GET", URL: "http://test.local/index.html", Headers: map[string]string{}}
+
+	// First call loads rules into cache
+	resp1, err := fetcher.Fetch(req)
+	if err != nil {
+		t.Fatalf("Fetch 1: %v", err)
+	}
+	if resp1.StatusCode != 200 {
+		t.Errorf("status 1 = %d, want 200", resp1.StatusCode)
+	}
+
+	// Second call should use cache
+	resp2, err := fetcher.Fetch(req)
+	if err != nil {
+		t.Fatalf("Fetch 2: %v", err)
+	}
+	if resp2.StatusCode != 200 {
+		t.Errorf("status 2 = %d, want 200", resp2.StatusCode)
 	}
 }

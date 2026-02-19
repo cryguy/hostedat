@@ -713,3 +713,179 @@ func TestCrypto_RSA_ImportMalformedJWKErrors(t *testing.T) {
 		t.Error("importing JWK with wrong kty should fail")
 	}
 }
+
+func TestCrypto_RSA_SPKIExportFromPrivateKey(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const keyPair = await crypto.subtle.generateKey(
+      { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+      true, ["sign", "verify"]
+    );
+    // Export SPKI from public key
+    const spki = await crypto.subtle.exportKey("spki", keyPair.publicKey);
+    // Re-import SPKI
+    const imported = await crypto.subtle.importKey(
+      "spki", spki, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, true, ["verify"]
+    );
+    // Sign with original private, verify with re-imported public
+    const data = new TextEncoder().encode("spki test");
+    const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", keyPair.privateKey, data);
+    const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", imported, sig, data);
+    return Response.json({ valid, type: imported.type });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Valid bool   `json:"valid"`
+		Type  string `json:"type"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Valid {
+		t.Error("SPKI re-imported key should verify signatures")
+	}
+	if data.Type != "public" {
+		t.Errorf("type = %q, want 'public'", data.Type)
+	}
+}
+
+func TestCrypto_RSA_PKCS8ExportFromPrivateKey(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const keyPair = await crypto.subtle.generateKey(
+      { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+      true, ["sign", "verify"]
+    );
+    // Export PKCS8 from private key
+    const pkcs8 = await crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
+    // Re-import PKCS8
+    const imported = await crypto.subtle.importKey(
+      "pkcs8", pkcs8, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, true, ["sign"]
+    );
+    // Sign with re-imported key, verify with original public
+    const data = new TextEncoder().encode("pkcs8 test");
+    const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", imported, data);
+    const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", keyPair.publicKey, sig, data);
+    return Response.json({ valid, type: imported.type });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Valid bool   `json:"valid"`
+		Type  string `json:"type"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Valid {
+		t.Error("PKCS8 re-imported key should sign correctly")
+	}
+	if data.Type != "private" {
+		t.Errorf("type = %q, want 'private'", data.Type)
+	}
+}
+
+func TestCrypto_RSA_ImportBadSPKI(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    let badDerFailed = false;
+    try {
+      await crypto.subtle.importKey(
+        "spki", new Uint8Array([1, 2, 3, 4, 5]),
+        { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, true, ["verify"]
+      );
+    } catch(e) {
+      badDerFailed = true;
+    }
+    return Response.json({ badDerFailed });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		BadDerFailed bool `json:"badDerFailed"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.BadDerFailed {
+		t.Error("importing bad SPKI DER should fail")
+	}
+}
+
+func TestCrypto_RSA_ImportBadPKCS8(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    let badDerFailed = false;
+    try {
+      await crypto.subtle.importKey(
+        "pkcs8", new Uint8Array([1, 2, 3, 4, 5]),
+        { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, true, ["sign"]
+      );
+    } catch(e) {
+      badDerFailed = true;
+    }
+    return Response.json({ badDerFailed });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		BadDerFailed bool `json:"badDerFailed"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.BadDerFailed {
+		t.Error("importing bad PKCS8 DER should fail")
+	}
+}
+
+func TestCrypto_RSA_OAEPWithSHA512(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const keyPair = await crypto.subtle.generateKey(
+      { name: "RSA-OAEP", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-512" },
+      true, ["encrypt", "decrypt"]
+    );
+    const data = new TextEncoder().encode("sha512 test");
+    const ct = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, keyPair.publicKey, data);
+    const pt = await crypto.subtle.decrypt({ name: "RSA-OAEP" }, keyPair.privateKey, ct);
+    const result = new TextDecoder().decode(pt);
+    return Response.json({ result, ctLen: new Uint8Array(ct).length });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Result string `json:"result"`
+		CTLen  int    `json:"ctLen"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if data.Result != "sha512 test" {
+		t.Errorf("result = %q", data.Result)
+	}
+	if data.CTLen != 256 {
+		t.Errorf("ciphertext length = %d, want 256", data.CTLen)
+	}
+}

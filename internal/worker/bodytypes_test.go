@@ -383,3 +383,225 @@ func TestBodyTypes_StreamGetReaderProtocol(t *testing.T) {
 		t.Error("read 3 value should be undefined")
 	}
 }
+
+func TestBodyTypes_ResponseJsonParsing(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const resp = new Response('{"key":"value","num":42}');
+    const data = await resp.json();
+    return Response.json({ key: data.key, num: data.num });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Key string `json:"key"`
+		Num int    `json:"num"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if data.Key != "value" {
+		t.Errorf("key = %q, want value", data.Key)
+	}
+	if data.Num != 42 {
+		t.Errorf("num = %d, want 42", data.Num)
+	}
+}
+
+func TestBodyTypes_RequestJsonParsing(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const data = await request.json();
+    return Response.json({ name: data.name, age: data.age });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), &WorkerRequest{
+		Method:  "POST",
+		URL:     "http://localhost/",
+		Headers: map[string]string{"content-type": "application/json"},
+		Body:    []byte(`{"name":"Alice","age":30}`),
+	})
+	assertOK(t, r)
+
+	var data struct {
+		Name string `json:"name"`
+		Age  int    `json:"age"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if data.Name != "Alice" {
+		t.Errorf("name = %q, want Alice", data.Name)
+	}
+	if data.Age != 30 {
+		t.Errorf("age = %d, want 30", data.Age)
+	}
+}
+
+func TestBodyTypes_ResponseArrayBufferFromArrayBuffer(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const buf = new TextEncoder().encode("hello ab").buffer;
+    const resp = new Response(buf);
+    const ab = await resp.arrayBuffer();
+    const decoded = new TextDecoder().decode(ab);
+    return Response.json({ decoded, isAB: ab instanceof ArrayBuffer });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Decoded string `json:"decoded"`
+		IsAB    bool   `json:"isAB"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if data.Decoded != "hello ab" {
+		t.Errorf("decoded = %q, want 'hello ab'", data.Decoded)
+	}
+	if !data.IsAB {
+		t.Error("arrayBuffer() should return an ArrayBuffer")
+	}
+}
+
+func TestBodyTypes_FormDataWithFileUpload(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const fd = await request.formData();
+    const file = fd.get("myfile");
+    const text = fd.get("field");
+    return Response.json({
+      fileName: file ? file.name : "",
+      fileContent: file ? await file.text() : "",
+      field: text,
+    });
+  },
+};`
+
+	body := "--myboundary\r\n" +
+		"Content-Disposition: form-data; name=\"field\"\r\n\r\n" +
+		"hello\r\n" +
+		"--myboundary\r\n" +
+		"Content-Disposition: form-data; name=\"myfile\"; filename=\"test.txt\"\r\n" +
+		"Content-Type: text/plain\r\n\r\n" +
+		"file contents here\r\n" +
+		"--myboundary--\r\n"
+
+	r := execJS(t, e, source, defaultEnv(), &WorkerRequest{
+		Method:  "POST",
+		URL:     "http://localhost/",
+		Headers: map[string]string{"content-type": "multipart/form-data; boundary=myboundary"},
+		Body:    []byte(body),
+	})
+	assertOK(t, r)
+
+	var data struct {
+		FileName    string `json:"fileName"`
+		FileContent string `json:"fileContent"`
+		Field       string `json:"field"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if data.FileName != "test.txt" {
+		t.Errorf("fileName = %q, want test.txt", data.FileName)
+	}
+	if data.FileContent != "file contents here" {
+		t.Errorf("fileContent = %q, want 'file contents here'", data.FileContent)
+	}
+	if data.Field != "hello" {
+		t.Errorf("field = %q, want hello", data.Field)
+	}
+}
+
+func TestBodyTypes_FormDataBodySerialization(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const fd = new FormData();
+    fd.append("key", "value");
+    fd.append("file", new File(["content"], "doc.txt", { type: "text/plain" }));
+    const req = new Request("https://example.com", { method: "POST", body: fd });
+    const text = await req.text();
+    return Response.json({
+      hasKey: text.indexOf("key") !== -1,
+      hasValue: text.indexOf("value") !== -1,
+      hasFilename: text.indexOf("doc.txt") !== -1,
+      hasContent: text.indexOf("content") !== -1,
+      hasBoundary: text.indexOf("----FormDataBoundary") !== -1,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		HasKey      bool `json:"hasKey"`
+		HasValue    bool `json:"hasValue"`
+		HasFilename bool `json:"hasFilename"`
+		HasContent  bool `json:"hasContent"`
+		HasBoundary bool `json:"hasBoundary"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.HasKey {
+		t.Error("serialized FormData should contain key name")
+	}
+	if !data.HasValue {
+		t.Error("serialized FormData should contain field value")
+	}
+	if !data.HasFilename {
+		t.Error("serialized FormData should contain filename")
+	}
+	if !data.HasContent {
+		t.Error("serialized FormData should contain file content")
+	}
+	if !data.HasBoundary {
+		t.Error("serialized FormData should contain boundary")
+	}
+}
+
+func TestBodyTypes_NullBodyReturnsEmpty(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const resp = new Response(null);
+    const text = await resp.text();
+    const ab = await new Response(null).arrayBuffer();
+    return Response.json({
+      text: text,
+      abLen: ab.byteLength,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Text  string `json:"text"`
+		ABLen int    `json:"abLen"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if data.Text != "" {
+		t.Errorf("null body text = %q, want empty", data.Text)
+	}
+	if data.ABLen != 0 {
+		t.Errorf("null body arrayBuffer length = %d, want 0", data.ABLen)
+	}
+}

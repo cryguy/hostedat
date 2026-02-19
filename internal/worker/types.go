@@ -12,17 +12,19 @@ type WorkerRequest struct {
 
 // WorkerResponse represents the HTTP response from a worker.
 type WorkerResponse struct {
-	StatusCode int
-	Headers    map[string]string
-	Body       []byte
+	StatusCode   int
+	Headers      map[string]string
+	Body         []byte
+	HasWebSocket bool // true when status is 101 and webSocket was set
 }
 
 // WorkerResult wraps a response with execution metadata.
 type WorkerResult struct {
-	Response *WorkerResponse
-	Logs     []LogEntry
-	Error    error
-	Duration time.Duration
+	Response  *WorkerResponse
+	Logs      []LogEntry
+	Error     error
+	Duration  time.Duration
+	WebSocket *WebSocketHandler // non-nil for WebSocket upgrade responses
 }
 
 // LogEntry is a single console.log/warn/error captured from a worker.

@@ -516,3 +516,195 @@ func TestCompression_IncompressibleData(t *testing.T) {
 		t.Error("incompressible data should round-trip correctly")
 	}
 }
+
+func TestCompression_DirectCompressMissingArgs(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    try {
+      __compress("gzip");
+      return Response.json({ threw: false });
+    } catch(e) {
+      return Response.json({ threw: true, msg: e.message });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw bool   `json:"threw"`
+		Msg   string `json:"msg"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Threw {
+		t.Error("__compress with 1 arg should throw")
+	}
+}
+
+func TestCompression_DirectCompressBadBase64(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    try {
+      __compress("gzip", "not-valid-base64!!!");
+      return Response.json({ threw: false });
+    } catch(e) {
+      return Response.json({ threw: true, msg: e.message });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw bool   `json:"threw"`
+		Msg   string `json:"msg"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Threw {
+		t.Error("__compress with bad base64 should throw")
+	}
+}
+
+func TestCompression_DirectDecompressMissingArgs(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    try {
+      __decompress();
+      return Response.json({ threw: false });
+    } catch(e) {
+      return Response.json({ threw: true, msg: e.message });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw bool `json:"threw"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Threw {
+		t.Error("__decompress with no args should throw")
+	}
+}
+
+func TestCompression_DirectDecompressBadBase64(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    try {
+      __decompress("gzip", "not-valid!!!");
+      return Response.json({ threw: false });
+    } catch(e) {
+      return Response.json({ threw: true, msg: e.message });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw bool `json:"threw"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Threw {
+		t.Error("__decompress with bad base64 should throw")
+	}
+}
+
+func TestCompression_DirectDecompressCorruptData(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    // Valid base64 but not valid gzip data
+    try {
+      __decompress("gzip", "aGVsbG8=");
+      return Response.json({ threw: false });
+    } catch(e) {
+      return Response.json({ threw: true, msg: e.message });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw bool `json:"threw"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Threw {
+		t.Error("__decompress with corrupt gzip data should throw")
+	}
+}
+
+func TestCompression_DirectCompressUnsupportedFormat(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    try {
+      __compress("brotli", "aGVsbG8=");
+      return Response.json({ threw: false });
+    } catch(e) {
+      return Response.json({ threw: true, msg: e.message });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw bool `json:"threw"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Threw {
+		t.Error("__compress with unsupported format should throw")
+	}
+}
+
+func TestCompression_DirectDecompressUnsupportedFormat(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    try {
+      __decompress("brotli", "aGVsbG8=");
+      return Response.json({ threw: false });
+    } catch(e) {
+      return Response.json({ threw: true, msg: e.message });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw bool `json:"threw"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Threw {
+		t.Error("__decompress with unsupported format should throw")
+	}
+}

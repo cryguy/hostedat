@@ -411,3 +411,211 @@ func (e testError) Error() string { return string(e) }
 func assertErr(msg string) error {
 	return testError(msg)
 }
+
+// ──────────────────────────────────────────────
+// ListBuckets tests
+// ──────────────────────────────────────────────
+
+func TestListBuckets_ReturnsSiteBuckets(t *testing.T) {
+	h, db, user, site, _, _ := setupStorageHandlerTest(t)
+	db.Create(&models.StorageBucket{SiteID: site.ID, Name: "IMAGES", BucketName: site.ID + "-images"})
+	db.Create(&models.StorageBucket{SiteID: site.ID, Name: "DOCS", BucketName: site.ID + "-docs"})
+
+	c, rec := newAuthedContext(t, http.MethodGet, "/api/v1/sites/"+site.ID+"/storage/buckets", nil, user)
+	c.SetParamNames("id")
+	c.SetParamValues(site.ID)
+
+	if err := h.ListBuckets(c); err != nil {
+		t.Fatalf("ListBuckets returned error: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var buckets []models.StorageBucket
+	if err := json.Unmarshal(rec.Body.Bytes(), &buckets); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(buckets) != 2 {
+		t.Fatalf("got %d buckets, want 2", len(buckets))
+	}
+}
+
+func TestListBuckets_Forbidden(t *testing.T) {
+	h, db, _, site, _, _ := setupStorageHandlerTest(t)
+	otherUser := models.User{Email: "other@test.local", PasswordHash: "hash", Role: "user"}
+	db.Create(&otherUser)
+
+	c, rec := newAuthedContext(t, http.MethodGet, "/api/v1/sites/"+site.ID+"/storage/buckets", nil, otherUser)
+	c.SetParamNames("id")
+	c.SetParamValues(site.ID)
+
+	if err := h.ListBuckets(c); err != nil {
+		t.Fatalf("ListBuckets returned error: %v", err)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// ──────────────────────────────────────────────
+// UpdateBucket tests
+// ──────────────────────────────────────────────
+
+func TestUpdateBucket_TogglePublic(t *testing.T) {
+	h, db, user, site, _, _ := setupStorageHandlerTest(t)
+	bucket := models.StorageBucket{SiteID: site.ID, Name: "IMAGES", BucketName: site.ID + "-images", Public: false}
+	db.Create(&bucket)
+
+	c, rec := newAuthedContext(t, http.MethodPatch, "/api/v1/sites/"+site.ID+"/storage/buckets/"+bucket.ID, map[string]interface{}{"public": true}, user)
+	c.SetParamNames("id", "bucketId")
+	c.SetParamValues(site.ID, bucket.ID)
+
+	if err := h.UpdateBucket(c); err != nil {
+		t.Fatalf("UpdateBucket returned error: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var updated models.StorageBucket
+	json.Unmarshal(rec.Body.Bytes(), &updated)
+	if !updated.Public {
+		t.Fatal("expected bucket to be public after toggle")
+	}
+}
+
+func TestUpdateBucket_NotFound(t *testing.T) {
+	h, _, user, site, _, _ := setupStorageHandlerTest(t)
+
+	c, rec := newAuthedContext(t, http.MethodPatch, "/api/v1/sites/"+site.ID+"/storage/buckets/nonexistent", map[string]interface{}{"public": true}, user)
+	c.SetParamNames("id", "bucketId")
+	c.SetParamValues(site.ID, "nonexistent")
+
+	if err := h.UpdateBucket(c); err != nil {
+		t.Fatalf("UpdateBucket returned error: %v", err)
+	}
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// ──────────────────────────────────────────────
+// UploadURL tests
+// ──────────────────────────────────────────────
+
+func TestUploadURL_Success(t *testing.T) {
+	h, db, user, site, _, _ := setupStorageHandlerTest(t)
+	bucket := models.StorageBucket{SiteID: site.ID, Name: "IMAGES", BucketName: site.ID + "-images"}
+	db.Create(&bucket)
+
+	c, rec := newAuthedContext(t, http.MethodPost, "/api/v1/sites/"+site.ID+"/storage/buckets/"+bucket.ID+"/upload-url", map[string]interface{}{"key": "photo.jpg"}, user)
+	c.SetParamNames("id", "bucketId")
+	c.SetParamValues(site.ID, bucket.ID)
+
+	if err := h.UploadURL(c); err != nil {
+		t.Fatalf("UploadURL returned error: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	resp := map[string]interface{}{}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["upload_url"] == nil || resp["upload_url"] == "" {
+		t.Fatal("expected upload_url in response")
+	}
+	if resp["key"] != "photo.jpg" {
+		t.Errorf("key = %q, want photo.jpg", resp["key"])
+	}
+	if resp["bucket"] != site.ID+"-images" {
+		t.Errorf("bucket = %q, want %s", resp["bucket"], site.ID+"-images")
+	}
+	if resp["expires_in"] != float64(3600) {
+		t.Errorf("expires_in = %v, want 3600 (default)", resp["expires_in"])
+	}
+}
+
+func TestUploadURL_MissingKey(t *testing.T) {
+	h, db, user, site, _, _ := setupStorageHandlerTest(t)
+	bucket := models.StorageBucket{SiteID: site.ID, Name: "IMAGES", BucketName: site.ID + "-images"}
+	db.Create(&bucket)
+
+	c, rec := newAuthedContext(t, http.MethodPost, "/api/v1/sites/"+site.ID+"/storage/buckets/"+bucket.ID+"/upload-url", map[string]interface{}{"key": ""}, user)
+	c.SetParamNames("id", "bucketId")
+	c.SetParamValues(site.ID, bucket.ID)
+
+	if err := h.UploadURL(c); err != nil {
+		t.Fatalf("UploadURL returned error: %v", err)
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUploadURL_ExpiresInClamped(t *testing.T) {
+	h, db, user, site, _, _ := setupStorageHandlerTest(t)
+	bucket := models.StorageBucket{SiteID: site.ID, Name: "IMAGES", BucketName: site.ID + "-images"}
+	db.Create(&bucket)
+
+	c, rec := newAuthedContext(t, http.MethodPost, "/api/v1/sites/"+site.ID+"/storage/buckets/"+bucket.ID+"/upload-url", map[string]interface{}{"key": "file.txt", "expires_in": 999999}, user)
+	c.SetParamNames("id", "bucketId")
+	c.SetParamValues(site.ID, bucket.ID)
+
+	if err := h.UploadURL(c); err != nil {
+		t.Fatalf("UploadURL returned error: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	resp := map[string]interface{}{}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["expires_in"] != float64(604800) {
+		t.Errorf("expires_in = %v, want 604800 (clamped)", resp["expires_in"])
+	}
+}
+
+// ──────────────────────────────────────────────
+// ListS3Credentials tests
+// ──────────────────────────────────────────────
+
+func TestListS3Credentials_ReturnsUserCredentials(t *testing.T) {
+	h, db, user, _, _, _ := setupStorageHandlerTest(t)
+	db.Create(&models.S3Credential{UserID: user.ID, ExternalKeyID: "u-cred-a", AccessKeyID: "AK1", Name: "key1"})
+	db.Create(&models.S3Credential{UserID: user.ID, ExternalKeyID: "u-cred-b", AccessKeyID: "AK2", Name: "key2"})
+
+	c, rec := newAuthedContext(t, http.MethodGet, "/api/v1/s3-credentials", nil, user)
+
+	if err := h.ListS3Credentials(c); err != nil {
+		t.Fatalf("ListS3Credentials returned error: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var creds []models.S3Credential
+	json.Unmarshal(rec.Body.Bytes(), &creds)
+	if len(creds) != 2 {
+		t.Fatalf("got %d credentials, want 2", len(creds))
+	}
+}
+
+func TestListS3Credentials_Empty(t *testing.T) {
+	h, _, user, _, _, _ := setupStorageHandlerTest(t)
+
+	c, rec := newAuthedContext(t, http.MethodGet, "/api/v1/s3-credentials", nil, user)
+
+	if err := h.ListS3Credentials(c); err != nil {
+		t.Fatalf("ListS3Credentials returned error: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var creds []models.S3Credential
+	json.Unmarshal(rec.Body.Bytes(), &creds)
+	if len(creds) != 0 {
+		t.Fatalf("got %d credentials, want 0", len(creds))
+	}
+}

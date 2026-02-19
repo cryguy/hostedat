@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,12 @@ import (
 	v8 "github.com/tommie/v8go"
 	"gorm.io/gorm"
 )
+
+// wsConnectionTimeout is the maximum duration for a WebSocket connection.
+const wsConnectionTimeout = 5 * time.Minute
+
+// maxWSMessageBytes is the maximum size of a single WebSocket message (64 KB).
+const maxWSMessageBytes = 64 * 1024
 
 // poolKey uniquely identifies a compiled worker deployment for a site.
 type poolKey struct {
@@ -202,6 +209,10 @@ func (e *Engine) GetOrCreatePool(siteID string, deployKey string, env *Env) (*v8
 		setupCompression,
 		// Body types: patches Request/Response for non-string bodies
 		setupBodyTypes,
+		// WebSocket: WebSocketPair, WebSocket class
+		setupWebSocket,
+		// HTMLRewriter: streaming HTML transformation
+		setupHTMLRewriter,
 		// Console: log/info/warn/error/debug capture
 		setupConsole,
 		// Fetch: Go-backed fetch() with SSRF protection
@@ -247,6 +258,10 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 		return result
 	}
 
+	// keepWorker is set to true when a WebSocket upgrade response is detected,
+	// preventing the deferred cleanup from returning the worker to the pool.
+	var keepWorker bool
+
 	// Watchdog: iso.TerminateExecution() is the one thread-safe V8 call.
 	var timedOut atomic.Bool
 	timeout := time.Duration(e.config.ExecutionTimeout) * time.Millisecond
@@ -267,6 +282,10 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 			}
 		}
 		result.Duration = time.Since(start)
+		// WebSocket: worker is managed by WebSocketHandler.Bridge().
+		if keepWorker {
+			return
+		}
 		// Only return healthy workers to the pool.
 		if stopped && !timedOut.Load() && !panicked {
 			pool.put(w)
@@ -287,7 +306,7 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 
 	// Set up per-request state.
 	reqID := newRequestState(e.config.MaxFetchRequests, env)
-	reqIDVal, _ := v8.NewValue(iso, int32(reqID))
+	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
 	if err := ctx.Global().Set("__requestID", reqIDVal); err != nil {
 		clearRequestState(reqID)
 		result.Error = fmt.Errorf("setting request ID: %w", err)
@@ -400,14 +419,45 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 	// Convert JS Response to Go.
 	resp, err := jsResponseToGo(ctx, fetchResult)
 
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("converting worker response: %w", err)
+		return result
+	}
+
+	// WebSocket upgrade: if the response is 101 with a webSocket, hold the
+	// worker for the bridge loop instead of returning it to the pool.
+	if resp.HasWebSocket && resp.StatusCode == 101 {
+		// Store the server WebSocket reference for the bridge.
+		ctx.RunScript(`
+			if (globalThis.__ws_check_resp && globalThis.__ws_check_resp._peer) {
+				globalThis.__ws_active_server = globalThis.__ws_check_resp._peer;
+			}
+			delete globalThis.__ws_check_resp;
+		`, "ws_setup_bridge.js")
+
+		state := getRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+
+		keepWorker = true
+		result.Response = resp
+		result.WebSocket = &WebSocketHandler{
+			worker:  w,
+			pool:    pool,
+			reqID:   reqID,
+			timeout: wsConnectionTimeout,
+		}
+		return result
+	}
+
 	state := clearRequestState(reqID)
 	if state != nil {
 		result.Logs = state.logs
-	}
-
-	if err != nil {
-		result.Error = fmt.Errorf("converting worker response: %w", err)
-		return result
 	}
 
 	result.Response = resp
@@ -477,7 +527,7 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 
 	// Set up per-request state.
 	reqID := newRequestState(e.config.MaxFetchRequests, env)
-	reqIDVal, _ := v8.NewValue(iso, int32(reqID))
+	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
 	ctx.Global().Set("__requestID", reqIDVal)
 
 	// Build the scheduled event object.

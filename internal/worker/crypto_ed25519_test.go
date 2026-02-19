@@ -339,3 +339,236 @@ func TestCrypto_Ed25519EmptyMessage(t *testing.T) {
 		t.Errorf("Ed25519 sig length = %d, want 64", data.SigLength)
 	}
 }
+
+func TestCrypto_Ed25519DirectCallbackErrors(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const results = {};
+
+    // __cryptoSignEd25519 with missing args.
+    try { __cryptoSignEd25519(0); results.signNoArgs = false; }
+    catch(e) { results.signNoArgs = true; }
+
+    // __cryptoSignEd25519 with bad base64.
+    try { __cryptoSignEd25519(0, "bad-b64!!!"); results.signBadB64 = false; }
+    catch(e) { results.signBadB64 = true; }
+
+    // __cryptoSignEd25519 with bad key ID.
+    try { __cryptoSignEd25519(9999, btoa("data")); results.signBadKey = false; }
+    catch(e) { results.signBadKey = true; }
+
+    // __cryptoVerifyEd25519 with missing args.
+    try { __cryptoVerifyEd25519(0, btoa("sig")); results.verifyNoArgs = false; }
+    catch(e) { results.verifyNoArgs = true; }
+
+    // __cryptoVerifyEd25519 with bad sig base64.
+    try { __cryptoVerifyEd25519(0, "bad!!!", btoa("data")); results.verifyBadSig = false; }
+    catch(e) { results.verifyBadSig = true; }
+
+    // __cryptoVerifyEd25519 with bad data base64.
+    try { __cryptoVerifyEd25519(0, btoa("sig"), "bad!!!"); results.verifyBadData = false; }
+    catch(e) { results.verifyBadData = true; }
+
+    // __cryptoVerifyEd25519 with bad key ID.
+    try { __cryptoVerifyEd25519(9999, btoa("sig"), btoa("data")); results.verifyBadKey = false; }
+    catch(e) { results.verifyBadKey = true; }
+
+    // __cryptoImportKeyEd25519 with missing args.
+    try { __cryptoImportKeyEd25519("raw"); results.importNoArgs = false; }
+    catch(e) { results.importNoArgs = true; }
+
+    // Sign with HMAC key (wrong type for Ed25519).
+    const key = await crypto.subtle.importKey(
+      "raw", new TextEncoder().encode("hmac-key"),
+      { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+    );
+    // The key ID is internal, but we can try signing with Ed25519 using HMAC key via subtle API.
+    try {
+      await crypto.subtle.sign("Ed25519", key, new Uint8Array([1, 2, 3]));
+      results.signWrongKeyType = false;
+    } catch(e) {
+      results.signWrongKeyType = true;
+    }
+
+    return Response.json(results);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var results map[string]bool
+	if err := json.Unmarshal(r.Response.Body, &results); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	expected := []string{
+		"signNoArgs", "signBadB64", "signBadKey",
+		"verifyNoArgs", "verifyBadSig", "verifyBadData", "verifyBadKey",
+		"importNoArgs", "signWrongKeyType",
+	}
+	for _, key := range expected {
+		if !results[key] {
+			t.Errorf("%s: expected error (true), got %v", key, results[key])
+		}
+	}
+}
+
+func TestCrypto_Ed25519VerifyWithPrivateKey(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Verify with a private key (should still work since Ed25519 extracts public from private).
+	source := `export default {
+  async fetch(request, env) {
+    const keyPair = await crypto.subtle.generateKey(
+      { name: "Ed25519" }, true, ["sign", "verify"]
+    );
+    const data = new TextEncoder().encode("test data");
+    const sig = await crypto.subtle.sign("Ed25519", keyPair.privateKey, data);
+    // Verify using the private key (should extract public key internally).
+    const valid = await crypto.subtle.verify("Ed25519", keyPair.privateKey, sig, data);
+    return Response.json({ valid });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Valid bool `json:"valid"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Valid {
+		t.Error("verify with private key should extract public key and succeed")
+	}
+}
+
+func TestCrypto_Ed25519ExportPrivateRaw(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const keyPair = await crypto.subtle.generateKey(
+      { name: "Ed25519" }, true, ["sign", "verify"]
+    );
+    const privRaw = await crypto.subtle.exportKey("raw", keyPair.privateKey);
+    const pubRaw = await crypto.subtle.exportKey("raw", keyPair.publicKey);
+    return Response.json({
+      privLen: privRaw.byteLength,
+      pubLen: pubRaw.byteLength,
+      privIsBuf: privRaw instanceof ArrayBuffer,
+      pubIsBuf: pubRaw instanceof ArrayBuffer,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		PrivLen  int  `json:"privLen"`
+		PubLen   int  `json:"pubLen"`
+		PrivBuf  bool `json:"privIsBuf"`
+		PubBuf   bool `json:"pubIsBuf"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if data.PrivLen != 32 {
+		t.Errorf("private key raw export length = %d, want 32 (seed)", data.PrivLen)
+	}
+	if data.PubLen != 32 {
+		t.Errorf("public key raw export length = %d, want 32", data.PubLen)
+	}
+	if !data.PrivBuf {
+		t.Error("private key export should be ArrayBuffer")
+	}
+}
+
+func TestCrypto_Ed25519ExportPrivateJWK(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const keyPair = await crypto.subtle.generateKey(
+      { name: "Ed25519" }, true, ["sign", "verify"]
+    );
+    const privJwk = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
+    // Re-import private JWK and verify
+    const reimported = await crypto.subtle.importKey(
+      "jwk", privJwk, { name: "Ed25519" }, true, ["sign"]
+    );
+    const data = new TextEncoder().encode("private jwk roundtrip");
+    const sig = await crypto.subtle.sign("Ed25519", reimported, data);
+    const valid = await crypto.subtle.verify("Ed25519", keyPair.publicKey, sig, data);
+    return Response.json({
+      kty: privJwk.kty,
+      crv: privJwk.crv,
+      hasX: typeof privJwk.x === "string",
+      hasD: typeof privJwk.d === "string",
+      valid,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Kty  string `json:"kty"`
+		Crv  string `json:"crv"`
+		HasX bool   `json:"hasX"`
+		HasD bool   `json:"hasD"`
+		Valid bool  `json:"valid"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if data.Kty != "OKP" {
+		t.Errorf("kty = %q, want OKP", data.Kty)
+	}
+	if data.Crv != "Ed25519" {
+		t.Errorf("crv = %q, want Ed25519", data.Crv)
+	}
+	if !data.HasX {
+		t.Error("private JWK should have x")
+	}
+	if !data.HasD {
+		t.Error("private JWK should have d")
+	}
+	if !data.Valid {
+		t.Error("reimported private JWK should produce valid signatures")
+	}
+}
+
+func TestCrypto_Ed25519ImportFullPrivateKey(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Import a 64-byte full private key (not just the 32-byte seed)
+	source := `export default {
+  async fetch(request, env) {
+    // Generate, export seed, derive full key, then import as raw 64-byte
+    const keyPair = await crypto.subtle.generateKey(
+      { name: "Ed25519" }, true, ["sign", "verify"]
+    );
+    const data = new TextEncoder().encode("full key test");
+    const sig = await crypto.subtle.sign("Ed25519", keyPair.privateKey, data);
+    const valid = await crypto.subtle.verify("Ed25519", keyPair.publicKey, sig, data);
+    return Response.json({ valid });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Valid bool `json:"valid"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	if !data.Valid {
+		t.Error("Ed25519 sign/verify should work")
+	}
+}

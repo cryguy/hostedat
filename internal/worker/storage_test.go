@@ -435,3 +435,142 @@ func TestBuildPublicObjectURL_InvalidBase(t *testing.T) {
 		t.Fatalf("expected error for invalid public base URL")
 	}
 }
+
+func TestBuildPublicObjectURL_WithBasePath(t *testing.T) {
+	u, err := buildPublicObjectURL("https://storage.example.com/s3", "mybucket", "file.txt")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if !strings.Contains(u, "/s3/mybucket/file.txt") {
+		t.Errorf("URL should include base path, got %q", u)
+	}
+}
+
+func TestBuildPublicObjectURL_TrailingSlash(t *testing.T) {
+	u, err := buildPublicObjectURL("https://storage.example.com/", "mybucket", "file.txt")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if strings.Contains(u, "//mybucket") {
+		t.Errorf("should not have double slashes, got %q", u)
+	}
+}
+
+func TestBuildPublicObjectURL_LeadingSlashKey(t *testing.T) {
+	u, err := buildPublicObjectURL("https://storage.example.com", "mybucket", "/file.txt")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if strings.Contains(u, "mybucket//") {
+		t.Errorf("should not have double slash between bucket and key, got %q", u)
+	}
+}
+
+func TestEscapePathSegments(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"", ""},
+		{"simple.txt", "simple.txt"},
+		{"dir/file.txt", "dir/file.txt"},
+		{"dir/file name.txt", "dir/file%20name.txt"},
+		{"a/b/c", "a/b/c"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			got := escapePathSegments(tc.input)
+			if got != tc.want {
+				t.Errorf("escapePathSegments(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStorageBinding_JSON_ValidJSON(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	obj, err := buildR2ObjectBody(iso, ctx, "k", []byte(`{"name":"test","count":42}`), &minio.ObjectInfo{
+		Size:         25,
+		ETag:         "etag",
+		ContentType:  "application/json",
+		LastModified: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("buildR2ObjectBody: %v", err)
+	}
+	ctx.Global().Set("__obj", obj.Value)
+
+	result, err := ctx.RunScript("__obj.json()", "test_json.js")
+	if err != nil {
+		t.Fatalf("RunScript json: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	resolved, err := awaitValue(ctx, result, deadline)
+	if err != nil {
+		t.Fatalf("await json: %v", err)
+	}
+
+	ctx.Global().Set("__result", resolved)
+	nameVal, err := ctx.RunScript("__result.name", "check_name.js")
+	if err != nil {
+		t.Fatalf("checking name: %v", err)
+	}
+	if nameVal.String() != "test" {
+		t.Errorf("json name = %q, want test", nameVal.String())
+	}
+
+	countVal, err := ctx.RunScript("__result.count", "check_count.js")
+	if err != nil {
+		t.Fatalf("checking count: %v", err)
+	}
+	if countVal.Int32() != 42 {
+		t.Errorf("json count = %d, want 42", countVal.Int32())
+	}
+}
+
+func TestBuildR2Object(t *testing.T) {
+	iso := v8.NewIsolate()
+	defer iso.Dispose()
+	ctx := v8.NewContext(iso)
+	defer ctx.Close()
+
+	customMeta := map[string]string{"author": "test", "version": "1"}
+	obj, err := buildR2Object(iso, ctx, "test-key", 100, "etag123", "text/plain", customMeta)
+	if err != nil {
+		t.Fatalf("buildR2Object: %v", err)
+	}
+
+	ctx.Global().Set("__obj", obj.Value)
+
+	keyVal, _ := ctx.RunScript("__obj.key", "k.js")
+	if keyVal.String() != "test-key" {
+		t.Errorf("key = %q, want test-key", keyVal.String())
+	}
+
+	etagVal, _ := ctx.RunScript("__obj.etag", "e.js")
+	if etagVal.String() != "etag123" {
+		t.Errorf("etag = %q, want etag123", etagVal.String())
+	}
+
+	httpEtagVal, _ := ctx.RunScript("__obj.httpEtag", "he.js")
+	if httpEtagVal.String() != `"etag123"` {
+		t.Errorf("httpEtag = %q, want quoted etag", httpEtagVal.String())
+	}
+
+	scVal, _ := ctx.RunScript("__obj.storageClass", "sc.js")
+	if scVal.String() != "STANDARD" {
+		t.Errorf("storageClass = %q, want STANDARD", scVal.String())
+	}
+
+	ctVal, _ := ctx.RunScript("__obj.httpMetadata.contentType", "ct.js")
+	if ctVal.String() != "text/plain" {
+		t.Errorf("contentType = %q, want text/plain", ctVal.String())
+	}
+
+	authorVal, _ := ctx.RunScript("__obj.customMetadata.author", "auth.js")
+	if authorVal.String() != "test" {
+		t.Errorf("customMetadata.author = %q, want test", authorVal.String())
+	}
+}

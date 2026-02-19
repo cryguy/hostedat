@@ -4,6 +4,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 // cryptoKeyEntry holds imported key material and its associated hash algorithm.
@@ -25,6 +27,11 @@ type requestState struct {
 	env        *Env
 	cryptoKeys map[int64]*cryptoKeyEntry
 	nextKeyID  int64
+
+	// WebSocket bridge state (set when status 101 response is returned).
+	wsConn   *websocket.Conn
+	wsMu     sync.Mutex
+	wsClosed bool
 }
 
 var (

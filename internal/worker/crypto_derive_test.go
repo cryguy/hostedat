@@ -463,3 +463,80 @@ func TestCrypto_PBKDF2SingleIteration(t *testing.T) {
 		t.Error("PBKDF2 with 1 iteration should be deterministic")
 	}
 }
+
+func TestCrypto_DeriveBitsDirectErrors(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const results = {};
+
+    // __cryptoDeriveBits with missing args.
+    try { __cryptoDeriveBits("HKDF", 0, 256, "SHA-256", btoa("salt"), btoa("info")); results.missingArgs = false; }
+    catch(e) { results.missingArgs = true; }
+
+    // __cryptoDeriveBits with bad key ID.
+    try { __cryptoDeriveBits("HKDF", 9999, 256, "SHA-256", btoa("salt"), btoa("info"), 0); results.badKey = false; }
+    catch(e) { results.badKey = true; }
+
+    // Import a key for HKDF, then test error paths.
+    const keyMaterial = new TextEncoder().encode("test-key");
+    const key = await crypto.subtle.importKey("raw", keyMaterial, { name: "HKDF" }, false, ["deriveBits"]);
+
+    // deriveBits with unsupported hash.
+    try {
+      await crypto.subtle.deriveBits(
+        { name: "HKDF", hash: "MD5", salt: new Uint8Array(0), info: new Uint8Array(0) },
+        key, 256
+      );
+      results.badHash = false;
+    } catch(e) { results.badHash = true; }
+
+    // deriveBits with unsupported algorithm name through direct callback.
+    // Import a PBKDF2 key then try to use it with unsupported algo name.
+    const pw = new TextEncoder().encode("password");
+    const pbKey = await crypto.subtle.importKey("raw", pw, { name: "PBKDF2" }, false, ["deriveBits"]);
+
+    // These tests confirm HKDF and PBKDF2 happy paths work through direct callbacks.
+    const hkdfKey = await crypto.subtle.importKey("raw", keyMaterial, { name: "HKDF" }, false, ["deriveBits"]);
+    const hkdfResult = await crypto.subtle.deriveBits(
+      { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(16), info: new TextEncoder().encode("ctx") },
+      hkdfKey, 128
+    );
+    results.hkdfWorks = new Uint8Array(hkdfResult).length === 16;
+
+    const pbkdfResult = await crypto.subtle.deriveBits(
+      { name: "PBKDF2", hash: "SHA-256", salt: new Uint8Array(16), iterations: 100 },
+      pbKey, 128
+    );
+    results.pbkdf2Works = new Uint8Array(pbkdfResult).length === 16;
+
+    return Response.json(results);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var results map[string]interface{}
+	if err := json.Unmarshal(r.Response.Body, &results); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if results["missingArgs"] != true {
+		t.Error("deriveBits with missing args should throw")
+	}
+	if results["badKey"] != true {
+		t.Error("deriveBits with bad key should throw")
+	}
+	if results["badHash"] != true {
+		t.Error("deriveBits with unsupported hash should throw")
+	}
+	if results["hkdfWorks"] != true {
+		t.Error("HKDF deriveBits should work")
+	}
+	if results["pbkdf2Works"] != true {
+		t.Error("PBKDF2 deriveBits should work")
+	}
+}
