@@ -43,15 +43,15 @@ func (u *User) BeforeCreate(tx *gorm.DB) error {
 }
 
 type Site struct {
-	ID              string    `gorm:"primaryKey;size:20" json:"id"`
-	UserID          string    `gorm:"index;not null" json:"user_id"`
-	SubdomainSlug   string    `gorm:"uniqueIndex;not null" json:"subdomain_slug"`
-	Name            string    `gorm:"not null" json:"name"`
-	SPAMode         bool      `gorm:"default:false" json:"spa_mode"`
-	HasWorker       bool      `gorm:"default:false" json:"has_worker"`
-	ActiveVersion   *int      `json:"active_version"`
-	ActiveDeployID  *string   `gorm:"size:20" json:"active_deploy_id,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID             string    `gorm:"primaryKey;size:20" json:"id"`
+	UserID         string    `gorm:"index;not null" json:"user_id"`
+	SubdomainSlug  string    `gorm:"uniqueIndex;not null" json:"subdomain_slug"`
+	Name           string    `gorm:"not null" json:"name"`
+	SPAMode        bool      `gorm:"default:false" json:"spa_mode"`
+	HasWorker      bool      `gorm:"default:false" json:"has_worker"`
+	ActiveVersion  *int      `json:"active_version"`
+	ActiveDeployID *string   `gorm:"size:20" json:"active_deploy_id,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 
 	User        User         `gorm:"foreignKey:UserID" json:"-"`
 	Deployments []Deployment `gorm:"foreignKey:SiteID" json:"deployments,omitempty"`
@@ -277,4 +277,16 @@ func (sc *S3Credential) BeforeCreate(tx *gorm.DB) error {
 		sc.ID = generateID()
 	}
 	return nil
+}
+
+// CacheEntry stores a cached HTTP response for the Cache API.
+type CacheEntry struct {
+	ID        uint   `gorm:"primaryKey"`
+	CacheName string `gorm:"index:idx_cache_lookup"`
+	URL       string `gorm:"index:idx_cache_lookup"`
+	Status    int
+	Headers   string
+	Body      []byte
+	ExpiresAt *time.Time
+	CreatedAt time.Time
 }

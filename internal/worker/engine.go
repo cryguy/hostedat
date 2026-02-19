@@ -206,6 +206,8 @@ func (e *Engine) GetOrCreatePool(siteID string, deployKey string, env *Env) (*v8
 		setupURLPattern,
 		// Streams: ReadableStream, WritableStream, TransformStream
 		setupStreams,
+		// TextStreams: TextEncoderStream, TextDecoderStream, IdentityTransformStream
+		setupTextStreams,
 		// FormData: FormData, Blob, File
 		setupFormData,
 		// Compression: CompressionStream, DecompressionStream
@@ -236,6 +238,10 @@ func (e *Engine) GetOrCreatePool(siteID string, deployKey string, env *Env) (*v8
 		setupEventSource,
 		// TCP Sockets: connect() for outbound TCP connections
 		setupTCPSocket,
+		// D1: SQL database bindings (per-binding setup in buildEnvObject)
+		setupD1,
+		// Cache: Cache API (caches.default, caches.open)
+		setupCache,
 	}
 
 	pool, err := newV8Pool(cfg.PoolSize, source, setupFns, e.config.MemoryLimitMB)
@@ -254,8 +260,11 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 	start := time.Now()
 	result = &WorkerResult{}
 
-	// Set engine reference so buildEnvObject can wire up service bindings.
+	// Set engine and DB references so buildEnvObject can wire up service bindings
+	// and global APIs like Cache can access the database.
 	env.engine = e
+	env.db = e.db
+	env.d1DataDir = e.config.DataDir
 
 	// Ensure source is loaded (handles server restart).
 	if err := e.EnsureSource(siteID, deployKey); err != nil {
@@ -493,6 +502,8 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 	result = &WorkerResult{}
 
 	env.engine = e
+	env.db = e.db
+	env.d1DataDir = e.config.DataDir
 
 	if err := e.EnsureSource(siteID, deployKey); err != nil {
 		result.Error = err
@@ -677,6 +688,8 @@ func (e *Engine) ExecuteTail(siteID string, deployKey string, env *Env, events [
 	result = &WorkerResult{}
 
 	env.engine = e
+	env.db = e.db
+	env.d1DataDir = e.config.DataDir
 
 	if err := e.EnsureSource(siteID, deployKey); err != nil {
 		result.Error = err

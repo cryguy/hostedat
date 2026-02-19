@@ -471,3 +471,228 @@ func TestAbort_SignalTimeoutListenerFires(t *testing.T) {
 		t.Error("abort listener should fire after timeout")
 	}
 }
+
+func TestCustomEvent_DefaultDetail(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const event = new CustomEvent("test");
+    return Response.json({ detail: event.detail, type: event.type });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Detail interface{} `json:"detail"`
+		Type   string      `json:"type"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Detail != nil {
+		t.Errorf("detail should default to null, got %v", data.Detail)
+	}
+	if data.Type != "test" {
+		t.Errorf("type = %q, want 'test'", data.Type)
+	}
+}
+
+func TestCustomEvent_StringDetail(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const event = new CustomEvent("test", { detail: "hello" });
+    return Response.json({ detail: event.detail });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Detail != "hello" {
+		t.Errorf("detail = %q, want 'hello'", data.Detail)
+	}
+}
+
+func TestCustomEvent_ObjectDetail(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const event = new CustomEvent("test", { detail: { foo: 42 } });
+    return Response.json({ foo: event.detail.foo });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Foo int `json:"foo"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Foo != 42 {
+		t.Errorf("detail.foo = %d, want 42", data.Foo)
+	}
+}
+
+func TestCustomEvent_ExplicitNullDetail(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const event = new CustomEvent("test", { detail: null });
+    return Response.json({ detail: event.detail, isNull: event.detail === null });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Detail interface{} `json:"detail"`
+		IsNull bool        `json:"isNull"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.IsNull {
+		t.Error("explicit null detail should remain null")
+	}
+}
+
+func TestCustomEvent_FalsyZeroDetail(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const event = new CustomEvent("test", { detail: 0 });
+    return Response.json({ detail: event.detail });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Detail float64 `json:"detail"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Detail != 0 {
+		t.Errorf("detail = %v, want 0", data.Detail)
+	}
+}
+
+func TestCustomEvent_InheritsEventOptions(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const event = new CustomEvent("test", { bubbles: true, detail: "x" });
+    return Response.json({ bubbles: event.bubbles, detail: event.detail, type: event.type });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Bubbles bool   `json:"bubbles"`
+		Detail  string `json:"detail"`
+		Type    string `json:"type"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Bubbles {
+		t.Error("bubbles should be true")
+	}
+	if data.Detail != "x" {
+		t.Errorf("detail = %q, want 'x'", data.Detail)
+	}
+	if data.Type != "test" {
+		t.Errorf("type = %q, want 'test'", data.Type)
+	}
+}
+
+func TestCustomEvent_InstanceOf(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const event = new CustomEvent("test", { detail: "y" });
+    return Response.json({
+      isEvent: event instanceof Event,
+      isCustomEvent: event instanceof CustomEvent,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		IsEvent       bool `json:"isEvent"`
+		IsCustomEvent bool `json:"isCustomEvent"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.IsEvent {
+		t.Error("CustomEvent instance should satisfy instanceof Event")
+	}
+	if !data.IsCustomEvent {
+		t.Error("CustomEvent instance should satisfy instanceof CustomEvent")
+	}
+}
+
+func TestCustomEvent_DispatchAndDetailAccess(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const target = new EventTarget();
+    let capturedDetail = undefined;
+    target.addEventListener("custom", (e) => { capturedDetail = e.detail; });
+    target.dispatchEvent(new CustomEvent("custom", { detail: { value: 99 } }));
+    return Response.json({ capturedDetail });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		CapturedDetail struct {
+			Value int `json:"value"`
+		} `json:"capturedDetail"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.CapturedDetail.Value != 99 {
+		t.Errorf("capturedDetail.value = %d, want 99", data.CapturedDetail.Value)
+	}
+}

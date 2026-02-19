@@ -107,7 +107,7 @@ func setupHTMLRewriter(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 
 // handlerSpec describes a registered selector handler from JS.
 type handlerSpec struct {
-	selector   *cssSelector
+	selector   *compoundSelector
 	handlerIdx int
 }
 
@@ -148,7 +148,7 @@ func rewriteHTML(iso *v8.Isolate, ctx *v8.Context, htmlStr string) (string, erro
 		if err != nil {
 			continue
 		}
-		sel := parseSelector(selVal.String())
+		sel := parseCompoundSelector(selVal.String())
 		specs = append(specs, handlerSpec{selector: sel, handlerIdx: i})
 	}
 
@@ -158,6 +158,35 @@ func rewriteHTML(iso *v8.Isolate, ctx *v8.Context, htmlStr string) (string, erro
 
 	var matchStack []*matchedElement
 	depth := 0
+
+	// DOM context tracking for combinator matching.
+	// elementStack tracks open elements (ancestors of the current position).
+	var elementStack []elementInfo
+	// siblingMap tracks previous siblings at each depth level.
+	// Key is depth, value is ordered list of element infos at that depth.
+	siblingMap := make(map[int][]elementInfo)
+
+	// needsContext is true if any spec uses combinators.
+	needsContext := false
+	for _, spec := range specs {
+		if !spec.selector.isSimple() {
+			needsContext = true
+			break
+		}
+	}
+
+	// selectorMatches checks whether a spec matches the given element,
+	// using context-aware matching for compound selectors.
+	selectorMatches := func(spec handlerSpec, tagName string, attrs map[string]string) bool {
+		if spec.selector.isSimple() {
+			return spec.selector.subject().matches(tagName, attrs)
+		}
+		var siblings []elementInfo
+		if needsContext {
+			siblings = siblingMap[depth]
+		}
+		return spec.selector.matchesWithContext(tagName, attrs, elementStack, siblings)
+	}
 
 	for {
 		tt := tokenizer.Next()
@@ -185,7 +214,7 @@ func rewriteHTML(iso *v8.Isolate, ctx *v8.Context, htmlStr string) (string, erro
 			// Check selectors.
 			matched := false
 			for _, spec := range specs {
-				if !spec.selector.matches(token.Data, attrs) {
+				if !selectorMatches(spec, token.Data, attrs) {
 					continue
 				}
 				mutations := callElementHandler(iso, ctx, spec.handlerIdx, token.Data, attrs)
@@ -265,6 +294,18 @@ func rewriteHTML(iso *v8.Isolate, ctx *v8.Context, htmlStr string) (string, erro
 				out.WriteString(token.String())
 			}
 
+			// Update DOM context: record this element as a sibling at current depth,
+			// then push onto element stack if not void.
+			if needsContext {
+				info := elementInfo{tagName: token.Data, attrs: attrs, depth: depth}
+				siblingMap[depth] = append(siblingMap[depth], info)
+				if !isVoid {
+					elementStack = append(elementStack, info)
+					// Clear sibling tracking for the new child depth.
+					delete(siblingMap, depth+1)
+				}
+			}
+
 			// Void elements have no end tag — undo depth increment.
 			if isVoid {
 				depth--
@@ -289,6 +330,14 @@ func rewriteHTML(iso *v8.Isolate, ctx *v8.Context, htmlStr string) (string, erro
 					break
 				}
 			}
+
+			// Pop element stack for context tracking.
+			if needsContext && len(elementStack) > 0 && elementStack[len(elementStack)-1].depth == depth {
+				elementStack = elementStack[:len(elementStack)-1]
+				// Clear sibling tracking for the depth we're leaving.
+				delete(siblingMap, depth+1)
+			}
+
 			depth--
 
 			// Skip if inside a removed/replaced parent or this element was removed.
@@ -393,7 +442,7 @@ func rewriteHTML(iso *v8.Isolate, ctx *v8.Context, htmlStr string) (string, erro
 			handled := false
 
 			for _, spec := range specs {
-				if !spec.selector.matches(token.Data, attrs) {
+				if !selectorMatches(spec, token.Data, attrs) {
 					continue
 				}
 				mutations := callElementHandler(iso, ctx, spec.handlerIdx, token.Data, attrs)
@@ -420,6 +469,12 @@ func rewriteHTML(iso *v8.Isolate, ctx *v8.Context, htmlStr string) (string, erro
 				}
 				out.WriteString(mutations.After)
 				break
+			}
+
+			// Track self-closing elements as siblings for context.
+			if needsContext {
+				info := elementInfo{tagName: token.Data, attrs: attrs, depth: depth + 1}
+				siblingMap[depth+1] = append(siblingMap[depth+1], info)
 			}
 
 			if !handled {

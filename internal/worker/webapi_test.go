@@ -150,6 +150,89 @@ func TestWebAPI_ResponseRedirectDefault302(t *testing.T) {
 	}
 }
 
+func TestWebAPI_ResponseRedirectValidStatuses(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const valid = [301, 302, 303, 307, 308];
+    const results = [];
+    for (const s of valid) {
+      try {
+        const r = Response.redirect("https://example.com/ok", s);
+        results.push({ status: s, ok: true, actual: r.status });
+      } catch(e) {
+        results.push({ status: s, ok: false, error: e.message });
+      }
+    }
+    return Response.json({ results });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Results []struct {
+			Status int  `json:"status"`
+			Ok     bool `json:"ok"`
+			Actual int  `json:"actual"`
+		} `json:"results"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	for _, res := range data.Results {
+		if !res.Ok {
+			t.Errorf("Response.redirect with status %d should succeed", res.Status)
+		}
+		if res.Actual != res.Status {
+			t.Errorf("status %d: actual = %d", res.Status, res.Actual)
+		}
+	}
+}
+
+func TestWebAPI_ResponseRedirectInvalidStatusThrows(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const invalid = [200, 204, 400, 404, 500];
+    const results = [];
+    for (const s of invalid) {
+      try {
+        Response.redirect("https://example.com/bad", s);
+        results.push({ status: s, threw: false });
+      } catch(e) {
+        results.push({ status: s, threw: true, name: e.constructor.name, msg: e.message });
+      }
+    }
+    return Response.json({ results });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Results []struct {
+			Status int    `json:"status"`
+			Threw  bool   `json:"threw"`
+			Name   string `json:"name"`
+			Msg    string `json:"msg"`
+		} `json:"results"`
+	}
+	json.Unmarshal(r.Response.Body, &data)
+	for _, res := range data.Results {
+		if !res.Threw {
+			t.Errorf("Response.redirect with status %d should throw RangeError", res.Status)
+		}
+		if res.Name != "RangeError" {
+			t.Errorf("status %d: error type = %q, want RangeError", res.Status, res.Name)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Integration: Request.clone
 // ---------------------------------------------------------------------------
@@ -1282,5 +1365,384 @@ func TestWebAPI_HeadersSetGetDelete(t *testing.T) {
 	}
 	if data.AfterDelete {
 		t.Error("should not have X-Custom after delete")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Response.redirect edge cases
+// ---------------------------------------------------------------------------
+
+func TestWebAPI_ResponseRedirectRelativeURL(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    let threw = false;
+    let location = null;
+    let status = 0;
+    try {
+      const r = Response.redirect("/relative");
+      location = r.headers.get("location");
+      status = r.status;
+    } catch(e) {
+      threw = true;
+    }
+    return Response.json({ threw, location, status });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw    bool   `json:"threw"`
+		Location string `json:"location"`
+		Status   int    `json:"status"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Either it throws (relative URL not allowed) or produces location=/relative
+	if data.Threw {
+		return
+	}
+	if data.Location != "/relative" {
+		t.Errorf("location = %q, want '/relative'", data.Location)
+	}
+	if data.Status != 302 {
+		t.Errorf("status = %d, want 302", data.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Integration: Response.error()
+// ---------------------------------------------------------------------------
+
+func TestResponse_Error(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const r = Response.error();
+    return Response.json({
+      status: r.status,
+      statusText: r.statusText,
+      bodyIsNull: r._body === null,
+      type: r.type,
+      headerCount: Object.keys(r.headers._map).length,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Status      int    `json:"status"`
+		StatusText  string `json:"statusText"`
+		BodyIsNull  bool   `json:"bodyIsNull"`
+		Type        string `json:"type"`
+		HeaderCount int    `json:"headerCount"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Status != 0 {
+		t.Errorf("status = %d, want 0", data.Status)
+	}
+	if data.StatusText != "" {
+		t.Errorf("statusText = %q, want empty", data.StatusText)
+	}
+	if !data.BodyIsNull {
+		t.Error("Response.error() body should be null")
+	}
+	if data.Type != "error" {
+		t.Errorf("type = %q, want 'error'", data.Type)
+	}
+	if data.HeaderCount != 0 {
+		t.Errorf("headerCount = %d, want 0", data.HeaderCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Integration: Request.bytes()
+// ---------------------------------------------------------------------------
+
+func TestRequest_Bytes(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const req = new Request("https://example.com/", {
+      method: "POST",
+      body: "hello",
+    });
+    const bytes = await req.bytes();
+    const decoded = new TextDecoder().decode(bytes);
+    return Response.json({
+      isUint8Array: bytes instanceof Uint8Array,
+      byteLength: bytes.byteLength,
+      decoded,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		IsUint8Array bool   `json:"isUint8Array"`
+		ByteLength   int    `json:"byteLength"`
+		Decoded      string `json:"decoded"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.IsUint8Array {
+		t.Error("bytes() should return a Uint8Array")
+	}
+	if data.ByteLength != 5 {
+		t.Errorf("byteLength = %d, want 5", data.ByteLength)
+	}
+	if data.Decoded != "hello" {
+		t.Errorf("decoded = %q, want 'hello'", data.Decoded)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Integration: Response.bytes()
+// ---------------------------------------------------------------------------
+
+func TestResponse_Bytes(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const resp = new Response("world");
+    const bytes = await resp.bytes();
+    const decoded = new TextDecoder().decode(bytes);
+    return Response.json({
+      isUint8Array: bytes instanceof Uint8Array,
+      byteLength: bytes.byteLength,
+      decoded,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		IsUint8Array bool   `json:"isUint8Array"`
+		ByteLength   int    `json:"byteLength"`
+		Decoded      string `json:"decoded"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.IsUint8Array {
+		t.Error("bytes() should return a Uint8Array")
+	}
+	if data.ByteLength != 5 {
+		t.Errorf("byteLength = %d, want 5", data.ByteLength)
+	}
+	if data.Decoded != "world" {
+		t.Errorf("decoded = %q, want 'world'", data.Decoded)
+	}
+}
+
+func TestResponse_Bytes_EmptyBody(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const resp = new Response(null);
+    const bytes = await resp.bytes();
+    return Response.json({
+      isUint8Array: bytes instanceof Uint8Array,
+      byteLength: bytes.byteLength,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		IsUint8Array bool `json:"isUint8Array"`
+		ByteLength   int  `json:"byteLength"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.IsUint8Array {
+		t.Error("bytes() on null body should return a Uint8Array")
+	}
+	if data.ByteLength != 0 {
+		t.Errorf("byteLength = %d, want 0", data.ByteLength)
+	}
+}
+
+func TestResponse_Bytes_CalledTwice(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Note: the current implementation uses .text() which reads _body as a
+	// string (no locking), so calling bytes() twice works the same as calling
+	// text() twice. This test verifies the second call still succeeds and
+	// returns the same data (consistent with the existing arrayBuffer behaviour).
+	source := `export default {
+  async fetch(request, env) {
+    const resp = new Response("data");
+    const b1 = await resp.bytes();
+    const b2 = await resp.bytes();
+    return Response.json({
+      first: new TextDecoder().decode(b1),
+      second: new TextDecoder().decode(b2),
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		First  string `json:"first"`
+		Second string `json:"second"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.First != "data" {
+		t.Errorf("first = %q, want 'data'", data.First)
+	}
+	if data.Second != "data" {
+		t.Errorf("second = %q, want 'data'", data.Second)
+	}
+}
+
+func TestWebAPI_ResponseRedirectBodyIsNull(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const r = Response.redirect("https://example.com", 302);
+    return Response.json({
+      bodyIsNull: r.body === null,
+      status: r.status,
+      location: r.headers.get("location"),
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		BodyIsNull bool   `json:"bodyIsNull"`
+		Status     int    `json:"status"`
+		Location   string `json:"location"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.BodyIsNull {
+		t.Error("Response.redirect body should be null")
+	}
+	if data.Status != 302 {
+		t.Errorf("status = %d, want 302", data.Status)
+	}
+	if data.Location != "https://example.com" {
+		t.Errorf("location = %q, want 'https://example.com'", data.Location)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Integration: URL.canParse static method
+// ---------------------------------------------------------------------------
+
+func TestURL_CanParse(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const results = {
+      isFunction:            typeof URL.canParse === 'function',
+      absoluteHTTPS:         URL.canParse("https://example.com"),
+      absoluteWithPathQuery: URL.canParse("https://example.com/path?q=1#hash"),
+      notAURL:               URL.canParse("not a url"),
+      empty:                 URL.canParse(""),
+      relativeWithBase:      URL.canParse("/path", "https://example.com"),
+      relativeNoBase:        URL.canParse("/path"),
+      withPort:              URL.canParse("https://example.com:8080"),
+      ipv6:                  URL.canParse("http://[::1]"),
+      nullArg:               URL.canParse(null),
+      undefinedArg:          URL.canParse(undefined),
+    };
+    return Response.json(results);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		IsFunction            bool `json:"isFunction"`
+		AbsoluteHTTPS         bool `json:"absoluteHTTPS"`
+		AbsoluteWithPathQuery bool `json:"absoluteWithPathQuery"`
+		NotAURL               bool `json:"notAURL"`
+		Empty                 bool `json:"empty"`
+		RelativeWithBase      bool `json:"relativeWithBase"`
+		RelativeNoBase        bool `json:"relativeNoBase"`
+		WithPort              bool `json:"withPort"`
+		IPv6                  bool `json:"ipv6"`
+		NullArg               bool `json:"nullArg"`
+		UndefinedArg          bool `json:"undefinedArg"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if !data.IsFunction {
+		t.Error("URL.canParse should be a function")
+	}
+	if !data.AbsoluteHTTPS {
+		t.Error("URL.canParse('https://example.com') should be true")
+	}
+	if !data.AbsoluteWithPathQuery {
+		t.Error("URL.canParse('https://example.com/path?q=1#hash') should be true")
+	}
+	if data.NotAURL {
+		t.Error("URL.canParse('not a url') should be false")
+	}
+	if data.Empty {
+		t.Error("URL.canParse('') should be false")
+	}
+	if !data.RelativeWithBase {
+		t.Error("URL.canParse('/path', 'https://example.com') should be true")
+	}
+	if data.RelativeNoBase {
+		t.Error("URL.canParse('/path') without base should be false")
+	}
+	if !data.WithPort {
+		t.Error("URL.canParse('https://example.com:8080') should be true")
+	}
+	if !data.IPv6 {
+		t.Error("URL.canParse('http://[::1]') should be true")
+	}
+	// null coerces to string "null" which has no scheme, so should be false
+	if data.NullArg {
+		t.Error("URL.canParse(null) should be false")
+	}
+	// undefined coerces to string "undefined" which has no scheme, so should be false
+	if data.UndefinedArg {
+		t.Error("URL.canParse(undefined) should be false")
 	}
 }

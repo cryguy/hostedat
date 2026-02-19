@@ -275,3 +275,215 @@ func TestCssSelector_Matches_Combined(t *testing.T) {
 		t.Error("should not match wrong attribute value")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Compound selector (combinator) parsing tests
+// ---------------------------------------------------------------------------
+
+func TestParseCompoundSelector_Simple(t *testing.T) {
+	cs := parseCompoundSelector("div")
+	if !cs.isSimple() {
+		t.Error("single selector should be simple")
+	}
+	if cs.subject().Tag != "div" {
+		t.Errorf("subject tag = %q, want 'div'", cs.subject().Tag)
+	}
+}
+
+func TestParseCompoundSelector_ChildCombinator(t *testing.T) {
+	cs := parseCompoundSelector("div > p")
+	if cs.isSimple() {
+		t.Error("child combinator should not be simple")
+	}
+	if len(cs.parts) != 2 {
+		t.Fatalf("parts len = %d, want 2", len(cs.parts))
+	}
+	if cs.parts[0].sel.Tag != "div" {
+		t.Errorf("parts[0] tag = %q, want 'div'", cs.parts[0].sel.Tag)
+	}
+	if cs.parts[0].combinator != combinatorChild {
+		t.Errorf("combinator = %d, want child", cs.parts[0].combinator)
+	}
+	if cs.parts[1].sel.Tag != "p" {
+		t.Errorf("parts[1] tag = %q, want 'p'", cs.parts[1].sel.Tag)
+	}
+}
+
+func TestParseCompoundSelector_DescendantCombinator(t *testing.T) {
+	cs := parseCompoundSelector("div p")
+	if cs.isSimple() {
+		t.Error("descendant combinator should not be simple")
+	}
+	if len(cs.parts) != 2 {
+		t.Fatalf("parts len = %d, want 2", len(cs.parts))
+	}
+	if cs.parts[0].combinator != combinatorDescendant {
+		t.Errorf("combinator = %d, want descendant", cs.parts[0].combinator)
+	}
+}
+
+func TestParseCompoundSelector_AdjacentSibling(t *testing.T) {
+	cs := parseCompoundSelector("h1 + p")
+	if len(cs.parts) != 2 {
+		t.Fatalf("parts len = %d, want 2", len(cs.parts))
+	}
+	if cs.parts[0].sel.Tag != "h1" {
+		t.Errorf("parts[0] tag = %q", cs.parts[0].sel.Tag)
+	}
+	if cs.parts[0].combinator != combinatorAdjacentSibling {
+		t.Errorf("combinator = %d, want adjacent sibling", cs.parts[0].combinator)
+	}
+	if cs.parts[1].sel.Tag != "p" {
+		t.Errorf("parts[1] tag = %q", cs.parts[1].sel.Tag)
+	}
+}
+
+func TestParseCompoundSelector_GeneralSibling(t *testing.T) {
+	cs := parseCompoundSelector("h1 ~ p")
+	if len(cs.parts) != 2 {
+		t.Fatalf("parts len = %d, want 2", len(cs.parts))
+	}
+	if cs.parts[0].combinator != combinatorGeneralSibling {
+		t.Errorf("combinator = %d, want general sibling", cs.parts[0].combinator)
+	}
+}
+
+func TestParseCompoundSelector_ThreeParts(t *testing.T) {
+	cs := parseCompoundSelector("div > ul > li")
+	if len(cs.parts) != 3 {
+		t.Fatalf("parts len = %d, want 3", len(cs.parts))
+	}
+	if cs.parts[0].sel.Tag != "div" || cs.parts[0].combinator != combinatorChild {
+		t.Errorf("parts[0] = %+v", cs.parts[0])
+	}
+	if cs.parts[1].sel.Tag != "ul" || cs.parts[1].combinator != combinatorChild {
+		t.Errorf("parts[1] = %+v", cs.parts[1])
+	}
+	if cs.parts[2].sel.Tag != "li" {
+		t.Errorf("parts[2] tag = %q", cs.parts[2].sel.Tag)
+	}
+}
+
+func TestParseCompoundSelector_MixedCombinators(t *testing.T) {
+	cs := parseCompoundSelector("div p > span")
+	if len(cs.parts) != 3 {
+		t.Fatalf("parts len = %d, want 3", len(cs.parts))
+	}
+	if cs.parts[0].combinator != combinatorDescendant {
+		t.Errorf("parts[0] combinator = %d, want descendant", cs.parts[0].combinator)
+	}
+	if cs.parts[1].combinator != combinatorChild {
+		t.Errorf("parts[1] combinator = %d, want child", cs.parts[1].combinator)
+	}
+}
+
+func TestParseCompoundSelector_WithClassAndID(t *testing.T) {
+	cs := parseCompoundSelector("div.container > p#intro")
+	if len(cs.parts) != 2 {
+		t.Fatalf("parts len = %d, want 2", len(cs.parts))
+	}
+	if cs.parts[0].sel.Tag != "div" || len(cs.parts[0].sel.Classes) != 1 || cs.parts[0].sel.Classes[0] != "container" {
+		t.Errorf("parts[0] = tag=%q classes=%v", cs.parts[0].sel.Tag, cs.parts[0].sel.Classes)
+	}
+	if cs.parts[1].sel.Tag != "p" || cs.parts[1].sel.ID != "intro" {
+		t.Errorf("parts[1] = tag=%q id=%q", cs.parts[1].sel.Tag, cs.parts[1].sel.ID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Compound selector context matching tests
+// ---------------------------------------------------------------------------
+
+func TestCompoundSelector_MatchesChild(t *testing.T) {
+	cs := parseCompoundSelector("div > p")
+	ancestors := []elementInfo{
+		{tagName: "div", attrs: nil, depth: 1},
+	}
+	if !cs.matchesWithContext("p", nil, ancestors, nil) {
+		t.Error("p should match 'div > p' with div parent")
+	}
+	// Wrong parent.
+	ancestors2 := []elementInfo{
+		{tagName: "span", attrs: nil, depth: 1},
+	}
+	if cs.matchesWithContext("p", nil, ancestors2, nil) {
+		t.Error("p should not match 'div > p' with span parent")
+	}
+}
+
+func TestCompoundSelector_MatchesDescendant(t *testing.T) {
+	cs := parseCompoundSelector("div p")
+	ancestors := []elementInfo{
+		{tagName: "div", attrs: nil, depth: 1},
+		{tagName: "section", attrs: nil, depth: 2},
+	}
+	if !cs.matchesWithContext("p", nil, ancestors, nil) {
+		t.Error("p should match 'div p' with div as grandparent")
+	}
+}
+
+func TestCompoundSelector_MatchesAdjacentSibling(t *testing.T) {
+	cs := parseCompoundSelector("h1 + p")
+	siblings := []elementInfo{
+		{tagName: "h1", attrs: nil, depth: 1},
+	}
+	if !cs.matchesWithContext("p", nil, nil, siblings) {
+		t.Error("p should match 'h1 + p' with h1 as previous sibling")
+	}
+	// Non-adjacent sibling.
+	siblings2 := []elementInfo{
+		{tagName: "h1", attrs: nil, depth: 1},
+		{tagName: "span", attrs: nil, depth: 1},
+	}
+	if cs.matchesWithContext("p", nil, nil, siblings2) {
+		t.Error("p should not match 'h1 + p' when h1 is not immediately preceding")
+	}
+}
+
+func TestCompoundSelector_MatchesGeneralSibling(t *testing.T) {
+	cs := parseCompoundSelector("h1 ~ p")
+	siblings := []elementInfo{
+		{tagName: "h1", attrs: nil, depth: 1},
+		{tagName: "span", attrs: nil, depth: 1},
+	}
+	if !cs.matchesWithContext("p", nil, nil, siblings) {
+		t.Error("p should match 'h1 ~ p' with h1 as any preceding sibling")
+	}
+}
+
+func TestCompoundSelector_NoAncestors(t *testing.T) {
+	cs := parseCompoundSelector("div > p")
+	if cs.matchesWithContext("p", nil, nil, nil) {
+		t.Error("p should not match 'div > p' with no ancestors")
+	}
+}
+
+func TestCompoundSelector_DeepChain(t *testing.T) {
+	cs := parseCompoundSelector("div > ul > li")
+	ancestors := []elementInfo{
+		{tagName: "div", attrs: nil, depth: 1},
+		{tagName: "ul", attrs: nil, depth: 2},
+	}
+	if !cs.matchesWithContext("li", nil, ancestors, nil) {
+		t.Error("li should match 'div > ul > li' with correct ancestor chain")
+	}
+	// Wrong intermediate.
+	ancestors2 := []elementInfo{
+		{tagName: "div", attrs: nil, depth: 1},
+		{tagName: "ol", attrs: nil, depth: 2},
+	}
+	if cs.matchesWithContext("li", nil, ancestors2, nil) {
+		t.Error("li should not match 'div > ul > li' with ol instead of ul")
+	}
+}
+
+func TestCompoundSelector_DescendantWithAttributes(t *testing.T) {
+	cs := parseCompoundSelector(".container span")
+	ancestors := []elementInfo{
+		{tagName: "div", attrs: map[string]string{"class": "container wide"}, depth: 1},
+		{tagName: "p", attrs: nil, depth: 2},
+	}
+	if !cs.matchesWithContext("span", nil, ancestors, nil) {
+		t.Error("span should match '.container span' with .container ancestor")
+	}
+}

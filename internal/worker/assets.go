@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/cryguy/hostedat/internal/storage"
-	v8 "github.com/tommie/v8go"
 	minio "github.com/minio/minio-go/v7"
+	v8 "github.com/tommie/v8go"
 	"gorm.io/gorm"
 )
 
@@ -363,6 +363,29 @@ func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, min
 				return nil, fmt.Errorf("building service binding %q: %w", name, err)
 			}
 			envObj.Set(name, sbVal)
+		}
+	}
+
+	// D1 database bindings — each gets its own isolated SQLite database.
+	if env.D1Bindings != nil {
+		for name, dbID := range env.D1Bindings {
+			var bridge *D1Bridge
+			var err error
+			if env.d1DataDir != "" {
+				bridge, err = OpenD1Database(env.d1DataDir, dbID)
+			} else {
+				// Fallback to in-memory for tests or when no data dir is configured.
+				bridge, err = NewD1BridgeMemory(dbID)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("opening D1 database %q: %w", name, err)
+			}
+			d1Val, err := buildD1Binding(iso, ctx, bridge)
+			if err != nil {
+				bridge.Close()
+				return nil, fmt.Errorf("building D1 binding %q: %w", name, err)
+			}
+			envObj.Set(name, d1Val)
 		}
 	}
 

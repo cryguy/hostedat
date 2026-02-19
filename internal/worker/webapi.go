@@ -58,6 +58,9 @@ class URL {
 		this.searchParams._url = this;
 	}
 	toString() { return this.href; }
+	static canParse(url, base) {
+		try { new URL(url, base); return true; } catch { return false; }
+	}
 }
 
 class URLSearchParams {
@@ -135,6 +138,10 @@ class Request {
 		const enc = new TextEncoder();
 		return enc.encode(t).buffer;
 	}
+	async bytes() {
+		const t = await this.text();
+		return new TextEncoder().encode(t);
+	}
 	clone() { return new Request(this); }
 }
 
@@ -181,6 +188,10 @@ class Response {
 		const enc = new TextEncoder();
 		return enc.encode(t).buffer;
 	}
+	async bytes() {
+		const t = await this.text();
+		return new TextEncoder().encode(t);
+	}
 	clone() {
 		return new Response(this._body, {
 			status: this.status,
@@ -197,7 +208,15 @@ class Response {
 	}
 	static redirect(url, status) {
 		status = status || 302;
+		if ([301, 302, 303, 307, 308].indexOf(status) === -1) {
+			throw new RangeError('Invalid redirect status: ' + status);
+		}
 		return new Response(null, { status, headers: { location: url } });
+	}
+	static error() {
+		const r = new Response(null, { status: 0, statusText: '' });
+		r.type = 'error';
+		return r;
 	}
 }
 

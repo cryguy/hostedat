@@ -55,6 +55,7 @@ func InitDB(cfg config.DBConfig) (*gorm.DB, error) {
 		&StorageBucket{},
 		&S3Credential{},
 		&RevokedToken{},
+		&CacheEntry{},
 	); err != nil {
 		closeDB()
 		return nil, fmt.Errorf("auto-migrating: %w", err)

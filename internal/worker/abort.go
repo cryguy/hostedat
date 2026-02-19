@@ -120,11 +120,19 @@ class ScheduledEvent extends Event {
 	}
 }
 
+class CustomEvent extends Event {
+	constructor(type, options) {
+		super(type, options);
+		this.detail = (options && options.detail !== undefined) ? options.detail : null;
+	}
+}
+
 globalThis.Event = Event;
 globalThis.EventTarget = EventTarget;
 globalThis.AbortSignal = AbortSignal;
 globalThis.AbortController = AbortController;
 globalThis.ScheduledEvent = ScheduledEvent;
+globalThis.CustomEvent = CustomEvent;
 `
 
 // setupAbort evaluates the AbortController/AbortSignal polyfills.

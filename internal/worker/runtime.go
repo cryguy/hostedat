@@ -1,10 +1,12 @@
 package worker
 
 import (
+	"context"
 	"hash"
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,17 +40,25 @@ type requestState struct {
 	wsClosed bool
 
 	// DigestStream state: per-request hash instances keyed by stream ID.
-	digestStreams   map[string]hash.Hash
-	nextDigestID   int64
+	digestStreams map[string]hash.Hash
+	nextDigestID  int64
 
 	// EventSource state: per-request SSE connections keyed by source ID.
-	eventSources   map[string]*eventSourceState
-	nextSourceID   int64
+	eventSources map[string]*eventSourceState
+	nextSourceID int64
 
 	// TCP socket state: per-request TCP connections keyed by socket ID.
 	tcpSockets       map[string]net.Conn
 	tcpSocketBuffers map[string]*tcpSocketBuffer
 	nextTCPSocketID  int64
+
+	// Compression stream state: per-request streaming compressors/decompressors.
+	compressStreams map[string]*compressStreamState
+	nextCompressID  int64
+
+	// In-flight fetch cancellation: maps fetchID -> cancel function.
+	fetchCancels map[string]context.CancelFunc
+	nextFetchID  int64
 }
 
 // eventSourceState holds state for a single EventSource SSE connection.
@@ -137,4 +147,38 @@ func addLog(id uint64, level, message string) {
 		Message: message,
 		Time:    time.Now(),
 	})
+}
+
+// registerFetchCancel stores a cancel function for an in-flight fetch and
+// returns the unique fetchID string key. The cancel is keyed by reqID+fetchID.
+func registerFetchCancel(reqID uint64, cancel context.CancelFunc) string {
+	state := getRequestState(reqID)
+	if state == nil {
+		return ""
+	}
+	state.nextFetchID++
+	id := strconv.FormatInt(state.nextFetchID, 10)
+	if state.fetchCancels == nil {
+		state.fetchCancels = make(map[string]context.CancelFunc)
+	}
+	state.fetchCancels[id] = cancel
+	return id
+}
+
+// removeFetchCancel removes and returns the cancel function for a fetch.
+func removeFetchCancel(reqID uint64, fetchID string) context.CancelFunc {
+	state := getRequestState(reqID)
+	if state == nil || state.fetchCancels == nil {
+		return nil
+	}
+	cancel := state.fetchCancels[fetchID]
+	delete(state.fetchCancels, fetchID)
+	return cancel
+}
+
+// callFetchCancel calls the cancel function for the given fetch, if present.
+func callFetchCancel(reqID uint64, fetchID string) {
+	if cancel := removeFetchCancel(reqID, fetchID); cancel != nil {
+		cancel()
+	}
 }

@@ -51,6 +51,7 @@ func testDB(t *testing.T) *gorm.DB {
 		&models.StorageBucket{},
 		&models.CronSchedule{},
 		&models.Deployment{},
+		&models.CacheEntry{},
 	); err != nil {
 		t.Fatalf("auto-migrate: %v", err)
 	}

@@ -1263,3 +1263,217 @@ func TestHTMLRewriter_MultipleTextChunks(t *testing.T) {
 		t.Errorf("all text chunks should be replaced, got %q", body)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Combinator selector integration tests
+// ---------------------------------------------------------------------------
+
+func TestHTMLRewriter_ChildCombinator(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    var html = '<div><p>Direct child</p><span><p>Nested grandchild</p></span></div>';
+    var res = new Response(html, { headers: { 'Content-Type': 'text/html' } });
+    return new HTMLRewriter()
+      .on('div > p', {
+        element: function(el) {
+          el.setAttribute('class', 'matched');
+        }
+      })
+      .transform(res);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	body := string(r.Response.Body)
+	// Only the direct child <p> should be matched, not the grandchild.
+	count := strings.Count(body, `class="matched"`)
+	if count != 1 {
+		t.Errorf("expected 1 matched p (direct child), got %d in %q", count, body)
+	}
+	if !strings.Contains(body, "Direct child") {
+		t.Errorf("body should contain direct child text, got %q", body)
+	}
+}
+
+func TestHTMLRewriter_DescendantCombinator(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    var html = '<div><p>Child</p><section><p>Grandchild</p></section></div><p>Outside</p>';
+    var res = new Response(html, { headers: { 'Content-Type': 'text/html' } });
+    return new HTMLRewriter()
+      .on('div p', {
+        element: function(el) {
+          el.setAttribute('class', 'inside-div');
+        }
+      })
+      .transform(res);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	body := string(r.Response.Body)
+	// Both p's inside div should match, but not the one outside.
+	count := strings.Count(body, `class="inside-div"`)
+	if count != 2 {
+		t.Errorf("expected 2 descendant p's matched, got %d in %q", count, body)
+	}
+}
+
+func TestHTMLRewriter_AdjacentSiblingCombinator(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    var html = '<div><h1>Title</h1><p>First para</p><p>Second para</p></div>';
+    var res = new Response(html, { headers: { 'Content-Type': 'text/html' } });
+    return new HTMLRewriter()
+      .on('h1 + p', {
+        element: function(el) {
+          el.setAttribute('class', 'after-h1');
+        }
+      })
+      .transform(res);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	body := string(r.Response.Body)
+	// Only the first <p> immediately after <h1> should match.
+	count := strings.Count(body, `class="after-h1"`)
+	if count != 1 {
+		t.Errorf("expected 1 adjacent sibling match, got %d in %q", count, body)
+	}
+	if !strings.Contains(body, "First para") {
+		t.Errorf("body should contain first para text, got %q", body)
+	}
+}
+
+func TestHTMLRewriter_GeneralSiblingCombinator(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    var html = '<div><h1>Title</h1><span>Gap</span><p>Para 1</p><p>Para 2</p></div>';
+    var res = new Response(html, { headers: { 'Content-Type': 'text/html' } });
+    return new HTMLRewriter()
+      .on('h1 ~ p', {
+        element: function(el) {
+          el.setAttribute('class', 'sibling-of-h1');
+        }
+      })
+      .transform(res);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	body := string(r.Response.Body)
+	// Both p's follow h1 (not necessarily immediately), so both should match.
+	count := strings.Count(body, `class="sibling-of-h1"`)
+	if count != 2 {
+		t.Errorf("expected 2 general sibling matches, got %d in %q", count, body)
+	}
+}
+
+func TestHTMLRewriter_CombinatorWithTextHandler(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    var html = '<div><p>Replace me</p></div><p>Leave me</p>';
+    var res = new Response(html, { headers: { 'Content-Type': 'text/html' } });
+    return new HTMLRewriter()
+      .on('div > p', {
+        text: function(text) {
+          if (text.text.trim()) {
+            text.replace('Replaced');
+          }
+        }
+      })
+      .transform(res);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	body := string(r.Response.Body)
+	if !strings.Contains(body, "Replaced") {
+		t.Errorf("text inside matched element should be replaced, got %q", body)
+	}
+	if !strings.Contains(body, "Leave me") {
+		t.Errorf("text outside matched element should be preserved, got %q", body)
+	}
+}
+
+func TestHTMLRewriter_NestedCombinatorChain(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    var html = '<div><ul><li>Item</li></ul></div>';
+    var res = new Response(html, { headers: { 'Content-Type': 'text/html' } });
+    return new HTMLRewriter()
+      .on('div > ul > li', {
+        element: function(el) {
+          el.setAttribute('class', 'deep-match');
+        }
+      })
+      .transform(res);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	body := string(r.Response.Body)
+	if !strings.Contains(body, `class="deep-match"`) {
+		t.Errorf("li should match 'div > ul > li', got %q", body)
+	}
+}
+
+func TestHTMLRewriter_SimpleSelectorStillWorks(t *testing.T) {
+	// Ensure simple selectors (no combinators) continue to work after refactor.
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    var html = '<div class="target">Hello</div><div>World</div>';
+    var res = new Response(html, { headers: { 'Content-Type': 'text/html' } });
+    return new HTMLRewriter()
+      .on('.target', {
+        element: function(el) {
+          el.setAttribute('data-found', 'yes');
+        }
+      })
+      .transform(res);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	body := string(r.Response.Body)
+	count := strings.Count(body, `data-found="yes"`)
+	if count != 1 {
+		t.Errorf("expected 1 match for .target, got %d in %q", count, body)
+	}
+}

@@ -16,14 +16,43 @@ import (
 	v8 "github.com/tommie/v8go"
 )
 
+// fetchSSRFEnabled controls whether the SSRF-safe dialer is used for fetch.
+// Tests set this to false so httptest servers on 127.0.0.1 are reachable.
+var fetchSSRFEnabled = true
+
+// fetchTransport is the http.RoundTripper used by fetch. Tests can override it.
+var fetchTransport http.RoundTripper = &http.Transport{
+	DialContext: ssrfSafeDialContext,
+}
+
+// fetchResult carries the outcome of an async HTTP request.
+type fetchResult struct {
+	resp *http.Response
+	err  error
+}
+
 // setupFetch registers the global fetch() function as a Go-backed function
 // backed by a PromiseResolver. It enforces per-request rate limits and blocks
 // requests to private/loopback addresses.
 //
-// The HTTP request runs synchronously on the JS thread. V8 is not thread-safe,
-// and each worker serves one request at a time, so blocking during the HTTP
-// call is acceptable.
+// The HTTP request runs in a goroutine so that an AbortSignal can cancel it
+// while the Go callback is waiting for the result. V8 is not accessed from
+// the goroutine — only the context.CancelFunc is called, which is safe.
 func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.WorkerConfig) error {
+	// __fetchAbort(reqID, fetchID) — called from JS abort listener to cancel
+	// an in-flight HTTP request. Safe to call from the JS thread at any time.
+	abortFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
+		if len(args) < 2 {
+			return nil
+		}
+		reqID := uint64(args[0].Integer())
+		fetchID := args[1].String()
+		callFetchCancel(reqID, fetchID)
+		return nil
+	})
+	ctx.Global().Set("__fetchAbort", abortFT.GetFunction(ctx))
+
 	fetchFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
@@ -58,6 +87,7 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 			delete globalThis.__tmp_fetch_arg0;
 			delete globalThis.__tmp_fetch_arg1;
 			var url = '', method = 'GET', headers = {}, body = null, bodyIsBase64 = false;
+			var redirect = 'follow', signalAborted = false, signal = null;
 			function extractBody(b) {
 				if (b == null) return;
 				if (b instanceof ArrayBuffer) {
@@ -104,6 +134,8 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 					for (var k in m) { if (m.hasOwnProperty(k)) headers[k] = String(m[k]); }
 				}
 				if (a0._body != null) extractBody(a0._body);
+				if (a0.redirect !== undefined) redirect = String(a0.redirect);
+				if (a0.signal) { signal = a0.signal; if (a0.signal.aborted) signalAborted = true; }
 			}
 			if (a1 && typeof a1 === 'object') {
 				if (a1.method !== undefined) method = String(a1.method).toUpperCase();
@@ -114,9 +146,12 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 					}
 				}
 				if (a1.body != null) extractBody(a1.body);
+				if (a1.redirect !== undefined) redirect = String(a1.redirect);
+				if (a1.signal) { signal = a1.signal; if (a1.signal.aborted) signalAborted = true; }
 			}
 			if (!method) method = 'GET';
-			return JSON.stringify({url: url, method: method, headers: headers, body: body, bodyIsBase64: bodyIsBase64});
+			globalThis.__tmp_fetch_signal = signal;
+			return JSON.stringify({url: url, method: method, headers: headers, body: body, bodyIsBase64: bodyIsBase64, redirect: redirect, signalAborted: signalAborted});
 		})()`, "fetch_extract.js")
 		if err != nil {
 			errVal, _ := v8.NewValue(iso, fmt.Sprintf("fetch: extracting arguments: %s", err.Error()))
@@ -125,11 +160,13 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 		}
 
 		var fetchArgs struct {
-			URL          string            `json:"url"`
-			Method       string            `json:"method"`
-			Headers      map[string]string `json:"headers"`
-			Body         *string           `json:"body"`
-			BodyIsBase64 bool              `json:"bodyIsBase64"`
+			URL           string            `json:"url"`
+			Method        string            `json:"method"`
+			Headers       map[string]string `json:"headers"`
+			Body          *string           `json:"body"`
+			BodyIsBase64  bool              `json:"bodyIsBase64"`
+			Redirect      string            `json:"redirect"`
+			SignalAborted bool              `json:"signalAborted"`
 		}
 		if err := json.Unmarshal([]byte(extractResult.String()), &fetchArgs); err != nil {
 			errVal, _ := v8.NewValue(iso, fmt.Sprintf("fetch: parsing arguments: %s", err.Error()))
@@ -137,8 +174,19 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 			return resolver.GetPromise().Value
 		}
 
+		// If the signal was already aborted, reject immediately (fast path).
+		if fetchArgs.SignalAborted {
+			ctx.Global().Delete("__tmp_fetch_signal")
+			abortErr, _ := ctx.RunScript(
+				`new DOMException("The operation was aborted.", "AbortError")`,
+				"fetch_abort.js")
+			resolver.Reject(abortErr)
+			return resolver.GetPromise().Value
+		}
+
 		// Block private hostnames before connecting.
-		if isPrivateHostname(fetchArgs.URL) {
+		if fetchSSRFEnabled && isPrivateHostname(fetchArgs.URL) {
+			ctx.Global().Delete("__tmp_fetch_signal")
 			errVal, _ := v8.NewValue(iso, "fetch to private IP addresses is not allowed")
 			resolver.Reject(errVal)
 			return resolver.GetPromise().Value
@@ -162,8 +210,44 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 			}
 		}
 
-		httpReq, err := http.NewRequest(fetchArgs.Method, fetchArgs.URL, bodyReader)
+		// Create a cancellable context for this fetch. The cancel function is
+		// stored in requestState so that an AbortSignal listener can trigger it
+		// from the JS thread via __fetchAbort(reqID, fetchID).
+		reqID = getReqIDFromJS(ctx)
+		fetchCtx, fetchCancel := context.WithCancel(context.Background())
+		fetchID := registerFetchCancel(reqID, fetchCancel)
+
+		// Wire the abort listener: if a signal was provided and is not yet
+		// aborted, register a JS abort event listener that calls __fetchAbort.
+		// We stored the signal in __tmp_fetch_signal during extraction.
+		if fetchID != "" {
+			fetchIDVal, _ := v8.NewValue(iso, fetchID)
+			ctx.Global().Set("__tmp_fetch_id", fetchIDVal)
+			ctx.RunScript(`(function() {
+				var sig = globalThis.__tmp_fetch_signal;
+				var fid = globalThis.__tmp_fetch_id;
+				delete globalThis.__tmp_fetch_signal;
+				delete globalThis.__tmp_fetch_id;
+				if (sig && !sig.aborted) {
+					var reqID = globalThis.__requestID;
+					var onAbort = function() {
+						sig.removeEventListener('abort', onAbort);
+						__fetchAbort(reqID, fid);
+					};
+					sig.addEventListener('abort', onAbort, {once: true});
+					globalThis.__tmp_fetch_cleanup = function() {
+						sig.removeEventListener('abort', onAbort);
+					};
+				}
+			})()`, "fetch_wire_abort.js")
+		}
+
+		httpReq, err := http.NewRequestWithContext(fetchCtx, fetchArgs.Method, fetchArgs.URL, bodyReader)
 		if err != nil {
+			fetchCancel()
+			removeFetchCancel(reqID, fetchID)
+			ctx.RunScript(`if (typeof globalThis.__tmp_fetch_cleanup === 'function') { globalThis.__tmp_fetch_cleanup(); delete globalThis.__tmp_fetch_cleanup; }`, "fetch_cleanup.js")
+			ctx.Global().Delete("__tmp_fetch_signal")
 			errVal, _ := v8.NewValue(iso, fmt.Sprintf("fetch: %s", err.Error()))
 			resolver.Reject(errVal)
 			return resolver.GetPromise().Value
@@ -172,26 +256,76 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 			httpReq.Header.Set(k, v)
 		}
 
-		// Use a custom transport that validates resolved IPs at connect time,
-		// preventing DNS rebinding/TOCTOU attacks.
-		client := &http.Client{
-			Timeout: timeout,
-			Transport: &http.Transport{
-				DialContext: ssrfSafeDialContext,
-			},
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 10 {
+		// Build the redirect policy based on the redirect option.
+		redirectMode := fetchArgs.Redirect
+		if redirectMode == "" {
+			redirectMode = "follow"
+		}
+		var checkRedirect func(req *http.Request, via []*http.Request) error
+		switch redirectMode {
+		case "manual":
+			checkRedirect = func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			}
+		case "error":
+			checkRedirect = func(req *http.Request, via []*http.Request) error {
+				return fmt.Errorf("fetch failed: redirect mode is 'error'")
+			}
+		default: // "follow"
+			checkRedirect = func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 20 {
 					return fmt.Errorf("too many redirects")
 				}
-				// Redirect hostname pre-check (the dialer also validates at connect time).
-				if isPrivateHostname(req.URL.String()) {
+				if fetchSSRFEnabled && isPrivateHostname(req.URL.String()) {
 					return fmt.Errorf("redirect to private IP address is not allowed")
 				}
 				return nil
-			},
+			}
 		}
-		resp, err := client.Do(httpReq)
+
+		// Run the HTTP request in a goroutine so the Go context cancellation
+		// (triggered by the JS abort listener) can interrupt it.
+		// Note: V8 is NOT accessed from the goroutine — only pure Go operations.
+		client := &http.Client{
+			Timeout:       timeout,
+			Transport:     fetchTransport,
+			CheckRedirect: checkRedirect,
+		}
+		resultCh := make(chan fetchResult, 1)
+		go func() {
+			resp, err := client.Do(httpReq)
+			resultCh <- fetchResult{resp: resp, err: err}
+		}()
+		result := <-resultCh
+
+		// Cleanup: remove cancel from state and run JS listener cleanup.
+		// Note: we check fetchCtx.Err() BEFORE calling fetchCancel() to
+		// distinguish abort-signal cancellation from normal cleanup.
+		abortedBySignal := fetchCtx.Err() != nil
+		removeFetchCancel(reqID, fetchID)
+		fetchCancel()
+		ctx.RunScript(`if (typeof globalThis.__tmp_fetch_cleanup === 'function') { globalThis.__tmp_fetch_cleanup(); delete globalThis.__tmp_fetch_cleanup; }`, "fetch_cleanup.js")
+
+		resp, err := result.resp, result.err
 		if err != nil {
+			// For redirect mode "error", reject with a TypeError (check
+			// before abort so redirect errors aren't misattributed).
+			if redirectMode == "error" {
+				typeErr, _ := ctx.RunScript(
+					`new TypeError("fetch failed: redirect mode is 'error'")`,
+					"fetch_redirect_err.js")
+				resolver.Reject(typeErr)
+				return resolver.GetPromise().Value
+			}
+			// If the context was cancelled by the abort signal, reject with
+			// a DOMException AbortError to match the Web Fetch specification.
+			if abortedBySignal {
+				abortErr, _ := ctx.RunScript(
+					`new DOMException("The operation was aborted.", "AbortError")`,
+					"fetch_abort_inflight.js")
+				resolver.Reject(abortErr)
+				return resolver.GetPromise().Value
+			}
 			errVal, _ := v8.NewValue(iso, fmt.Sprintf("fetch: %s", err.Error()))
 			resolver.Reject(errVal)
 			return resolver.GetPromise().Value
@@ -216,6 +350,13 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 		}
 		headersJSON, _ := json.Marshal(respHeaders)
 
+		// Determine the final URL — for "follow" mode this is the URL after redirects.
+		finalURL := fetchArgs.URL
+		if resp.Request != nil && resp.Request.URL != nil {
+			finalURL = resp.Request.URL.String()
+		}
+		redirected := finalURL != fetchArgs.URL
+
 		// Base64-encode the response body to preserve binary data integrity.
 		bodyB64 := base64.StdEncoding.EncodeToString(respBody)
 		bodyVal, _ := v8.NewValue(iso, bodyB64)
@@ -226,8 +367,10 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 		ctx.Global().Set("__tmp_fetch_resp_statusText", statusTextVal)
 		headersJSONVal, _ := v8.NewValue(iso, string(headersJSON))
 		ctx.Global().Set("__tmp_fetch_resp_headers", headersJSONVal)
-		fetchURLVal, _ := v8.NewValue(iso, fetchArgs.URL)
+		fetchURLVal, _ := v8.NewValue(iso, finalURL)
 		ctx.Global().Set("__tmp_fetch_resp_url", fetchURLVal)
+		redirectedVal, _ := v8.NewValue(iso, redirected)
+		ctx.Global().Set("__tmp_fetch_resp_redirected", redirectedVal)
 
 		jsResp, err := ctx.RunScript(`(function() {
 			var b64Body = globalThis.__tmp_fetch_resp_body;
@@ -235,11 +378,13 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 			var statusText = globalThis.__tmp_fetch_resp_statusText;
 			var hdrs = JSON.parse(globalThis.__tmp_fetch_resp_headers);
 			var url = globalThis.__tmp_fetch_resp_url;
+			var redirected = globalThis.__tmp_fetch_resp_redirected;
 			delete globalThis.__tmp_fetch_resp_body;
 			delete globalThis.__tmp_fetch_resp_status;
 			delete globalThis.__tmp_fetch_resp_statusText;
 			delete globalThis.__tmp_fetch_resp_headers;
 			delete globalThis.__tmp_fetch_resp_url;
+			delete globalThis.__tmp_fetch_resp_redirected;
 			var body = null;
 			if (b64Body && b64Body.length > 0) {
 				var buf = __b64ToBuffer(b64Body);
@@ -252,7 +397,11 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 					body = buf;
 				}
 			}
-			return new Response(body, {status: status, statusText: statusText, headers: hdrs, url: url});
+			var r = new Response(body, {status: status, statusText: statusText, headers: hdrs, url: url});
+			if (redirected) {
+				Object.defineProperty(r, 'redirected', {value: true, writable: false});
+			}
+			return r;
 		})()`, "fetch_response.js")
 		if err != nil {
 			errVal, _ := v8.NewValue(iso, fmt.Sprintf("fetch: building response: %s", err.Error()))
@@ -337,23 +486,23 @@ var privateRanges []*net.IPNet
 func init() {
 	for _, cidr := range []string{
 		// IPv4 private and special-use ranges
-		"0.0.0.0/8",          // "This" network (RFC 1122)
-		"10.0.0.0/8",         // Private (RFC 1918)
-		"100.64.0.0/10",      // Carrier-grade NAT (RFC 6598)
-		"127.0.0.0/8",        // Loopback (RFC 1122)
-		"169.254.0.0/16",     // Link-local (RFC 3927)
-		"172.16.0.0/12",      // Private (RFC 1918)
-		"192.0.0.0/24",       // IETF protocol assignments (RFC 6890)
-		"192.0.2.0/24",       // Documentation TEST-NET-1 (RFC 5737)
-		"192.168.0.0/16",     // Private (RFC 1918)
-		"198.18.0.0/15",      // Benchmarking (RFC 2544)
-		"198.51.100.0/24",    // Documentation TEST-NET-2 (RFC 5737)
-		"203.0.113.0/24",     // Documentation TEST-NET-3 (RFC 5737)
-		"240.0.0.0/4",        // Reserved for future use (RFC 1112)
+		"0.0.0.0/8",       // "This" network (RFC 1122)
+		"10.0.0.0/8",      // Private (RFC 1918)
+		"100.64.0.0/10",   // Carrier-grade NAT (RFC 6598)
+		"127.0.0.0/8",     // Loopback (RFC 1122)
+		"169.254.0.0/16",  // Link-local (RFC 3927)
+		"172.16.0.0/12",   // Private (RFC 1918)
+		"192.0.0.0/24",    // IETF protocol assignments (RFC 6890)
+		"192.0.2.0/24",    // Documentation TEST-NET-1 (RFC 5737)
+		"192.168.0.0/16",  // Private (RFC 1918)
+		"198.18.0.0/15",   // Benchmarking (RFC 2544)
+		"198.51.100.0/24", // Documentation TEST-NET-2 (RFC 5737)
+		"203.0.113.0/24",  // Documentation TEST-NET-3 (RFC 5737)
+		"240.0.0.0/4",     // Reserved for future use (RFC 1112)
 		// IPv6 private and special-use ranges
-		"::1/128",            // Loopback
-		"fc00::/7",           // Unique local address
-		"fe80::/10",          // Link-local
+		"::1/128",   // Loopback
+		"fc00::/7",  // Unique local address
+		"fe80::/10", // Link-local
 	} {
 		_, n, err := net.ParseCIDR(cidr)
 		if err != nil {
