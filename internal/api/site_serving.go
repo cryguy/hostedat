@@ -28,11 +28,11 @@ var internalFiles = map[string]bool{
 
 // deniedHeaders are headers that user _headers files must not be able to set.
 var deniedHeaders = map[string]bool{
-	"content-length":            true,
-	"transfer-encoding":         true,
-	"set-cookie":                true,
-	"host":                      true,
-	"content-security-policy":   true,
+	"content-length":    true,
+	"transfer-encoding": true,
+	"set-cookie":        true,
+	"host":              true,
+	// content-security-policy: allowed so sites can set their own CSP via _headers
 	"strict-transport-security": true,
 	"x-frame-options":           true,
 	"x-content-type-options":    true,

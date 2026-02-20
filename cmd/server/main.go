@@ -165,15 +165,29 @@ func main() {
 	e.Use(middleware.RequestLogger())
 	e.Use(middleware.Recover())
 
-	// Security headers
+	// Security headers (CSP applied separately — only for admin UI, not hosted sites)
 	e.Use(middleware.SecureWithConfig(middleware.SecureConfig{
-		XSSProtection:         "1; mode=block",
-		ContentTypeNosniff:    "nosniff",
-		XFrameOptions:         "DENY",
-		HSTSMaxAge:            31536000,
-		ContentSecurityPolicy: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'",
-		ReferrerPolicy:        "strict-origin-when-cross-origin",
+		XSSProtection:      "1; mode=block",
+		ContentTypeNosniff: "nosniff",
+		XFrameOptions:      "DENY",
+		HSTSMaxAge:         31536000,
+		ReferrerPolicy:     "strict-origin-when-cross-origin",
 	}))
+
+	// CSP only for API/admin routes (bare domain), not subdomain-hosted sites
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			host := c.Request().Host
+			if idx := strings.LastIndex(host, ":"); idx != -1 {
+				host = host[:idx]
+			}
+			if host == cfg.Domain || host == "localhost" || host == "127.0.0.1" {
+				c.Response().Header().Set("Content-Security-Policy",
+					"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'")
+			}
+			return next(c)
+		}
+	})
 
 	// CORS — only allow configured domain, its subdomains, and localhost for dev
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
