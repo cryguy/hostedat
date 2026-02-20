@@ -240,13 +240,13 @@ func TestCryptoExt_ECDSA_JWK_RoundTrip(t *testing.T) {
 	assertOK(t, r)
 
 	var data struct {
-		Valid   bool   `json:"valid"`
-		PrivKty string `json:"privKty"`
-		PrivCrv string `json:"privCrv"`
-		PrivHasD bool  `json:"privHasD"`
-		PubKty  string `json:"pubKty"`
-		PubCrv  string `json:"pubCrv"`
-		PubHasD bool   `json:"pubHasD"`
+		Valid    bool   `json:"valid"`
+		PrivKty  string `json:"privKty"`
+		PrivCrv  string `json:"privCrv"`
+		PrivHasD bool   `json:"privHasD"`
+		PubKty   string `json:"pubKty"`
+		PubCrv   string `json:"pubCrv"`
+		PubHasD  bool   `json:"pubHasD"`
 	}
 	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -499,5 +499,129 @@ func TestCryptoExt_GenerateKey_AESGCM(t *testing.T) {
 	}
 	if data.Type != "secret" {
 		t.Errorf("key type = %q, want secret", data.Type)
+	}
+}
+
+// TestCryptoExt_ECDSA_RawImportExport exercises the raw public key import path
+// for ECDSA in setupCryptoExt (crypto_ext.go:183-215).
+func TestCryptoExt_ECDSA_RawImportExport(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    // Generate ECDSA P-256 key pair
+    const keyPair = await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256", hash: "SHA-256" },
+      true,
+      ["sign", "verify"]
+    );
+
+    // Export public key as raw (uncompressed point)
+    const rawPub = await crypto.subtle.exportKey("raw", keyPair.publicKey);
+    const rawArr = new Uint8Array(rawPub);
+
+    // Re-import the raw public key as ECDSA
+    const imported = await crypto.subtle.importKey(
+      "raw",
+      rawPub,
+      { name: "ECDSA", namedCurve: "P-256", hash: "SHA-256" },
+      true,
+      ["verify"]
+    );
+
+    // Verify: sign with original private key, verify with imported public key
+    const data = new TextEncoder().encode("test message");
+    const sig = await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      keyPair.privateKey,
+      data
+    );
+    const valid = await crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" },
+      imported,
+      sig,
+      data
+    );
+
+    return Response.json({
+      rawLen: rawArr.length,
+      firstByte: rawArr[0],
+      importedType: imported.type,
+      valid,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		RawLen       int    `json:"rawLen"`
+		FirstByte    int    `json:"firstByte"`
+		ImportedType string `json:"importedType"`
+		Valid        bool   `json:"valid"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.RawLen != 65 {
+		t.Errorf("raw P-256 public key length = %d, want 65", data.RawLen)
+	}
+	if data.FirstByte != 0x04 {
+		t.Errorf("first byte = 0x%02x, want 0x04 (uncompressed)", data.FirstByte)
+	}
+	if data.ImportedType != "public" {
+		t.Errorf("imported key type = %q, want public", data.ImportedType)
+	}
+	if !data.Valid {
+		t.Error("signature should verify with raw-imported public key")
+	}
+}
+
+// TestCryptoExt_ECDSA_RawImportP384 exercises raw import for P-384 curve.
+func TestCryptoExt_ECDSA_RawImportP384(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const keyPair = await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-384", hash: "SHA-384" },
+      true,
+      ["sign", "verify"]
+    );
+    const rawPub = await crypto.subtle.exportKey("raw", keyPair.publicKey);
+    const imported = await crypto.subtle.importKey(
+      "raw", rawPub,
+      { name: "ECDSA", namedCurve: "P-384", hash: "SHA-384" },
+      true, ["verify"]
+    );
+    const data = new TextEncoder().encode("p384 test");
+    const sig = await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-384" }, keyPair.privateKey, data
+    );
+    const valid = await crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-384" }, imported, sig, data
+    );
+    return Response.json({ rawLen: new Uint8Array(rawPub).length, valid });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		RawLen int  `json:"rawLen"`
+		Valid  bool `json:"valid"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.RawLen != 97 {
+		t.Errorf("raw P-384 public key length = %d, want 97", data.RawLen)
+	}
+	if !data.Valid {
+		t.Error("P-384 signature should verify with raw-imported public key")
 	}
 }

@@ -3,6 +3,8 @@ package worker
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/cryguy/hostedat/internal/config"
 	"github.com/cryguy/hostedat/internal/models"
+	"github.com/cryguy/hostedat/internal/storage"
 	v8 "github.com/tommie/v8go"
 )
 
@@ -2330,6 +2333,381 @@ func TestEngine_Execute_PostRequestWithBody(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// ExecuteTail tests
+// ---------------------------------------------------------------------------
+
+func TestEngine_ExecuteTail_BasicEvent(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request) { return new Response("ok"); },
+  async tail(events) {
+    console.log("tail-count:" + events.length);
+  },
+};`
+	siteID := "test-tail-basic"
+	deployKey := "deploy1"
+
+	if _, err := e.CompileAndCache(siteID, deployKey, source); err != nil {
+		t.Fatalf("CompileAndCache: %v", err)
+	}
+
+	events := []TailEvent{
+		{ScriptName: "worker.js", Outcome: "ok", Logs: []LogEntry{{Level: "log", Message: "hello"}}},
+	}
+	result := e.ExecuteTail(siteID, deployKey, defaultEnv(), events)
+	if result.Error != nil {
+		t.Fatalf("ExecuteTail: %v", result.Error)
+	}
+	found := false
+	for _, l := range result.Logs {
+		if strings.Contains(l.Message, "tail-count:1") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected log containing tail-count:1")
+	}
+}
+
+func TestEngine_ExecuteTail_MultipleEvents(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request) { return new Response("ok"); },
+  async tail(events) {
+    console.log("events:" + events.length);
+    for (const ev of events) {
+      console.log("outcome:" + ev.outcome);
+    }
+  },
+};`
+	siteID := "test-tail-multi"
+	deployKey := "deploy1"
+
+	if _, err := e.CompileAndCache(siteID, deployKey, source); err != nil {
+		t.Fatalf("CompileAndCache: %v", err)
+	}
+
+	events := []TailEvent{
+		{ScriptName: "worker.js", Outcome: "ok"},
+		{ScriptName: "worker.js", Outcome: "exception"},
+		{ScriptName: "worker.js", Outcome: "ok"},
+	}
+	result := e.ExecuteTail(siteID, deployKey, defaultEnv(), events)
+	if result.Error != nil {
+		t.Fatalf("ExecuteTail: %v", result.Error)
+	}
+
+	foundCount := false
+	for _, l := range result.Logs {
+		if strings.Contains(l.Message, "events:3") {
+			foundCount = true
+		}
+	}
+	if !foundCount {
+		t.Error("expected log containing events:3")
+	}
+}
+
+func TestEngine_ExecuteTail_AccessEventProperties(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request) { return new Response("ok"); },
+  async tail(events) {
+    const ev = events[0];
+    console.log("script:" + ev.scriptName);
+    console.log("outcome:" + ev.outcome);
+    console.log("logs:" + JSON.stringify(ev.logs));
+    console.log("exceptions:" + JSON.stringify(ev.exceptions));
+  },
+};`
+	siteID := "test-tail-props"
+	deployKey := "deploy1"
+
+	if _, err := e.CompileAndCache(siteID, deployKey, source); err != nil {
+		t.Fatalf("CompileAndCache: %v", err)
+	}
+
+	events := []TailEvent{
+		{
+			ScriptName: "my-worker.js",
+			Outcome:    "ok",
+			Logs:       []LogEntry{{Level: "log", Message: "test-msg"}},
+			Exceptions: []string{"err1"},
+		},
+	}
+	result := e.ExecuteTail(siteID, deployKey, defaultEnv(), events)
+	if result.Error != nil {
+		t.Fatalf("ExecuteTail: %v", result.Error)
+	}
+
+	foundScript, foundOutcome := false, false
+	for _, l := range result.Logs {
+		if strings.Contains(l.Message, "script:my-worker.js") {
+			foundScript = true
+		}
+		if strings.Contains(l.Message, "outcome:ok") {
+			foundOutcome = true
+		}
+	}
+	if !foundScript {
+		t.Error("expected log with scriptName")
+	}
+	if !foundOutcome {
+		t.Error("expected log with outcome")
+	}
+}
+
+func TestEngine_ExecuteTail_HandlerThrows(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request) { return new Response("ok"); },
+  tail(events) {
+    throw new Error("tail exploded");
+  },
+};`
+	siteID := "test-tail-throw"
+	deployKey := "deploy1"
+
+	if _, err := e.CompileAndCache(siteID, deployKey, source); err != nil {
+		t.Fatalf("CompileAndCache: %v", err)
+	}
+
+	events := []TailEvent{{ScriptName: "w.js", Outcome: "ok"}}
+	result := e.ExecuteTail(siteID, deployKey, defaultEnv(), events)
+	if result.Error == nil {
+		t.Fatal("ExecuteTail should fail when tail handler throws")
+	}
+	if !strings.Contains(result.Error.Error(), "tail exploded") {
+		t.Errorf("error = %q, should mention 'tail exploded'", result.Error)
+	}
+}
+
+func TestEngine_ExecuteTail_NoHandler(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Module with no tail handler.
+	source := `export default {
+  fetch(request) { return new Response("ok"); },
+};`
+	siteID := "test-tail-noh"
+	deployKey := "deploy1"
+
+	if _, err := e.CompileAndCache(siteID, deployKey, source); err != nil {
+		t.Fatalf("CompileAndCache: %v", err)
+	}
+
+	events := []TailEvent{{ScriptName: "w.js", Outcome: "ok"}}
+	result := e.ExecuteTail(siteID, deployKey, defaultEnv(), events)
+	if result.Error == nil {
+		t.Fatal("ExecuteTail should fail with no tail handler")
+	}
+	if !strings.Contains(result.Error.Error(), "no tail handler") {
+		t.Errorf("error = %q, should mention 'no tail handler'", result.Error)
+	}
+}
+
+func TestEngine_ExecuteTail_Duration(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request) { return new Response("ok"); },
+  tail(events) {
+    console.log("processed");
+  },
+};`
+	siteID := "test-tail-dur"
+	deployKey := "deploy1"
+
+	if _, err := e.CompileAndCache(siteID, deployKey, source); err != nil {
+		t.Fatalf("CompileAndCache: %v", err)
+	}
+
+	events := []TailEvent{{ScriptName: "w.js", Outcome: "ok"}}
+	result := e.ExecuteTail(siteID, deployKey, defaultEnv(), events)
+	if result.Error != nil {
+		t.Fatalf("ExecuteTail: %v", result.Error)
+	}
+	if result.Duration <= 0 {
+		t.Error("Duration should be positive")
+	}
+}
+
+func TestEngine_ExecuteTail_NoSource(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	events := []TailEvent{{ScriptName: "w.js", Outcome: "ok"}}
+	result := e.ExecuteTail("nonexistent", "deploy1", defaultEnv(), events)
+	if result.Error == nil {
+		t.Fatal("ExecuteTail should fail with no source")
+	}
+}
+
+func TestEngine_ExecuteTail_TailIsNotFunction(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch() { return new Response("ok"); },
+  tail: "not-a-function",
+};`
+	siteID := "test-tail-notfn"
+	deployKey := "d1"
+	if _, err := e.CompileAndCache(siteID, deployKey, source); err != nil {
+		t.Fatalf("CompileAndCache: %v", err)
+	}
+	events := []TailEvent{{ScriptName: "w.js", Outcome: "ok"}}
+	result := e.ExecuteTail(siteID, deployKey, defaultEnv(), events)
+	if result.Error == nil {
+		t.Fatal("ExecuteTail should fail when tail is not a function")
+	}
+	if !strings.Contains(result.Error.Error(), "not a function") {
+		t.Errorf("error = %q, should mention 'not a function'", result.Error)
+	}
+}
+
+func TestEngine_ExecuteTail_AsyncHandler(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch() { return new Response("ok"); },
+  async tail(events) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+    console.log("async-tail-done:" + events.length);
+  },
+};`
+	siteID := "test-tail-async"
+	deployKey := "deploy1"
+
+	if _, err := e.CompileAndCache(siteID, deployKey, source); err != nil {
+		t.Fatalf("CompileAndCache: %v", err)
+	}
+
+	events := []TailEvent{{ScriptName: "w.js", Outcome: "ok"}}
+	result := e.ExecuteTail(siteID, deployKey, defaultEnv(), events)
+	if result.Error != nil {
+		t.Fatalf("ExecuteTail: %v", result.Error)
+	}
+	found := false
+	for _, l := range result.Logs {
+		if strings.Contains(l.Message, "async-tail-done:1") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected log from async tail handler")
+	}
+}
+
+func TestEngine_ExecuteTail_RejectedPromise(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch() { return new Response("ok"); },
+  async tail(events) {
+    throw new Error("async tail failed");
+  },
+};`
+	siteID := "test-tail-reject"
+	deployKey := "d1"
+	if _, err := e.CompileAndCache(siteID, deployKey, source); err != nil {
+		t.Fatalf("CompileAndCache: %v", err)
+	}
+	events := []TailEvent{{ScriptName: "w.js", Outcome: "ok"}}
+	result := e.ExecuteTail(siteID, deployKey, defaultEnv(), events)
+	if result.Error == nil {
+		t.Fatal("ExecuteTail should fail on rejected promise")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// EnsureSource additional tests
+// ---------------------------------------------------------------------------
+
+func TestEngine_EnsureSource_FromStore(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	siteID := "test-ensure-store"
+	deployKey := "deploy1"
+
+	// Set up a real storage manager with the worker script on disk.
+	tmpDir := t.TempDir()
+	store := storage.NewManager(tmpDir)
+	e.SetStore(store)
+
+	// Write the _worker.js file where GetWorkerScript expects it.
+	deployPath := store.GetDeploymentPath(siteID, deployKey)
+	if err := os.MkdirAll(deployPath, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	workerScript := `export default { fetch() { return new Response("from-store"); } };`
+	if err := os.WriteFile(filepath.Join(deployPath, "_worker.js"), []byte(workerScript), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// EnsureSource should load from the store.
+	if err := e.EnsureSource(siteID, deployKey); err != nil {
+		t.Fatalf("EnsureSource: %v", err)
+	}
+
+	// Verify the source is now cached.
+	key := poolKey{SiteID: siteID, DeployKey: deployKey}
+	if _, ok := e.sources.Load(key); !ok {
+		t.Error("source should be cached after EnsureSource from store")
+	}
+}
+
+func TestEngine_EnsureSource_StoreNotFound(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	tmpDir := t.TempDir()
+	store := storage.NewManager(tmpDir)
+	e.SetStore(store)
+
+	// Try loading a non-existent site/deploy.
+	err := e.EnsureSource("no-such-site", "no-such-deploy")
+	if err == nil {
+		t.Fatal("EnsureSource should fail when script file doesn't exist")
+	}
+	if !strings.Contains(err.Error(), "no source for site") {
+		t.Errorf("error = %q, should mention 'no source for site'", err)
+	}
+}
+
+func TestEngine_EnsureSource_CacheHitSkipsStore(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	siteID := "test-ensure-hit"
+	deployKey := "deploy1"
+
+	// Pre-populate the source cache.
+	key := poolKey{SiteID: siteID, DeployKey: deployKey}
+	e.sources.Store(key, `export default { fetch() { return new Response("cached"); } };`)
+
+	// EnsureSource should succeed without a store set.
+	e.SetStore(nil)
+	if err := e.EnsureSource(siteID, deployKey); err != nil {
+		t.Fatalf("EnsureSource with cached source: %v", err)
+	}
+}
+
 func TestEngine_Execute_ResponseJsonMethod(t *testing.T) {
 	db := testDB(t)
 	e := newTestEngine(t, db)
@@ -2355,5 +2733,366 @@ func TestEngine_Execute_ResponseJsonMethod(t *testing.T) {
 	}
 	if len(data.Items) != 3 {
 		t.Errorf("items len = %d, want 3", len(data.Items))
+	}
+}
+
+// TestEngine_ExecuteNonExistentSite exercises the EnsureSource error path in Execute.
+func TestEngine_ExecuteNonExistentSite(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	env := defaultEnv()
+	env.engine = e
+	env.db = db
+
+	req := getReq("http://localhost/")
+	result := e.Execute("non-existent-site", "no-deploy-key", env, req)
+
+	if result.Error == nil {
+		t.Error("Execute with non-existent site should return error")
+	}
+}
+
+// TestEngine_ExecuteScheduledNonExistentSite exercises ExecuteScheduled error path.
+func TestEngine_ExecuteScheduledNonExistentSite(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	env := defaultEnv()
+	result := e.ExecuteScheduled("non-existent-site", "no-deploy-key", env, "* * * * *")
+
+	if result.Error == nil {
+		t.Error("ExecuteScheduled with non-existent site should return error")
+	}
+}
+
+// TestEngine_KitchenSink exercises many web APIs in a single worker to cover
+// scattered branches across multiple setup functions.
+func TestEngine_KitchenSink(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    // 1. URL + URLSearchParams
+    var u = new URL("https://example.com/path?a=1&b=2");
+    var params = u.searchParams;
+    params.append("c", "3");
+    var paramStr = params.toString();
+
+    // 2. Headers manipulation
+    var h = new Headers();
+    h.set("X-Test", "value");
+    h.append("X-Multi", "one");
+    h.append("X-Multi", "two");
+    var headerEntries = [];
+    h.forEach(function(v, k) { headerEntries.push(k + "=" + v); });
+
+    // 3. TextEncoder / TextDecoder
+    var enc = new TextEncoder();
+    var encoded = enc.encode("hello");
+    var dec = new TextDecoder();
+    var decoded = dec.decode(encoded);
+
+    // 4. Response with various constructors
+    var r1 = new Response("text body", { status: 201, headers: { "X-R": "1" } });
+    var r1Status = r1.status;
+    var r1Text = await r1.text();
+
+    var r2 = Response.json({ key: "val" });
+    var r2Data = await r2.json();
+
+    // 5. Request construction
+    var req = new Request("https://example.com/api", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data: true }),
+    });
+    var reqMethod = req.method;
+    var reqCT = req.headers.get("content-type");
+
+    // 6. AbortController
+    var ac = new AbortController();
+    var signalAborted = ac.signal.aborted;
+    ac.abort();
+    var signalAbortedAfter = ac.signal.aborted;
+
+    // 7. crypto.randomUUID + getRandomValues
+    var uuid = crypto.randomUUID();
+    var arr = new Uint8Array(16);
+    crypto.getRandomValues(arr);
+    var hasRandom = arr.some(function(x) { return x !== 0; });
+
+    // 8. btoa / atob
+    var b64 = btoa("hello world");
+    var orig = atob(b64);
+
+    // 9. structuredClone
+    var obj = { a: 1, b: [2, 3] };
+    var cloned = structuredClone(obj);
+    var cloneMatch = cloned.a === 1 && cloned.b.length === 2;
+
+    // 10. Performance.now
+    var t1 = performance.now();
+    var hasPerf = typeof t1 === 'number' && t1 >= 0;
+
+    return Response.json({
+      paramStr,
+      headerCount: headerEntries.length,
+      decoded,
+      r1Status,
+      r1Text,
+      r2Key: r2Data.key,
+      reqMethod,
+      reqCT,
+      signalAborted,
+      signalAbortedAfter,
+      uuidLen: uuid.length,
+      hasRandom,
+      b64,
+      orig,
+      cloneMatch,
+      hasPerf,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		ParamStr           string `json:"paramStr"`
+		HeaderCount        int    `json:"headerCount"`
+		Decoded            string `json:"decoded"`
+		R1Status           int    `json:"r1Status"`
+		R1Text             string `json:"r1Text"`
+		R2Key              string `json:"r2Key"`
+		ReqMethod          string `json:"reqMethod"`
+		ReqCT              string `json:"reqCT"`
+		SignalAborted      bool   `json:"signalAborted"`
+		SignalAbortedAfter bool   `json:"signalAbortedAfter"`
+		UUIDLen            int    `json:"uuidLen"`
+		HasRandom          bool   `json:"hasRandom"`
+		B64                string `json:"b64"`
+		Orig               string `json:"orig"`
+		CloneMatch         bool   `json:"cloneMatch"`
+		HasPerf            bool   `json:"hasPerf"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.Decoded != "hello" {
+		t.Errorf("decoded = %q, want hello", data.Decoded)
+	}
+	if data.R1Status != 201 {
+		t.Errorf("r1Status = %d, want 201", data.R1Status)
+	}
+	if data.R2Key != "val" {
+		t.Errorf("r2Key = %q, want val", data.R2Key)
+	}
+	if data.ReqMethod != "POST" {
+		t.Errorf("reqMethod = %q, want POST", data.ReqMethod)
+	}
+	if data.SignalAborted {
+		t.Error("signal should not be aborted before abort()")
+	}
+	if !data.SignalAbortedAfter {
+		t.Error("signal should be aborted after abort()")
+	}
+	if data.UUIDLen != 36 {
+		t.Errorf("uuid length = %d, want 36", data.UUIDLen)
+	}
+	if !data.HasRandom {
+		t.Error("getRandomValues should produce non-zero bytes")
+	}
+	if data.Orig != "hello world" {
+		t.Errorf("atob(btoa()) = %q, want hello world", data.Orig)
+	}
+	if !data.CloneMatch {
+		t.Error("structuredClone should produce matching object")
+	}
+	if !data.HasPerf {
+		t.Error("performance.now() should return a number >= 0")
+	}
+}
+
+// TestEngine_CompressionRoundTrip exercises CompressionStream/DecompressionStream.
+func TestEngine_CompressionRoundTrip(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    var input = "Hello, compressed world! ".repeat(10);
+    var encoded = new TextEncoder().encode(input);
+
+    // Compress
+    var cs = new CompressionStream("gzip");
+    var writer = cs.writable.getWriter();
+    writer.write(encoded);
+    writer.close();
+    var compressedChunks = [];
+    var reader = cs.readable.getReader();
+    while (true) {
+      var r = await reader.read();
+      if (r.done) break;
+      compressedChunks.push(r.value);
+    }
+
+    // Decompress
+    var ds = new DecompressionStream("gzip");
+    var dWriter = ds.writable.getWriter();
+    for (var chunk of compressedChunks) {
+      dWriter.write(chunk);
+    }
+    dWriter.close();
+    var decompressedChunks = [];
+    var dReader = ds.readable.getReader();
+    while (true) {
+      var r = await dReader.read();
+      if (r.done) break;
+      decompressedChunks.push(r.value);
+    }
+
+    // Reassemble
+    var totalLen = 0;
+    for (var c of decompressedChunks) totalLen += c.length;
+    var output = new Uint8Array(totalLen);
+    var offset = 0;
+    for (var c of decompressedChunks) {
+      output.set(c, offset);
+      offset += c.length;
+    }
+    var decoded = new TextDecoder().decode(output);
+
+    return Response.json({
+      inputLen: input.length,
+      roundTrip: decoded === input,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		InputLen  int  `json:"inputLen"`
+		RoundTrip bool `json:"roundTrip"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !data.RoundTrip {
+		t.Error("compression round-trip should produce identical output")
+	}
+}
+
+// TestEngine_CompressionDeflate exercises DecompressionStream with deflate format.
+func TestEngine_CompressionDeflate(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    var input = "Deflate compression test data! ".repeat(10);
+    var encoded = new TextEncoder().encode(input);
+
+    // Compress with deflate
+    var cs = new CompressionStream("deflate");
+    var writer = cs.writable.getWriter();
+    writer.write(encoded);
+    writer.close();
+    var compressed = [];
+    var reader = cs.readable.getReader();
+    while (true) {
+      var r = await reader.read();
+      if (r.done) break;
+      compressed.push(r.value);
+    }
+
+    // Decompress with deflate
+    var ds = new DecompressionStream("deflate");
+    var dWriter = ds.writable.getWriter();
+    for (var c of compressed) dWriter.write(c);
+    dWriter.close();
+    var decompressed = [];
+    var dReader = ds.readable.getReader();
+    while (true) {
+      var r = await dReader.read();
+      if (r.done) break;
+      decompressed.push(r.value);
+    }
+    var totalLen = 0;
+    for (var c of decompressed) totalLen += c.length;
+    var output = new Uint8Array(totalLen);
+    var off = 0;
+    for (var c of decompressed) { output.set(c, off); off += c.length; }
+    var decoded = new TextDecoder().decode(output);
+
+    return Response.json({ match: decoded === input });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Match bool `json:"match"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !data.Match {
+		t.Error("deflate compression round-trip should produce identical output")
+	}
+}
+
+// TestEngine_HTMLRewriterBasic exercises the HTMLRewriter API.
+func TestEngine_HTMLRewriterBasic(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    var html = "<html><head><title>Old Title</title></head><body><p class='msg'>Hello</p></body></html>";
+    var resp = new Response(html, { headers: { "content-type": "text/html" } });
+
+    var rewritten = new HTMLRewriter()
+      .on("title", {
+        element(el) { el.setInnerContent("New Title"); }
+      })
+      .on("p.msg", {
+        element(el) { el.setAttribute("class", "updated"); }
+      })
+      .transform(resp);
+
+    var text = await rewritten.text();
+    return Response.json({
+      hasNewTitle: text.includes("New Title"),
+      hasUpdatedClass: text.includes('class="updated"'),
+      noOldTitle: !text.includes("Old Title"),
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		HasNewTitle     bool `json:"hasNewTitle"`
+		HasUpdatedClass bool `json:"hasUpdatedClass"`
+		NoOldTitle      bool `json:"noOldTitle"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !data.HasNewTitle {
+		t.Error("rewritten HTML should contain 'New Title'")
+	}
+	if !data.HasUpdatedClass {
+		t.Error("rewritten HTML should contain updated class")
+	}
+	if !data.NoOldTitle {
+		t.Error("rewritten HTML should not contain 'Old Title'")
 	}
 }

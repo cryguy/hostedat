@@ -3358,3 +3358,566 @@ func TestCrypto_UnwrapKeyWrongKey(t *testing.T) {
 		t.Error("unwrapKey with wrong key should throw")
 	}
 }
+
+// === AES-CTR Tests ===
+
+func TestCrypto_AESCTREncryptDecrypt128(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const keyData = new Uint8Array(16); // 128-bit key
+    crypto.getRandomValues(keyData);
+    const key = await crypto.subtle.importKey(
+      "raw", keyData, { name: "AES-CTR" }, false, ["encrypt", "decrypt"]
+    );
+    const counter = new Uint8Array(16);
+    crypto.getRandomValues(counter);
+    const plaintext = new TextEncoder().encode("hello aes-ctr 128");
+    const ct = await crypto.subtle.encrypt(
+      { name: "AES-CTR", counter, length: 64 }, key, plaintext
+    );
+    const pt = await crypto.subtle.decrypt(
+      { name: "AES-CTR", counter, length: 64 }, key, ct
+    );
+    const decoded = new TextDecoder().decode(pt);
+    return Response.json({
+      decoded,
+      ctLen: new Uint8Array(ct).length,
+      ptLen: new Uint8Array(pt).length,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Decoded string `json:"decoded"`
+		CtLen   int    `json:"ctLen"`
+		PtLen   int    `json:"ptLen"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Decoded != "hello aes-ctr 128" {
+		t.Errorf("decoded = %q, want 'hello aes-ctr 128'", data.Decoded)
+	}
+	// AES-CTR is a stream cipher, ciphertext same length as plaintext
+	if data.CtLen != 17 {
+		t.Errorf("ciphertext length = %d, want 17", data.CtLen)
+	}
+	if data.PtLen != 17 {
+		t.Errorf("plaintext length = %d, want 17", data.PtLen)
+	}
+}
+
+func TestCrypto_AESCTREncryptDecrypt256(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const keyData = new Uint8Array(32); // 256-bit key
+    crypto.getRandomValues(keyData);
+    const key = await crypto.subtle.importKey(
+      "raw", keyData, { name: "AES-CTR" }, false, ["encrypt", "decrypt"]
+    );
+    const counter = new Uint8Array(16);
+    crypto.getRandomValues(counter);
+    const plaintext = new TextEncoder().encode("hello aes-ctr 256-bit key test!");
+    const ct = await crypto.subtle.encrypt(
+      { name: "AES-CTR", counter, length: 128 }, key, plaintext
+    );
+    const pt = await crypto.subtle.decrypt(
+      { name: "AES-CTR", counter, length: 128 }, key, ct
+    );
+    const decoded = new TextDecoder().decode(pt);
+    return Response.json({ decoded });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Decoded string `json:"decoded"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Decoded != "hello aes-ctr 256-bit key test!" {
+		t.Errorf("decoded = %q, want 'hello aes-ctr 256-bit key test!'", data.Decoded)
+	}
+}
+
+func TestCrypto_AESCTRGenerateKeyEncryptDecrypt(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const key = await crypto.subtle.generateKey(
+      { name: "AES-CTR", length: 256 }, true, ["encrypt", "decrypt"]
+    );
+    const counter = new Uint8Array(16);
+    crypto.getRandomValues(counter);
+    const plaintext = new TextEncoder().encode("generated key test");
+    const ct = await crypto.subtle.encrypt(
+      { name: "AES-CTR", counter, length: 64 }, key, plaintext
+    );
+    const pt = await crypto.subtle.decrypt(
+      { name: "AES-CTR", counter, length: 64 }, key, ct
+    );
+    const decoded = new TextDecoder().decode(pt);
+    // Also verify the key is exportable
+    const exported = await crypto.subtle.exportKey("raw", key);
+    return Response.json({
+      decoded,
+      keyLen: new Uint8Array(exported).length,
+      algoName: key.algorithm.name,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Decoded  string `json:"decoded"`
+		KeyLen   int    `json:"keyLen"`
+		AlgoName string `json:"algoName"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Decoded != "generated key test" {
+		t.Errorf("decoded = %q, want 'generated key test'", data.Decoded)
+	}
+	if data.KeyLen != 32 {
+		t.Errorf("key length = %d, want 32", data.KeyLen)
+	}
+	if data.AlgoName != "AES-CTR" {
+		t.Errorf("algorithm name = %q, want 'AES-CTR'", data.AlgoName)
+	}
+}
+
+func TestCrypto_AESCTRGenerateKey128(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const key = await crypto.subtle.generateKey(
+      { name: "AES-CTR", length: 128 }, true, ["encrypt", "decrypt"]
+    );
+    const exported = await crypto.subtle.exportKey("raw", key);
+    return Response.json({ keyLen: new Uint8Array(exported).length });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		KeyLen int `json:"keyLen"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.KeyLen != 16 {
+		t.Errorf("key length = %d, want 16", data.KeyLen)
+	}
+}
+
+func TestCrypto_AESCTRCounterValidation(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const keyData = new Uint8Array(16);
+    crypto.getRandomValues(keyData);
+    const key = await crypto.subtle.importKey(
+      "raw", keyData, { name: "AES-CTR" }, false, ["encrypt", "decrypt"]
+    );
+    // Try with a counter that is NOT 16 bytes (should fail)
+    var badCounterCaught = false;
+    try {
+      const badCounter = new Uint8Array(8); // wrong size
+      await crypto.subtle.encrypt(
+        { name: "AES-CTR", counter: badCounter, length: 64 }, key, new Uint8Array([1,2,3])
+      );
+    } catch(e) {
+      badCounterCaught = true;
+    }
+    // Try without counter at all (should fail)
+    var noCounterCaught = false;
+    try {
+      await crypto.subtle.encrypt(
+        { name: "AES-CTR", length: 64 }, key, new Uint8Array([1,2,3])
+      );
+    } catch(e) {
+      noCounterCaught = true;
+    }
+    return Response.json({ badCounterCaught, noCounterCaught });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		BadCounterCaught bool `json:"badCounterCaught"`
+		NoCounterCaught  bool `json:"noCounterCaught"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.BadCounterCaught {
+		t.Error("AES-CTR with wrong-size counter should throw")
+	}
+	if !data.NoCounterCaught {
+		t.Error("AES-CTR without counter should throw")
+	}
+}
+
+func TestCrypto_AESCTRLargeData(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const key = await crypto.subtle.generateKey(
+      { name: "AES-CTR", length: 256 }, false, ["encrypt", "decrypt"]
+    );
+    const counter = new Uint8Array(16);
+    counter[15] = 1;
+    // Encrypt 1000 bytes of data
+    const data = new Uint8Array(1000);
+    crypto.getRandomValues(data);
+    const ct = await crypto.subtle.encrypt(
+      { name: "AES-CTR", counter, length: 64 }, key, data
+    );
+    const pt = await crypto.subtle.decrypt(
+      { name: "AES-CTR", counter, length: 64 }, key, ct
+    );
+    const original = new Uint8Array(data);
+    const recovered = new Uint8Array(pt);
+    var match = original.length === recovered.length;
+    for (var i = 0; match && i < original.length; i++) {
+      if (original[i] !== recovered[i]) match = false;
+    }
+    return Response.json({ match, ctLen: new Uint8Array(ct).length });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Match bool `json:"match"`
+		CtLen int  `json:"ctLen"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Match {
+		t.Error("AES-CTR large data roundtrip should match")
+	}
+	if data.CtLen != 1000 {
+		t.Errorf("ciphertext length = %d, want 1000 (stream cipher, same as input)", data.CtLen)
+	}
+}
+
+// === AES-KW Tests ===
+
+func TestCrypto_AESKWWrapUnwrapRoundtrip(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    // Generate a wrapping key (AES-KW, 256-bit)
+    const wrappingKey = await crypto.subtle.generateKey(
+      { name: "AES-KW", length: 256 }, false, ["wrapKey", "unwrapKey"]
+    );
+    // Generate a key to wrap (AES-GCM, 256-bit)
+    const keyToWrap = await crypto.subtle.generateKey(
+      { name: "AES-GCM" }, true, ["encrypt", "decrypt"]
+    );
+    // Export the original key for comparison
+    const originalExport = await crypto.subtle.exportKey("raw", keyToWrap);
+    const originalBytes = new Uint8Array(originalExport);
+    // Wrap the key
+    const wrapped = await crypto.subtle.wrapKey("raw", keyToWrap, wrappingKey, "AES-KW");
+    // Unwrap the key
+    const unwrapped = await crypto.subtle.unwrapKey(
+      "raw", wrapped, wrappingKey, "AES-KW",
+      { name: "AES-GCM" }, true, ["encrypt", "decrypt"]
+    );
+    // Export unwrapped key and compare
+    const unwrappedExport = await crypto.subtle.exportKey("raw", unwrapped);
+    const unwrappedBytes = new Uint8Array(unwrappedExport);
+    var match = originalBytes.length === unwrappedBytes.length;
+    for (var i = 0; match && i < originalBytes.length; i++) {
+      if (originalBytes[i] !== unwrappedBytes[i]) match = false;
+    }
+    return Response.json({
+      match,
+      wrappedLen: new Uint8Array(wrapped).length,
+      originalLen: originalBytes.length,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Match       bool `json:"match"`
+		WrappedLen  int  `json:"wrappedLen"`
+		OriginalLen int  `json:"originalLen"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Match {
+		t.Error("AES-KW wrap/unwrap roundtrip should produce identical key material")
+	}
+	// AES-KW adds 8 bytes overhead
+	if data.WrappedLen != data.OriginalLen+8 {
+		t.Errorf("wrapped length = %d, want %d (original %d + 8 overhead)",
+			data.WrappedLen, data.OriginalLen+8, data.OriginalLen)
+	}
+}
+
+func TestCrypto_AESKWWrapUnwrap128(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const wrappingKey = await crypto.subtle.generateKey(
+      { name: "AES-KW", length: 128 }, false, ["wrapKey", "unwrapKey"]
+    );
+    // Wrap a 128-bit AES-CTR key
+    const keyToWrap = await crypto.subtle.generateKey(
+      { name: "AES-CTR", length: 128 }, true, ["encrypt", "decrypt"]
+    );
+    const originalExport = await crypto.subtle.exportKey("raw", keyToWrap);
+    const wrapped = await crypto.subtle.wrapKey("raw", keyToWrap, wrappingKey, "AES-KW");
+    const unwrapped = await crypto.subtle.unwrapKey(
+      "raw", wrapped, wrappingKey, "AES-KW",
+      { name: "AES-CTR", length: 128 }, true, ["encrypt", "decrypt"]
+    );
+    const unwrappedExport = await crypto.subtle.exportKey("raw", unwrapped);
+    const orig = new Uint8Array(originalExport);
+    const recv = new Uint8Array(unwrappedExport);
+    var match = orig.length === recv.length;
+    for (var i = 0; match && i < orig.length; i++) {
+      if (orig[i] !== recv[i]) match = false;
+    }
+    return Response.json({ match, wrappedLen: new Uint8Array(wrapped).length });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Match      bool `json:"match"`
+		WrappedLen int  `json:"wrappedLen"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Match {
+		t.Error("AES-KW 128-bit wrap/unwrap roundtrip should match")
+	}
+	if data.WrappedLen != 24 {
+		t.Errorf("wrapped length = %d, want 24 (16 key + 8 overhead)", data.WrappedLen)
+	}
+}
+
+func TestCrypto_AESKWWrongKeyUnwrap(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const wrappingKey1 = await crypto.subtle.generateKey(
+      { name: "AES-KW", length: 256 }, false, ["wrapKey", "unwrapKey"]
+    );
+    const wrappingKey2 = await crypto.subtle.generateKey(
+      { name: "AES-KW", length: 256 }, false, ["wrapKey", "unwrapKey"]
+    );
+    const keyToWrap = await crypto.subtle.generateKey(
+      { name: "AES-GCM" }, true, ["encrypt", "decrypt"]
+    );
+    // Wrap with key1
+    const wrapped = await crypto.subtle.wrapKey("raw", keyToWrap, wrappingKey1, "AES-KW");
+    // Try to unwrap with key2 (should fail integrity check)
+    var caught = false;
+    try {
+      await crypto.subtle.unwrapKey(
+        "raw", wrapped, wrappingKey2, "AES-KW",
+        { name: "AES-GCM" }, true, ["encrypt", "decrypt"]
+      );
+    } catch(e) {
+      caught = true;
+    }
+    return Response.json({ caught });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Caught bool `json:"caught"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Caught {
+		t.Error("AES-KW unwrap with wrong key should throw integrity error")
+	}
+}
+
+func TestCrypto_AESKWGenerateKey256(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const key = await crypto.subtle.generateKey(
+      { name: "AES-KW", length: 256 }, true, ["wrapKey", "unwrapKey"]
+    );
+    const exported = await crypto.subtle.exportKey("raw", key);
+    return Response.json({
+      keyLen: new Uint8Array(exported).length,
+      algoName: key.algorithm.name,
+      keyType: key.type,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		KeyLen   int    `json:"keyLen"`
+		AlgoName string `json:"algoName"`
+		KeyType  string `json:"keyType"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.KeyLen != 32 {
+		t.Errorf("key length = %d, want 32", data.KeyLen)
+	}
+	if data.AlgoName != "AES-KW" {
+		t.Errorf("algorithm name = %q, want 'AES-KW'", data.AlgoName)
+	}
+	if data.KeyType != "secret" {
+		t.Errorf("key type = %q, want 'secret'", data.KeyType)
+	}
+}
+
+func TestCrypto_AESCTRDifferentCounterProducesDifferentCiphertext(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const keyData = new Uint8Array(32);
+    crypto.getRandomValues(keyData);
+    const key = await crypto.subtle.importKey(
+      "raw", keyData, { name: "AES-CTR" }, false, ["encrypt", "decrypt"]
+    );
+    const plaintext = new TextEncoder().encode("test data");
+    const counter1 = new Uint8Array(16);
+    counter1[15] = 1;
+    const counter2 = new Uint8Array(16);
+    counter2[15] = 2;
+    const ct1 = await crypto.subtle.encrypt(
+      { name: "AES-CTR", counter: counter1, length: 64 }, key, plaintext
+    );
+    const ct2 = await crypto.subtle.encrypt(
+      { name: "AES-CTR", counter: counter2, length: 64 }, key, plaintext
+    );
+    const b1 = new Uint8Array(ct1);
+    const b2 = new Uint8Array(ct2);
+    var different = false;
+    for (var i = 0; i < b1.length; i++) {
+      if (b1[i] !== b2[i]) { different = true; break; }
+    }
+    return Response.json({ different });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Different bool `json:"different"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Different {
+		t.Error("AES-CTR with different counters should produce different ciphertext")
+	}
+}
+
+func TestCrypto_AESKWWrapUnwrapWithAESCTRKey(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    // Generate wrapping key
+    const wrapKey = await crypto.subtle.generateKey(
+      { name: "AES-KW", length: 256 }, false, ["wrapKey", "unwrapKey"]
+    );
+    // Generate AES-CTR key to wrap
+    const ctrKey = await crypto.subtle.generateKey(
+      { name: "AES-CTR", length: 256 }, true, ["encrypt", "decrypt"]
+    );
+    // Encrypt some data with the original key
+    const counter = new Uint8Array(16);
+    counter[15] = 1;
+    const plaintext = new TextEncoder().encode("wrap me!");
+    const ct = await crypto.subtle.encrypt(
+      { name: "AES-CTR", counter, length: 64 }, ctrKey, plaintext
+    );
+    // Wrap and unwrap the key
+    const wrapped = await crypto.subtle.wrapKey("raw", ctrKey, wrapKey, "AES-KW");
+    const unwrappedKey = await crypto.subtle.unwrapKey(
+      "raw", wrapped, wrapKey, "AES-KW",
+      { name: "AES-CTR", length: 256 }, true, ["encrypt", "decrypt"]
+    );
+    // Decrypt with the unwrapped key
+    const pt = await crypto.subtle.decrypt(
+      { name: "AES-CTR", counter, length: 64 }, unwrappedKey, ct
+    );
+    const decoded = new TextDecoder().decode(pt);
+    return Response.json({ decoded });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Decoded string `json:"decoded"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Decoded != "wrap me!" {
+		t.Errorf("decoded = %q, want 'wrap me!'", data.Decoded)
+	}
+}

@@ -49,17 +49,18 @@ type TailEvent struct {
 
 // Env holds all bindings passed to the worker as the second argument.
 type Env struct {
-	Vars            map[string]string
-	Secrets         map[string]string
-	KVBindings      map[string]string               // binding name -> namespace ID
-	StorageBindings map[string]string               // binding name -> S3 bucket name
-	QueueBindings   map[string]string               // binding name -> queue name
-	D1Bindings      map[string]string               // binding name -> database ID
-	ServiceBindings map[string]ServiceBindingConfig // binding name -> target config
-	Assets          AssetsFetcher
-	engine          *Engine  // set internally for service binding dispatch
-	db              *gorm.DB // set internally for cache API and other global bindings
-	d1DataDir       string   // set internally for D1 isolated database files
+	Vars                  map[string]string
+	Secrets               map[string]string
+	KVBindings            map[string]string               // binding name -> namespace ID
+	StorageBindings       map[string]string               // binding name -> S3 bucket name
+	QueueBindings         map[string]string               // binding name -> queue name
+	D1Bindings            map[string]string               // binding name -> database ID
+	DurableObjectBindings map[string]string               // binding name -> namespace ID
+	ServiceBindings       map[string]ServiceBindingConfig // binding name -> target config
+	Assets                AssetsFetcher
+	engine                *Engine  // set internally for service binding dispatch
+	db                    *gorm.DB // set internally for cache API and other global bindings
+	d1DataDir             string   // set internally for D1 isolated database files
 }
 
 // AssetsFetcher is implemented by the static pipeline to handle env.ASSETS.fetch().

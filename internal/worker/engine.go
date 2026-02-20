@@ -192,6 +192,8 @@ func (e *Engine) getOrCreatePool(siteID string, deployKey string) (*v8Pool, erro
 		setupTimers,
 		// Abort: AbortController, AbortSignal, Event, EventTarget, DOMException
 		setupAbort,
+		// reportError/ErrorEvent: global error reporting (requires EventTarget)
+		setupReportError,
 		// Crypto: crypto.getRandomValues, crypto.subtle, crypto.randomUUID
 		setupCrypto,
 		// Crypto extensions: JWK, ECDSA, AES-CBC, generateKey
@@ -202,6 +204,10 @@ func (e *Engine) getOrCreatePool(siteID string, deployKey string) (*v8Pool, erro
 		setupCryptoRSA,
 		// Crypto: Ed25519 sign/verify
 		setupCryptoEd25519,
+		// Crypto: AES-CTR encrypt/decrypt, AES-KW wrapKey/unwrapKey
+		setupCryptoAesCtrKw,
+		// Crypto: ECDH and X25519 key agreement
+		setupCryptoECDH,
 		// URLPattern: URL pattern matching API
 		setupURLPattern,
 		// Streams: ReadableStream, WritableStream, TransformStream
@@ -210,6 +216,8 @@ func (e *Engine) getOrCreatePool(siteID string, deployKey string) (*v8Pool, erro
 		setupTextStreams,
 		// FormData: FormData, Blob, File
 		setupFormData,
+		// Blob extensions: Blob.stream(), Blob.bytes() (requires Blob + ReadableStream)
+		setupBlobExt,
 		// Compression: CompressionStream, DecompressionStream
 		setupCompression,
 		// Body types: patches Request/Response for non-string bodies
@@ -220,6 +228,8 @@ func (e *Engine) getOrCreatePool(siteID string, deployKey string) (*v8Pool, erro
 		setupHTMLRewriter,
 		// Console: log/info/warn/error/debug capture
 		setupConsole,
+		// Console extensions: time, count, assert, table, trace, group
+		setupConsoleExt,
 		// Fetch: Go-backed fetch() with SSRF protection
 		func(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 			return setupFetch(iso, ctx, cfg)

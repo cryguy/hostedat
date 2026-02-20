@@ -606,3 +606,536 @@ func TestDurable_JSStorageDeleteMulti(t *testing.T) {
 		t.Errorf("remainingSize = %v, want 1", data["remainingSize"])
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Integration tests — exercise Durable Objects through the full engine pipeline
+// ---------------------------------------------------------------------------
+
+// doEnv creates an Env with a Durable Object binding wired up.
+func doEnv(namespace string) *Env {
+	return &Env{
+		Vars:                  make(map[string]string),
+		Secrets:               make(map[string]string),
+		KVBindings:            make(map[string]string),
+		DurableObjectBindings: map[string]string{"MY_DO": namespace},
+	}
+}
+
+func TestDurableIntegration_IdFromName(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    var id = env.MY_DO.idFromName("test");
+    var id2 = env.MY_DO.idFromName("test");
+    var id3 = env.MY_DO.idFromName("other");
+    return Response.json({
+      hex: id.toString(),
+      hexLen: id.toString().length,
+      same: id.toString() === id2.toString(),
+      different: id.toString() !== id3.toString(),
+    });
+  },
+};`
+
+	env := doEnv("int-ns")
+	r := execJS(t, e, source, env, getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Hex       string `json:"hex"`
+		HexLen    int    `json:"hexLen"`
+		Same      bool   `json:"same"`
+		Different bool   `json:"different"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.HexLen != 64 {
+		t.Errorf("hexLen = %d, want 64", data.HexLen)
+	}
+	if !data.Same {
+		t.Error("same name should produce same ID")
+	}
+	if !data.Different {
+		t.Error("different names should produce different IDs")
+	}
+}
+
+func TestDurableIntegration_GetStubFetch(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    var id = env.MY_DO.idFromName("fetch-obj");
+    var stub = env.MY_DO.get(id);
+    var resp = await stub.fetch("http://fake/");
+    var text = await resp.text();
+    return Response.json({ status: resp.status, body: text });
+  },
+};`
+
+	env := doEnv("int-ns")
+	r := execJS(t, e, source, env, getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Status int    `json:"status"`
+		Body   string `json:"body"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Status != 200 {
+		t.Errorf("status = %d, want 200", data.Status)
+	}
+	if data.Body != "ok" {
+		t.Errorf("body = %q, want ok", data.Body)
+	}
+}
+
+func TestDurableIntegration_StoragePutGetDelete(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    var id = env.MY_DO.idFromName("storage-obj");
+    var stub = env.MY_DO.get(id);
+
+    // put and get
+    await stub.storage.put("greeting", "hello world");
+    var val = await stub.storage.get("greeting");
+
+    // put object
+    await stub.storage.put("data", { name: "alice", age: 30 });
+    var obj = await stub.storage.get("data");
+
+    // delete
+    await stub.storage.put("temp", "gone");
+    await stub.storage.delete("temp");
+    var afterDel = await stub.storage.get("temp");
+
+    return Response.json({
+      val: val,
+      name: obj.name,
+      age: obj.age,
+      afterDelNull: afterDel === null,
+    });
+  },
+};`
+
+	env := doEnv("int-ns")
+	r := execJS(t, e, source, env, getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Val          string `json:"val"`
+		Name         string `json:"name"`
+		Age          int    `json:"age"`
+		AfterDelNull bool   `json:"afterDelNull"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Val != "hello world" {
+		t.Errorf("val = %q, want hello world", data.Val)
+	}
+	if data.Name != "alice" {
+		t.Errorf("name = %q, want alice", data.Name)
+	}
+	if data.Age != 30 {
+		t.Errorf("age = %d, want 30", data.Age)
+	}
+	if !data.AfterDelNull {
+		t.Error("after delete should be null")
+	}
+}
+
+func TestDurableIntegration_StorageDeleteAllAndList(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    var id = env.MY_DO.idFromName("list-obj");
+    var stub = env.MY_DO.get(id);
+
+    await stub.storage.put("user:1", "alice");
+    await stub.storage.put("user:2", "bob");
+    await stub.storage.put("other:1", "nope");
+
+    var all = await stub.storage.list();
+    var prefixed = await stub.storage.list({ prefix: "user:" });
+
+    await stub.storage.deleteAll();
+    var afterClear = await stub.storage.list();
+
+    return Response.json({
+      allSize: all.size,
+      prefixedSize: prefixed.size,
+      afterClearSize: afterClear.size,
+    });
+  },
+};`
+
+	env := doEnv("int-ns")
+	r := execJS(t, e, source, env, getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		AllSize        int `json:"allSize"`
+		PrefixedSize   int `json:"prefixedSize"`
+		AfterClearSize int `json:"afterClearSize"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.AllSize != 3 {
+		t.Errorf("allSize = %d, want 3", data.AllSize)
+	}
+	if data.PrefixedSize != 2 {
+		t.Errorf("prefixedSize = %d, want 2", data.PrefixedSize)
+	}
+	if data.AfterClearSize != 0 {
+		t.Errorf("afterClearSize = %d, want 0", data.AfterClearSize)
+	}
+}
+
+func TestDurableIntegration_NoBinding(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Worker tries to access env.MY_DO when no binding is configured.
+	source := `export default {
+  async fetch(request, env) {
+    var hasDO = typeof env.MY_DO !== 'undefined';
+    return Response.json({ hasDO: hasDO });
+  },
+};`
+
+	env := defaultEnv()
+	r := execJS(t, e, source, env, getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		HasDO bool `json:"hasDO"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.HasDO {
+		t.Error("env.MY_DO should not exist when no binding is configured")
+	}
+}
+
+func TestDurableIntegration_MultipleBindings(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    // Two separate DO namespaces
+    var id1 = env.DO_A.idFromName("shared-name");
+    var id2 = env.DO_B.idFromName("shared-name");
+
+    var stub1 = env.DO_A.get(id1);
+    var stub2 = env.DO_B.get(id2);
+
+    await stub1.storage.put("key", "from-A");
+    await stub2.storage.put("key", "from-B");
+
+    var val1 = await stub1.storage.get("key");
+    var val2 = await stub2.storage.get("key");
+
+    return Response.json({
+      val1: val1,
+      val2: val2,
+      isolated: val1 !== val2,
+    });
+  },
+};`
+
+	env := &Env{
+		Vars:                  make(map[string]string),
+		Secrets:               make(map[string]string),
+		KVBindings:            make(map[string]string),
+		DurableObjectBindings: map[string]string{"DO_A": "ns-alpha", "DO_B": "ns-beta"},
+	}
+	r := execJS(t, e, source, env, getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Val1     string `json:"val1"`
+		Val2     string `json:"val2"`
+		Isolated bool   `json:"isolated"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Val1 != "from-A" {
+		t.Errorf("val1 = %q, want from-A", data.Val1)
+	}
+	if data.Val2 != "from-B" {
+		t.Errorf("val2 = %q, want from-B", data.Val2)
+	}
+	if !data.Isolated {
+		t.Error("different namespaces should have isolated storage")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Edge-case tests — exercise rejection/validation branches in buildDurableObjectStorage
+// ---------------------------------------------------------------------------
+
+func TestDurableIntegration_StorageGetNoArgs(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    var id = env.MY_DO.idFromName("edge-get");
+    var stub = env.MY_DO.get(id);
+    try {
+      await stub.storage.get();
+    } catch (e) {
+      return Response.json({ rejected: true, msg: String(e) });
+    }
+    return Response.json({ rejected: false });
+  },
+};`
+	r := execJS(t, e, source, doEnv("edge-ns"), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Rejected bool   `json:"rejected"`
+		Msg      string `json:"msg"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !data.Rejected {
+		t.Error("storage.get() with no args should reject")
+	}
+}
+
+func TestDurableIntegration_StoragePutNoArgs(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    var id = env.MY_DO.idFromName("edge-put");
+    var stub = env.MY_DO.get(id);
+    try {
+      await stub.storage.put();
+    } catch (e) {
+      return Response.json({ rejected: true, msg: String(e) });
+    }
+    return Response.json({ rejected: false });
+  },
+};`
+	r := execJS(t, e, source, doEnv("edge-ns"), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Rejected bool   `json:"rejected"`
+		Msg      string `json:"msg"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !data.Rejected {
+		t.Error("storage.put() with no args should reject")
+	}
+}
+
+func TestDurableIntegration_StoragePutNonObject(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// storage.put(42) — single non-object arg should reject
+	source := `export default {
+  async fetch(request, env) {
+    var id = env.MY_DO.idFromName("edge-putno");
+    var stub = env.MY_DO.get(id);
+    try {
+      await stub.storage.put(42);
+    } catch (e) {
+      return Response.json({ rejected: true, msg: String(e) });
+    }
+    return Response.json({ rejected: false });
+  },
+};`
+	r := execJS(t, e, source, doEnv("edge-ns"), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Rejected bool   `json:"rejected"`
+		Msg      string `json:"msg"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !data.Rejected {
+		t.Error("storage.put(42) should reject")
+	}
+}
+
+func TestDurableIntegration_StorageDeleteNoArgs(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    var id = env.MY_DO.idFromName("edge-del");
+    var stub = env.MY_DO.get(id);
+    try {
+      await stub.storage.delete();
+    } catch (e) {
+      return Response.json({ rejected: true, msg: String(e) });
+    }
+    return Response.json({ rejected: false });
+  },
+};`
+	r := execJS(t, e, source, doEnv("edge-ns"), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Rejected bool   `json:"rejected"`
+		Msg      string `json:"msg"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !data.Rejected {
+		t.Error("storage.delete() with no args should reject")
+	}
+}
+
+func TestDurableIntegration_StorageListWithOptions(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Exercises the options-extraction branch in buildDurableObjectStorage list()
+	// including prefix, limit, and reverse parameters. Verifies reverse ordering.
+	source := `export default {
+  async fetch(request, env) {
+    var id = env.MY_DO.idFromName("list-opts");
+    var stub = env.MY_DO.get(id);
+    await stub.storage.put("a", 1);
+    await stub.storage.put("b", 2);
+    await stub.storage.put("c", 3);
+
+    var all = await stub.storage.list();
+    var limited = await stub.storage.list({ limit: 2 });
+    var reversed = await stub.storage.list({ reverse: true });
+    var prefixed = await stub.storage.list({ prefix: "a" });
+
+    var fwdKeys = Array.from(all.keys());
+    var revKeys = Array.from(reversed.keys());
+
+    return Response.json({
+      allSize: all.size,
+      limitedSize: limited.size,
+      reversedSize: reversed.size,
+      prefixedSize: prefixed.size,
+      fwdFirst: fwdKeys[0],
+      fwdLast: fwdKeys[fwdKeys.length - 1],
+      revFirst: revKeys[0],
+      revLast: revKeys[revKeys.length - 1],
+    });
+  },
+};`
+	r := execJS(t, e, source, doEnv("edge-ns"), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		AllSize      int    `json:"allSize"`
+		LimitedSize  int    `json:"limitedSize"`
+		ReversedSize int    `json:"reversedSize"`
+		PrefixedSize int    `json:"prefixedSize"`
+		FwdFirst     string `json:"fwdFirst"`
+		FwdLast      string `json:"fwdLast"`
+		RevFirst     string `json:"revFirst"`
+		RevLast      string `json:"revLast"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.AllSize != 3 {
+		t.Errorf("allSize = %d, want 3", data.AllSize)
+	}
+	if data.LimitedSize != 2 {
+		t.Errorf("limitedSize = %d, want 2", data.LimitedSize)
+	}
+	if data.ReversedSize != 3 {
+		t.Errorf("reversedSize = %d, want 3", data.ReversedSize)
+	}
+	if data.PrefixedSize != 1 {
+		t.Errorf("prefixedSize = %d, want 1", data.PrefixedSize)
+	}
+	if data.FwdFirst != "a" {
+		t.Errorf("forward first key = %q, want a", data.FwdFirst)
+	}
+	if data.FwdLast != "c" {
+		t.Errorf("forward last key = %q, want c", data.FwdLast)
+	}
+	if data.RevFirst != "c" {
+		t.Errorf("reverse first key = %q, want c", data.RevFirst)
+	}
+	if data.RevLast != "a" {
+		t.Errorf("reverse last key = %q, want a", data.RevLast)
+	}
+}
+
+// TestDurableIntegration_CombinedBindings exercises buildEnvObject with KV + D1 + DO together.
+func TestDurableIntegration_CombinedBindings(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    var hasKV = typeof env.MY_KV !== 'undefined' && typeof env.MY_KV.get === 'function';
+    var hasD1 = typeof env.MY_DB !== 'undefined' && typeof env.MY_DB.exec === 'function';
+    var hasDO = typeof env.MY_DO !== 'undefined' && typeof env.MY_DO.idFromName === 'function';
+    var hasQueue = typeof env.MY_QUEUE !== 'undefined' && typeof env.MY_QUEUE.send === 'function';
+    return Response.json({ hasKV, hasD1, hasDO, hasQueue });
+  },
+};`
+
+	env := &Env{
+		Vars:                  map[string]string{"FOO": "bar"},
+		Secrets:               map[string]string{"SECRET": "shh"},
+		KVBindings:            map[string]string{"MY_KV": "kv-ns"},
+		QueueBindings:         map[string]string{"MY_QUEUE": "q1"},
+		D1Bindings:            map[string]string{"MY_DB": "db1"},
+		DurableObjectBindings: map[string]string{"MY_DO": "do-ns"},
+	}
+	r := execJS(t, e, source, env, getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		HasKV    bool `json:"hasKV"`
+		HasD1    bool `json:"hasD1"`
+		HasDO    bool `json:"hasDO"`
+		HasQueue bool `json:"hasQueue"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !data.HasKV {
+		t.Error("should have KV binding")
+	}
+	if !data.HasD1 {
+		t.Error("should have D1 binding")
+	}
+	if !data.HasDO {
+		t.Error("should have DO binding")
+	}
+	if !data.HasQueue {
+		t.Error("should have Queue binding")
+	}
+}

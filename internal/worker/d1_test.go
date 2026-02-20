@@ -2,6 +2,8 @@ package worker
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -842,5 +844,134 @@ func TestD1_JSBindZeroArgs(t *testing.T) {
 	}
 	if data.Name != "static" {
 		t.Errorf("name = %q, want static", data.Name)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OpenD1Database tests (file-based)
+// ---------------------------------------------------------------------------
+
+func TestOpenD1Database_CreatesFileAndSetsWAL(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbID := "test-open-db-1"
+
+	bridge, err := OpenD1Database(tmpDir, dbID)
+	if err != nil {
+		t.Fatalf("OpenD1Database: %v", err)
+	}
+	defer func() { _ = bridge.Close() }()
+
+	// Verify the database file was created.
+	dbPath := filepath.Join(tmpDir, "d1", dbID+".sqlite3")
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		t.Fatalf("database file not created at %s", dbPath)
+	}
+
+	// Verify WAL mode is set.
+	result, err := bridge.Exec("PRAGMA journal_mode", nil)
+	if err != nil {
+		t.Fatalf("PRAGMA journal_mode: %v", err)
+	}
+	if len(result.Rows) == 0 {
+		t.Fatal("PRAGMA journal_mode returned no rows")
+	}
+	mode, ok := result.Rows[0][0].(string)
+	if !ok {
+		t.Fatalf("journal_mode is not a string: %T", result.Rows[0][0])
+	}
+	if mode != "wal" {
+		t.Errorf("journal_mode = %q, want wal", mode)
+	}
+
+	// Verify DatabaseID is set on the bridge.
+	if bridge.DatabaseID != dbID {
+		t.Errorf("DatabaseID = %q, want %q", bridge.DatabaseID, dbID)
+	}
+}
+
+func TestOpenD1Database_SecondCallReturnsSameFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbID := "test-open-db-reuse"
+
+	// First open: create a table and insert data.
+	bridge1, err := OpenD1Database(tmpDir, dbID)
+	if err != nil {
+		t.Fatalf("OpenD1Database (1st): %v", err)
+	}
+	_, err = bridge1.Exec("CREATE TABLE reuse_test (id INTEGER PRIMARY KEY, val TEXT)", nil)
+	if err != nil {
+		t.Fatalf("CREATE TABLE: %v", err)
+	}
+	_, err = bridge1.Exec("INSERT INTO reuse_test (val) VALUES (?)", []interface{}{"persisted"})
+	if err != nil {
+		t.Fatalf("INSERT: %v", err)
+	}
+	_ = bridge1.Close()
+
+	// Second open: data should be visible because the same file is used.
+	bridge2, err := OpenD1Database(tmpDir, dbID)
+	if err != nil {
+		t.Fatalf("OpenD1Database (2nd): %v", err)
+	}
+	defer func() { _ = bridge2.Close() }()
+
+	result, err := bridge2.Exec("SELECT val FROM reuse_test", nil)
+	if err != nil {
+		t.Fatalf("SELECT: %v", err)
+	}
+	if len(result.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(result.Rows))
+	}
+	val, _ := result.Rows[0][0].(string)
+	if val != "persisted" {
+		t.Errorf("val = %q, want persisted", val)
+	}
+}
+
+func TestOpenD1Database_Close(t *testing.T) {
+	tmpDir := t.TempDir()
+	bridge, err := OpenD1Database(tmpDir, "test-close")
+	if err != nil {
+		t.Fatalf("OpenD1Database: %v", err)
+	}
+
+	// Close should succeed.
+	if err := bridge.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Querying after close should fail.
+	_, err = bridge.Exec("SELECT 1", nil)
+	if err == nil {
+		t.Error("Exec after Close should fail")
+	}
+}
+
+func TestOpenD1Database_CloseNilDB(t *testing.T) {
+	// A D1Bridge with nil db should not panic on Close.
+	bridge := &D1Bridge{db: nil, DatabaseID: "nil-test"}
+	if err := bridge.Close(); err != nil {
+		t.Errorf("Close on nil db should not error: %v", err)
+	}
+}
+
+func TestOpenD1Database_CreatesD1Subdirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbID := "test-subdir"
+
+	bridge, err := OpenD1Database(tmpDir, dbID)
+	if err != nil {
+		t.Fatalf("OpenD1Database: %v", err)
+	}
+	defer func() { _ = bridge.Close() }()
+
+	// Verify the d1 subdirectory was created.
+	d1Dir := filepath.Join(tmpDir, "d1")
+	info, err := os.Stat(d1Dir)
+	if err != nil {
+		t.Fatalf("d1 directory not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("d1 path should be a directory")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/andybalholm/brotli"
 	v8 "github.com/tommie/v8go"
 )
 
@@ -76,7 +77,7 @@ function __chunkToUint8Array(chunk) {
 
 class CompressionStream {
 	constructor(format) {
-		if (format !== 'gzip' && format !== 'deflate' && format !== 'deflate-raw') {
+		if (format !== 'gzip' && format !== 'deflate' && format !== 'deflate-raw' && format !== 'br') {
 			throw new TypeError('Unsupported compression format: ' + format);
 		}
 		var reqID = globalThis.__requestID;
@@ -103,7 +104,7 @@ class CompressionStream {
 
 class DecompressionStream {
 	constructor(format) {
-		if (format !== 'gzip' && format !== 'deflate' && format !== 'deflate-raw') {
+		if (format !== 'gzip' && format !== 'deflate' && format !== 'deflate-raw' && format !== 'br') {
 			throw new TypeError('Unsupported compression format: ' + format);
 		}
 		var reqID = globalThis.__requestID;
@@ -141,6 +142,8 @@ func newCompressWriter(buf *bytes.Buffer, format string) (io.WriteCloser, error)
 		return gzip.NewWriter(buf), nil
 	case "deflate", "deflate-raw":
 		return flate.NewWriter(buf, flate.DefaultCompression)
+	case "br":
+		return brotli.NewWriter(buf), nil
 	default:
 		return nil, fmt.Errorf("unsupported format %q", format)
 	}
@@ -215,6 +218,12 @@ func setupCompression(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 				return throwError(iso, fmt.Sprintf("decompress: %s", err.Error()))
 			}
 			_ = r.Close()
+		case "br":
+			r := brotli.NewReader(bytes.NewReader(data))
+			result, err = io.ReadAll(r)
+			if err != nil {
+				return throwError(iso, fmt.Sprintf("decompress: %s", err.Error()))
+			}
 		default:
 			return throwError(iso, fmt.Sprintf("decompress: unsupported format %q", format))
 		}
@@ -363,6 +372,8 @@ func setupCompression(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 				reader = r
 			case "deflate", "deflate-raw":
 				reader = flate.NewReader(pr)
+			case "br":
+				reader = io.NopCloser(brotli.NewReader(pr))
 			default:
 				cs.decompMu.Lock()
 				cs.decompErr = fmt.Errorf("unsupported format %q", format)

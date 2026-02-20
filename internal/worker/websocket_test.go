@@ -613,3 +613,335 @@ func TestWebSocket_TextDispatchRemainsString(t *testing.T) {
 		t.Errorf("data = %q, want 'hello text'", data.Data)
 	}
 }
+
+func TestWebSocket_CloseTransitionsReadyState(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    var pair = new WebSocketPair();
+    var server = pair[1];
+    server.accept();
+
+    var stateOpen = server.readyState;
+    server.close(1000, 'normal');
+    var stateClosed = server.readyState;
+
+    return Response.json({
+      stateOpen: stateOpen,
+      stateClosed: stateClosed,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		StateOpen   int `json:"stateOpen"`
+		StateClosed int `json:"stateClosed"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.StateOpen != 1 {
+		t.Errorf("readyState before close = %d, want 1 (OPEN)", data.StateOpen)
+	}
+	if data.StateClosed != 3 {
+		t.Errorf("readyState after close = %d, want 3 (CLOSED)", data.StateClosed)
+	}
+}
+
+func TestWebSocket_CloseIdempotent(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Calling close() multiple times should not throw or change state further.
+	source := `export default {
+  fetch(request, env) {
+    var pair = new WebSocketPair();
+    var server = pair[1];
+    server.accept();
+
+    server.close(1000, 'first');
+    var stateAfterFirst = server.readyState;
+    server.close(1001, 'second');
+    var stateAfterSecond = server.readyState;
+
+    return Response.json({
+      stateAfterFirst: stateAfterFirst,
+      stateAfterSecond: stateAfterSecond,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		StateAfterFirst  int `json:"stateAfterFirst"`
+		StateAfterSecond int `json:"stateAfterSecond"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.StateAfterFirst != 3 {
+		t.Errorf("readyState after first close = %d, want 3", data.StateAfterFirst)
+	}
+	if data.StateAfterSecond != 3 {
+		t.Errorf("readyState after second close = %d, want 3", data.StateAfterSecond)
+	}
+}
+
+func TestWebSocket_OnCloseHandler(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    var pair = new WebSocketPair();
+    var server = pair[1];
+    var closeCalled = false;
+    var closeEvent = null;
+
+    server.onclose = function(event) {
+      closeCalled = true;
+      closeEvent = { code: event.code, reason: event.reason };
+    };
+    server.accept();
+
+    // Manually dispatch close event (simulates what Bridge cleanup does)
+    server._dispatch('close', { code: 1000, reason: 'normal', wasClean: true });
+
+    return Response.json({
+      closeCalled: closeCalled,
+      closeEvent: closeEvent,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		CloseCalled bool `json:"closeCalled"`
+		CloseEvent  struct {
+			Code   int    `json:"code"`
+			Reason string `json:"reason"`
+		} `json:"closeEvent"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.CloseCalled {
+		t.Error("onclose handler should have been called")
+	}
+	if data.CloseEvent.Code != 1000 {
+		t.Errorf("close code = %d, want 1000", data.CloseEvent.Code)
+	}
+	if data.CloseEvent.Reason != "normal" {
+		t.Errorf("close reason = %q, want 'normal'", data.CloseEvent.Reason)
+	}
+}
+
+func TestWebSocket_OnErrorHandler(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    var pair = new WebSocketPair();
+    var server = pair[1];
+    var errorCalled = false;
+    var errorMsg = '';
+
+    server.onerror = function(event) {
+      errorCalled = true;
+      errorMsg = event.message || 'error-dispatched';
+    };
+    server.accept();
+
+    server._dispatch('error', { message: 'test-error' });
+
+    return Response.json({
+      errorCalled: errorCalled,
+      errorMsg: errorMsg,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		ErrorCalled bool   `json:"errorCalled"`
+		ErrorMsg    string `json:"errorMsg"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.ErrorCalled {
+		t.Error("onerror handler should have been called")
+	}
+	if data.ErrorMsg != "test-error" {
+		t.Errorf("error message = %q, want 'test-error'", data.ErrorMsg)
+	}
+}
+
+func TestWebSocket_OnOpenHandler(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    var pair = new WebSocketPair();
+    var server = pair[1];
+    var openCalled = false;
+
+    server.onopen = function(event) {
+      openCalled = true;
+    };
+
+    server._dispatch('open', {});
+
+    return Response.json({ openCalled: openCalled });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		OpenCalled bool `json:"openCalled"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.OpenCalled {
+		t.Error("onopen handler should have been called")
+	}
+}
+
+func TestWebSocket_URLProperty(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    var ws = new WebSocket('wss://example.com/ws');
+    var pairWs = new WebSocketPair();
+
+    return Response.json({
+      urlWithArg: ws.url,
+      urlWithoutArg: pairWs[0].url,
+      protocol: ws.protocol,
+      extensions: ws.extensions,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		URLWithArg    string `json:"urlWithArg"`
+		URLWithoutArg string `json:"urlWithoutArg"`
+		Protocol      string `json:"protocol"`
+		Extensions    string `json:"extensions"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.URLWithArg != "wss://example.com/ws" {
+		t.Errorf("url = %q, want 'wss://example.com/ws'", data.URLWithArg)
+	}
+	if data.URLWithoutArg != "" {
+		t.Errorf("pair url = %q, want '' (no url for pairs)", data.URLWithoutArg)
+	}
+	if data.Protocol != "" {
+		t.Errorf("protocol = %q, want ''", data.Protocol)
+	}
+	if data.Extensions != "" {
+		t.Errorf("extensions = %q, want ''", data.Extensions)
+	}
+}
+
+func TestWebSocket_MultipleListenersSameType(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Verify both addEventListener and on-property handlers fire for the same event.
+	source := `export default {
+  fetch(request, env) {
+    var pair = new WebSocketPair();
+    var server = pair[1];
+    var calls = [];
+
+    server.onmessage = function(event) {
+      calls.push('onmessage:' + event.data);
+    };
+    server.addEventListener('message', function(event) {
+      calls.push('listener:' + event.data);
+    });
+    server.accept();
+    server._dispatch('message', { data: 'test' });
+
+    return Response.json({ calls: calls });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Calls []string `json:"calls"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(data.Calls) != 2 {
+		t.Fatalf("expected 2 calls, got %d: %v", len(data.Calls), data.Calls)
+	}
+	if data.Calls[0] != "onmessage:test" {
+		t.Errorf("first call = %q, want 'onmessage:test'", data.Calls[0])
+	}
+	if data.Calls[1] != "listener:test" {
+		t.Errorf("second call = %q, want 'listener:test'", data.Calls[1])
+	}
+}
+
+func TestWebSocket_SendAfterCloseThrows(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    var pair = new WebSocketPair();
+    var server = pair[1];
+    server.accept();
+    server.close();
+
+    try {
+      server.send("after-close");
+      return Response.json({ threw: false });
+    } catch (e) {
+      return Response.json({ threw: true, message: e.message });
+    }
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Threw   bool   `json:"threw"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Threw {
+		t.Error("send() after close() should throw")
+	}
+}

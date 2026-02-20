@@ -326,6 +326,10 @@ func normalizeAlgo(name string) string {
 		return "AES-GCM"
 	case "aes-cbc", "AES-CBC", "Aes-Cbc":
 		return "AES-CBC"
+	case "aes-ctr", "AES-CTR", "Aes-Ctr":
+		return "AES-CTR"
+	case "aes-kw", "AES-KW", "Aes-Kw":
+		return "AES-KW"
 	case "ecdsa", "ECDSA", "Ecdsa":
 		return "ECDSA"
 	case "hkdf", "HKDF", "Hkdf":

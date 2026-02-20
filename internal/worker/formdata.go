@@ -163,3 +163,32 @@ func setupFormData(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	}
 	return nil
 }
+
+// blobExtJS adds stream() and bytes() methods to Blob.prototype.
+// Must be evaluated AFTER both setupFormData (Blob) and setupStreams (ReadableStream).
+const blobExtJS = `
+Blob.prototype.stream = function() {
+	var blob = this;
+	return new ReadableStream({
+		start: function(controller) {
+			blob.arrayBuffer().then(function(buf) {
+				controller.enqueue(new Uint8Array(buf));
+				controller.close();
+			});
+		}
+	});
+};
+Blob.prototype.bytes = function() {
+	return this.arrayBuffer().then(function(buf) {
+		return new Uint8Array(buf);
+	});
+};
+`
+
+// setupBlobExt evaluates the Blob.stream()/bytes() polyfills.
+func setupBlobExt(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
+	if _, err := ctx.RunScript(blobExtJS, "blob_ext.js"); err != nil {
+		return fmt.Errorf("evaluating blob_ext.js: %w", err)
+	}
+	return nil
+}

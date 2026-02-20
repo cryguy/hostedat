@@ -498,10 +498,37 @@ globalThis.FixedLengthStream = FixedLengthStream;
 })();
 `
 
+// queuingStrategiesJS defines ByteLengthQueuingStrategy and CountQueuingStrategy.
+const queuingStrategiesJS = `
+class ByteLengthQueuingStrategy {
+	constructor(init) {
+		this.highWaterMark = init.highWaterMark;
+	}
+	size(chunk) {
+		return chunk.byteLength;
+	}
+}
+
+class CountQueuingStrategy {
+	constructor(init) {
+		this.highWaterMark = init.highWaterMark;
+	}
+	size(chunk) {
+		return 1;
+	}
+}
+
+globalThis.ByteLengthQueuingStrategy = ByteLengthQueuingStrategy;
+globalThis.CountQueuingStrategy = CountQueuingStrategy;
+`
+
 // setupStreams evaluates the Streams API polyfills.
 func setupStreams(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	if _, err := ctx.RunScript(streamsJS, "streams.js"); err != nil {
 		return fmt.Errorf("evaluating streams.js: %w", err)
+	}
+	if _, err := ctx.RunScript(queuingStrategiesJS, "queuing_strategies.js"); err != nil {
+		return fmt.Errorf("evaluating queuing_strategies.js: %w", err)
 	}
 	return nil
 }

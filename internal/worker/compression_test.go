@@ -1135,3 +1135,640 @@ func TestCompression_DecompressionStreamMultiChunkInput(t *testing.T) {
 		t.Errorf("decompressed length = %d, want %d", data.DecompressedLen, len("Streaming decompression test! ")*100)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Brotli ("br") compression tests
+// ---------------------------------------------------------------------------
+
+func TestCompression_BrotliBulkRoundTrip(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const original = "Brotli bulk compression test! Repeated content for good ratio. " +
+      "Brotli bulk compression test! Repeated content for good ratio. " +
+      "Brotli bulk compression test! Repeated content for good ratio.";
+    const encoded = new TextEncoder().encode(original);
+    const b64 = __bufferSourceToB64(encoded);
+
+    const compressedB64 = __compress("br", b64);
+    const decompressedB64 = __decompress("br", compressedB64);
+
+    const decompressedBytes = Uint8Array.from(atob(decompressedB64), c => c.charCodeAt(0));
+    const result = new TextDecoder().decode(decompressedBytes);
+
+    const compressedBytes = Uint8Array.from(atob(compressedB64), c => c.charCodeAt(0));
+
+    return Response.json({
+      match: result === original,
+      originalLen: encoded.length,
+      compressedLen: compressedBytes.length,
+      smallerAfterCompress: compressedBytes.length < encoded.length,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Match                bool `json:"match"`
+		OriginalLen          int  `json:"originalLen"`
+		CompressedLen        int  `json:"compressedLen"`
+		SmallerAfterCompress bool `json:"smallerAfterCompress"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Match {
+		t.Error("brotli bulk round-trip should return the original string")
+	}
+	if !data.SmallerAfterCompress {
+		t.Errorf("brotli compressed (%d) should be smaller than original (%d)", data.CompressedLen, data.OriginalLen)
+	}
+}
+
+func TestCompression_BrotliStreamingRoundTrip(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const original = "Brotli streaming test with repeated content for compression. " +
+      "Brotli streaming test with repeated content for compression. " +
+      "Brotli streaming test with repeated content for compression.";
+
+    // Compress
+    const cs = new CompressionStream("br");
+    const writer = cs.writable.getWriter();
+    writer.write(new TextEncoder().encode(original));
+    writer.close();
+    const compressedChunks = [];
+    const reader = cs.readable.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      compressedChunks.push(value);
+    }
+    let compressedLen = 0;
+    for (const c of compressedChunks) compressedLen += c.length;
+    const compressed = new Uint8Array(compressedLen);
+    let offset = 0;
+    for (const c of compressedChunks) { compressed.set(c, offset); offset += c.length; }
+
+    // Decompress
+    const ds = new DecompressionStream("br");
+    const dwriter = ds.writable.getWriter();
+    dwriter.write(compressed);
+    dwriter.close();
+    const decompressedChunks = [];
+    const dreader = ds.readable.getReader();
+    while (true) {
+      const { done, value } = await dreader.read();
+      if (done) break;
+      decompressedChunks.push(value);
+    }
+    let decompressedLen = 0;
+    for (const c of decompressedChunks) decompressedLen += c.length;
+    const decompressed = new Uint8Array(decompressedLen);
+    offset = 0;
+    for (const c of decompressedChunks) { decompressed.set(c, offset); offset += c.length; }
+
+    const result = new TextDecoder().decode(decompressed);
+    return Response.json({
+      match: result === original,
+      originalLen: original.length,
+      compressedLen: compressed.length,
+      smallerAfterCompress: compressed.length < original.length,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Match                bool `json:"match"`
+		OriginalLen          int  `json:"originalLen"`
+		CompressedLen        int  `json:"compressedLen"`
+		SmallerAfterCompress bool `json:"smallerAfterCompress"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Match {
+		t.Error("brotli streaming round-trip should return the original string")
+	}
+	if !data.SmallerAfterCompress {
+		t.Errorf("brotli compressed (%d) should be smaller than original (%d)", data.CompressedLen, data.OriginalLen)
+	}
+}
+
+func TestCompression_BrotliStreamingMultiChunk(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const cs = new CompressionStream("br");
+    const writer = cs.writable.getWriter();
+    // Write multiple chunks
+    writer.write(new TextEncoder().encode("chunk one "));
+    writer.write(new TextEncoder().encode("chunk two "));
+    writer.write(new TextEncoder().encode("chunk three"));
+    writer.close();
+
+    const chunks = [];
+    const reader = cs.readable.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    let compressedLen = 0;
+    for (const c of chunks) compressedLen += c.length;
+    const compressed = new Uint8Array(compressedLen);
+    let offset = 0;
+    for (const c of chunks) { compressed.set(c, offset); offset += c.length; }
+
+    const ds = new DecompressionStream("br");
+    const dwriter = ds.writable.getWriter();
+    dwriter.write(compressed);
+    dwriter.close();
+    const dchunks = [];
+    const dreader = ds.readable.getReader();
+    while (true) {
+      const { done, value } = await dreader.read();
+      if (done) break;
+      dchunks.push(value);
+    }
+    let decompressedLen = 0;
+    for (const c of dchunks) decompressedLen += c.length;
+    const decompressed = new Uint8Array(decompressedLen);
+    offset = 0;
+    for (const c of dchunks) { decompressed.set(c, offset); offset += c.length; }
+
+    const result = new TextDecoder().decode(decompressed);
+    return Response.json({ match: result === "chunk one chunk two chunk three" });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Match bool `json:"match"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Match {
+		t.Error("brotli multi-chunk streaming should round-trip correctly")
+	}
+}
+
+func TestCompression_BrotliPipeThrough(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const original = "Brotli pipeThrough test data with enough content to compress well. " +
+      "Brotli pipeThrough test data with enough content to compress well.";
+    const encoder = new TextEncoder();
+    const data = encoder.encode(original);
+
+    // Create a ReadableStream from the data.
+    const inputStream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(data);
+        controller.close();
+      }
+    });
+
+    // Pipe through CompressionStream then DecompressionStream.
+    const compressedStream = inputStream.pipeThrough(new CompressionStream("br"));
+    const decompressedStream = compressedStream.pipeThrough(new DecompressionStream("br"));
+
+    const reader = decompressedStream.getReader();
+    const chunks = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+
+    let total = 0;
+    for (const c of chunks) total += c.length;
+    const result = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) { result.set(c, offset); offset += c.length; }
+
+    const text = new TextDecoder().decode(result);
+    return Response.json({
+      match: text === original,
+      text: text,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Match bool   `json:"match"`
+		Text  string `json:"text"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Match {
+		t.Errorf("brotli pipeThrough round-trip failed, got %q", data.Text)
+	}
+}
+
+func TestCompression_BrotliCrossFormatFails(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Use bulk __compress/__decompress to avoid streaming goroutine hangs
+	// when feeding brotli data to a gzip decompressor.
+	source := `export default {
+  fetch(request, env) {
+    const original = "Cross-format test data for brotli vs gzip mismatch. ".repeat(5);
+    const encoded = new TextEncoder().encode(original);
+    const b64 = __bufferSourceToB64(encoded);
+
+    // Compress with brotli using bulk function
+    const compressedB64 = __compress("br", b64);
+
+    // Try to decompress brotli data with gzip - should throw
+    let failed = false;
+    try {
+      __decompress("gzip", compressedB64);
+    } catch(e) {
+      failed = true;
+    }
+
+    // Also try the reverse: compress with gzip, decompress with brotli
+    const gzipB64 = __compress("gzip", b64);
+    let reverseFailed = false;
+    try {
+      __decompress("br", gzipB64);
+    } catch(e) {
+      reverseFailed = true;
+    }
+
+    return Response.json({ crossFormatFailed: failed, reverseFailed: reverseFailed });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		CrossFormatFailed bool `json:"crossFormatFailed"`
+		ReverseFailed     bool `json:"reverseFailed"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.CrossFormatFailed {
+		t.Error("decompressing brotli data with gzip should fail")
+	}
+	if !data.ReverseFailed {
+		t.Error("decompressing gzip data with brotli should fail")
+	}
+}
+
+func TestCompression_BrotliEmptyInput(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    // Compress empty data with brotli
+    const cs = new CompressionStream("br");
+    const writer = cs.writable.getWriter();
+    writer.write(new Uint8Array(0));
+    writer.close();
+    const chunks = [];
+    const reader = cs.readable.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    let compressedLen = 0;
+    for (const c of chunks) compressedLen += c.length;
+    const compressed = new Uint8Array(compressedLen);
+    let offset = 0;
+    for (const c of chunks) { compressed.set(c, offset); offset += c.length; }
+
+    // Decompress
+    const ds = new DecompressionStream("br");
+    const dwriter = ds.writable.getWriter();
+    dwriter.write(compressed);
+    dwriter.close();
+    const dchunks = [];
+    const dreader = ds.readable.getReader();
+    while (true) {
+      const { done, value } = await dreader.read();
+      if (done) break;
+      dchunks.push(value);
+    }
+    let decompressedLen = 0;
+    for (const c of dchunks) decompressedLen += c.length;
+
+    return Response.json({ compressedLen, decompressedLen });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		CompressedLen   int `json:"compressedLen"`
+		DecompressedLen int `json:"decompressedLen"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.CompressedLen == 0 {
+		t.Error("brotli of empty data should produce a valid brotli stream (non-zero)")
+	}
+	if data.DecompressedLen != 0 {
+		t.Errorf("decompressed empty brotli data length = %d, want 0", data.DecompressedLen)
+	}
+}
+
+func TestCompression_BrotliLargeData(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    // Generate large compressible data
+    const original = "Brotli large data compression test! ".repeat(500);
+
+    const cs = new CompressionStream("br");
+    const writer = cs.writable.getWriter();
+    writer.write(new TextEncoder().encode(original));
+    writer.close();
+    const chunks = [];
+    const reader = cs.readable.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    let compressedLen = 0;
+    for (const c of chunks) compressedLen += c.length;
+    const compressed = new Uint8Array(compressedLen);
+    let offset = 0;
+    for (const c of chunks) { compressed.set(c, offset); offset += c.length; }
+
+    // Decompress
+    const ds = new DecompressionStream("br");
+    const dwriter = ds.writable.getWriter();
+    dwriter.write(compressed);
+    dwriter.close();
+    const dchunks = [];
+    const dreader = ds.readable.getReader();
+    while (true) {
+      const { done, value } = await dreader.read();
+      if (done) break;
+      dchunks.push(value);
+    }
+    let decompressedLen = 0;
+    for (const c of dchunks) decompressedLen += c.length;
+    const decompressed = new Uint8Array(decompressedLen);
+    offset = 0;
+    for (const c of dchunks) { decompressed.set(c, offset); offset += c.length; }
+
+    const result = new TextDecoder().decode(decompressed);
+    return Response.json({
+      match: result === original,
+      originalLen: original.length,
+      compressedLen: compressed.length,
+      decompressedLen: decompressedLen,
+      smallerAfterCompress: compressed.length < original.length,
+      ratio: (compressed.length / original.length).toFixed(4),
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Match                bool   `json:"match"`
+		OriginalLen          int    `json:"originalLen"`
+		CompressedLen        int    `json:"compressedLen"`
+		DecompressedLen      int    `json:"decompressedLen"`
+		SmallerAfterCompress bool   `json:"smallerAfterCompress"`
+		Ratio                string `json:"ratio"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Match {
+		t.Error("brotli large data round-trip should produce the original string")
+	}
+	if !data.SmallerAfterCompress {
+		t.Errorf("brotli compressed (%d) should be smaller than original (%d)", data.CompressedLen, data.OriginalLen)
+	}
+}
+
+func TestCompression_InvalidFormatString(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const results = {};
+
+    // Test various invalid format strings
+    const invalidFormats = ["brotli", "lz4", "zstd", "snappy", ""];
+    for (const fmt of invalidFormats) {
+      let compThrew = false;
+      try { new CompressionStream(fmt); } catch(e) { compThrew = true; }
+      let decompThrew = false;
+      try { new DecompressionStream(fmt); } catch(e) { decompThrew = true; }
+      results[fmt || "empty"] = { compThrew, decompThrew };
+    }
+
+    // Valid formats should NOT throw
+    const validFormats = ["gzip", "deflate", "deflate-raw", "br"];
+    for (const fmt of validFormats) {
+      let compThrew = false;
+      try { new CompressionStream(fmt); } catch(e) { compThrew = true; }
+      let decompThrew = false;
+      try { new DecompressionStream(fmt); } catch(e) { decompThrew = true; }
+      results[fmt] = { compThrew, decompThrew };
+    }
+
+    return Response.json(results);
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data map[string]struct {
+		CompThrew   bool `json:"compThrew"`
+		DecompThrew bool `json:"decompThrew"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Invalid formats should throw
+	for _, fmt := range []string{"brotli", "lz4", "zstd", "snappy", "empty"} {
+		d, ok := data[fmt]
+		if !ok {
+			t.Errorf("missing result for format %q", fmt)
+			continue
+		}
+		if !d.CompThrew {
+			t.Errorf("CompressionStream(%q) should throw", fmt)
+		}
+		if !d.DecompThrew {
+			t.Errorf("DecompressionStream(%q) should throw", fmt)
+		}
+	}
+
+	// Valid formats should NOT throw
+	for _, fmt := range []string{"gzip", "deflate", "deflate-raw", "br"} {
+		d, ok := data[fmt]
+		if !ok {
+			t.Errorf("missing result for format %q", fmt)
+			continue
+		}
+		if d.CompThrew {
+			t.Errorf("CompressionStream(%q) should NOT throw", fmt)
+		}
+		if d.DecompThrew {
+			t.Errorf("DecompressionStream(%q) should NOT throw", fmt)
+		}
+	}
+}
+
+// TestCompression_DecompressInvalidGzip exercises the gzip.NewReader error
+// path (compression.go ~line 366) by feeding non-gzip bytes.
+func TestCompression_DecompressInvalidGzip(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// The error surfaces on the writable side (transform callback throws),
+	// so we catch on writer.write() or writer.close().
+	source := `export default {
+  async fetch(request, env) {
+    const ds = new DecompressionStream("gzip");
+    const writer = ds.writable.getWriter();
+    let writeError = null;
+    let closeError = null;
+    try {
+      await writer.write(new TextEncoder().encode("this is not valid gzip data at all!!!"));
+    } catch(e) {
+      writeError = String(e);
+    }
+    if (!writeError) {
+      try {
+        await writer.close();
+      } catch(e) {
+        closeError = String(e);
+      }
+    }
+    return Response.json({ writeError, closeError, gotError: !!(writeError || closeError) });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		WriteError string `json:"writeError"`
+		CloseError string `json:"closeError"`
+		GotError   bool   `json:"gotError"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !data.GotError {
+		t.Error("decompressing invalid gzip data should produce an error")
+	}
+}
+
+func TestCompression_BrotliInStreamingFormats(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Include "br" alongside existing formats in the streaming multi-format test
+	for _, format := range []string{"gzip", "deflate", "deflate-raw", "br"} {
+		t.Run(format, func(t *testing.T) {
+			source := `export default {
+  async fetch(request, env) {
+    const format = "` + format + `";
+    const original = "Streaming test for " + format + "! ".repeat(20);
+
+    const cs = new CompressionStream(format);
+    const writer = cs.writable.getWriter();
+    const encoded = new TextEncoder().encode(original);
+    const chunkSize = 50;
+    for (let i = 0; i < encoded.length; i += chunkSize) {
+      writer.write(encoded.slice(i, Math.min(i + chunkSize, encoded.length)));
+    }
+    writer.close();
+
+    const chunks = [];
+    const reader = cs.readable.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    let totalLen = 0;
+    for (const c of chunks) totalLen += c.length;
+    const compressed = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const c of chunks) { compressed.set(c, offset); offset += c.length; }
+
+    const ds = new DecompressionStream(format);
+    const dwriter = ds.writable.getWriter();
+    dwriter.write(compressed);
+    dwriter.close();
+    const dchunks = [];
+    const dreader = ds.readable.getReader();
+    while (true) {
+      const { done, value } = await dreader.read();
+      if (done) break;
+      dchunks.push(value);
+    }
+    let dTotal = 0;
+    for (const c of dchunks) dTotal += c.length;
+    const decompressed = new Uint8Array(dTotal);
+    offset = 0;
+    for (const c of dchunks) { decompressed.set(c, offset); offset += c.length; }
+
+    const result = new TextDecoder().decode(decompressed);
+    return Response.json({ match: result === original });
+  },
+};`
+
+			r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+			assertOK(t, r)
+
+			var data struct {
+				Match bool `json:"match"`
+			}
+			if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if !data.Match {
+				t.Errorf("%s streaming compression with small chunks should round-trip correctly", format)
+			}
+		})
+	}
+}

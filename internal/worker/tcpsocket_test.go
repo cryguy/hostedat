@@ -513,3 +513,400 @@ func TestTCPSocket_SocketObjectShape(t *testing.T) {
 		}
 	}
 }
+
+// TestTCPSocketSSRFBlocksLinkLocal verifies that connect() blocks connections
+// to the link-local range 169.254.x.x.
+func TestTCPSocketSSRFBlocksLinkLocal(t *testing.T) {
+	iso, ctx, _ := setupTCPTestContext(t)
+
+	reqID := newRequestState(10, defaultEnv())
+	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
+	_ = ctx.Global().Set("__requestID", reqIDVal)
+	defer clearRequestState(reqID)
+
+	result, err := ctx.RunScript(`(function() {
+		try {
+			connect("169.254.169.254:80");
+			return "not_blocked";
+		} catch(e) {
+			return e.message || String(e);
+		}
+	})()`, "test_ssrf_linklocal.js")
+	if err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+	if !strings.Contains(result.String(), "private") {
+		t.Fatalf("expected SSRF block for 169.254.169.254, got: %s", result.String())
+	}
+}
+
+// TestTCPSocketSSRFBlocksIPv6Loopback verifies that connect() blocks connections
+// to the IPv6 loopback address ::1 via the JS connect() function.
+func TestTCPSocketSSRFBlocksIPv6Loopback(t *testing.T) {
+	iso, ctx, _ := setupTCPTestContext(t)
+
+	reqID := newRequestState(10, defaultEnv())
+	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
+	_ = ctx.Global().Set("__requestID", reqIDVal)
+	defer clearRequestState(reqID)
+
+	result, err := ctx.RunScript(`(function() {
+		try {
+			connect({hostname: "::1", port: 80});
+			return "not_blocked";
+		} catch(e) {
+			return e.message || String(e);
+		}
+	})()`, "test_ssrf_ipv6.js")
+	if err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+	if !strings.Contains(result.String(), "private") {
+		t.Fatalf("expected SSRF block for ::1, got: %s", result.String())
+	}
+}
+
+// TestTCPSocketSSRFBlocksAllPrivateRangesExpanded verifies that checkTCPSSRF
+// blocks all commonly exploited private ranges including 172.16-31.x and 169.254.x.
+func TestTCPSocketSSRFBlocksAllPrivateRangesExpanded(t *testing.T) {
+	tests := []struct {
+		hostname string
+		blocked  bool
+	}{
+		// 10.0.0.0/8
+		{"10.0.0.1", true},
+		{"10.255.255.255", true},
+		// 172.16.0.0/12
+		{"172.16.0.1", true},
+		{"172.31.255.255", true},
+		// 192.168.0.0/16
+		{"192.168.0.1", true},
+		{"192.168.255.255", true},
+		// 169.254.0.0/16 (link-local / cloud metadata)
+		{"169.254.169.254", true},
+		{"169.254.0.1", true},
+		// IPv6 loopback
+		{"::1", true},
+		// Loopback
+		{"127.0.0.1", true},
+		{"0.0.0.0", true},
+		// Non-private should pass
+		{"8.8.8.8", false},
+		{"93.184.216.34", false},
+	}
+
+	for _, tt := range tests {
+		err := checkTCPSSRF(tt.hostname)
+		if tt.blocked && err == nil {
+			t.Errorf("checkTCPSSRF(%q) should be blocked but was allowed", tt.hostname)
+		}
+		if !tt.blocked && err != nil {
+			t.Errorf("checkTCPSSRF(%q) should be allowed but was blocked: %v", tt.hostname, err)
+		}
+	}
+}
+
+// TestTCPSocket_ReadableAndWritableExist verifies the socket returned by connect()
+// has readable and writable properties that are ReadableStream and WritableStream.
+func TestTCPSocket_ReadableAndWritableExist(t *testing.T) {
+	disableTCPSSRF(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := fmt.Sprintf(`export default {
+  async fetch(request, env) {
+    var socket = connect("127.0.0.1:%d");
+    var hasReadable = socket.readable instanceof ReadableStream;
+    var hasWritable = socket.writable instanceof WritableStream;
+    socket.close();
+    return Response.json({ hasReadable, hasWritable });
+  },
+};`, port)
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		HasReadable bool `json:"hasReadable"`
+		HasWritable bool `json:"hasWritable"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.HasReadable {
+		t.Error("socket.readable should be a ReadableStream")
+	}
+	if !data.HasWritable {
+		t.Error("socket.writable should be a WritableStream")
+	}
+}
+
+// TestTCPSocket_CloseMethod verifies that calling socket.close() works
+// and returns the closed promise.
+func TestTCPSocket_CloseMethod(t *testing.T) {
+	disableTCPSSRF(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := fmt.Sprintf(`export default {
+  async fetch(request, env) {
+    var socket = connect("127.0.0.1:%d");
+    var closeResult = socket.close();
+    var isPromise = closeResult instanceof Promise;
+    await closeResult;
+    return Response.json({ isPromise, closed: true });
+  },
+};`, port)
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		IsPromise bool `json:"isPromise"`
+		Closed    bool `json:"closed"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.IsPromise {
+		t.Error("socket.close() should return a Promise")
+	}
+	if !data.Closed {
+		t.Error("close should have resolved")
+	}
+}
+
+// TestTCPSocket_ClosedPromiseResolvesOnClose verifies that the socket.closed
+// promise resolves when close() is called.
+func TestTCPSocket_ClosedPromiseResolvesOnClose(t *testing.T) {
+	disableTCPSSRF(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := fmt.Sprintf(`export default {
+  async fetch(request, env) {
+    var socket = connect("127.0.0.1:%d");
+    var resolved = false;
+    socket.closed.then(function() { resolved = true; });
+    socket.close();
+    // Allow microtasks to flush
+    await scheduler.wait(50);
+    return Response.json({ resolved });
+  },
+};`, port)
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Resolved bool `json:"resolved"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Resolved {
+		t.Error("socket.closed should resolve after close()")
+	}
+}
+
+// TestTCPSocket_OpenedPromiseShape verifies that the socket.opened promise
+// resolves with an info object containing remoteAddress and localAddress.
+func TestTCPSocket_OpenedPromiseShape(t *testing.T) {
+	disableTCPSSRF(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := fmt.Sprintf(`export default {
+  async fetch(request, env) {
+    var socket = connect("127.0.0.1:%d");
+    var info = await socket.opened;
+    var hasRemote = typeof info.remoteAddress === 'string' && info.remoteAddress.length > 0;
+    var hasLocal = typeof info.localAddress === 'string' && info.localAddress.length > 0;
+    socket.close();
+    return Response.json({
+      hasRemote,
+      hasLocal,
+      remoteAddress: info.remoteAddress,
+      localAddress: info.localAddress,
+    });
+  },
+};`, port)
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		HasRemote     bool   `json:"hasRemote"`
+		HasLocal      bool   `json:"hasLocal"`
+		RemoteAddress string `json:"remoteAddress"`
+		LocalAddress  string `json:"localAddress"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.HasRemote {
+		t.Error("opened info should have remoteAddress string")
+	}
+	if !data.HasLocal {
+		t.Error("opened info should have localAddress string")
+	}
+	if !strings.Contains(data.RemoteAddress, "127.0.0.1") {
+		t.Errorf("remoteAddress = %q, want to contain 127.0.0.1", data.RemoteAddress)
+	}
+}
+
+// TestTCPSocket_ConnectInvalidHostname verifies that connect() throws an error
+// for a hostname that cannot be resolved.
+func TestTCPSocket_ConnectInvalidHostname(t *testing.T) {
+	iso, ctx, _ := setupTCPTestContext(t)
+
+	reqID := newRequestState(10, defaultEnv())
+	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
+	_ = ctx.Global().Set("__requestID", reqIDVal)
+	defer clearRequestState(reqID)
+
+	result, err := ctx.RunScript(`(function() {
+		try {
+			connect("this-host-does-not-exist-xyzzy.invalid:8080");
+			return "connected";
+		} catch(e) {
+			return e.message || String(e);
+		}
+	})()`, "test_invalid_hostname.js")
+	if err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+	if result.String() == "connected" {
+		t.Fatal("expected connect to fail for invalid hostname, but it succeeded")
+	}
+}
+
+// TestTCPSocket_ConnectWithoutPort verifies that connect() with a string address
+// that has no port separator throws an appropriate error.
+func TestTCPSocket_ConnectWithoutPort(t *testing.T) {
+	iso, ctx, _ := setupTCPTestContext(t)
+
+	reqID := newRequestState(10, defaultEnv())
+	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
+	_ = ctx.Global().Set("__requestID", reqIDVal)
+	defer clearRequestState(reqID)
+
+	result, err := ctx.RunScript(`(function() {
+		try {
+			connect("example.com");
+			return "connected";
+		} catch(e) {
+			return e.message || String(e);
+		}
+	})()`, "test_no_port.js")
+	if err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+	if result.String() == "connected" {
+		t.Fatal("expected connect to fail without port, but it succeeded")
+	}
+	if !strings.Contains(result.String(), "hostname:port") {
+		t.Fatalf("expected error about format, got: %s", result.String())
+	}
+}
+
+// TestTCPSocket_ConnectObjectWithoutPort verifies that connect() with an object
+// address missing the port field throws an error.
+func TestTCPSocket_ConnectObjectWithoutPort(t *testing.T) {
+	iso, ctx, _ := setupTCPTestContext(t)
+
+	reqID := newRequestState(10, defaultEnv())
+	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
+	_ = ctx.Global().Set("__requestID", reqIDVal)
+	defer clearRequestState(reqID)
+
+	result, err := ctx.RunScript(`(function() {
+		try {
+			connect({hostname: "example.com"});
+			return "connected";
+		} catch(e) {
+			return e.message || String(e);
+		}
+	})()`, "test_obj_no_port.js")
+	if err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+	if result.String() == "connected" {
+		t.Fatal("expected connect to fail without port, but it succeeded")
+	}
+	if !strings.Contains(result.String(), "port") {
+		t.Fatalf("expected error about port, got: %s", result.String())
+	}
+}

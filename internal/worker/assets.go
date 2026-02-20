@@ -397,6 +397,19 @@ func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, min
 		}
 	}
 
+	// Durable Object bindings.
+	if env.DurableObjectBindings != nil && db != nil {
+		bridge := &DurableObjectBridge{DB: db}
+		for name, nsID := range env.DurableObjectBindings {
+			doVal, err := buildDurableObjectBinding(iso, ctx, bridge, nsID)
+			if err != nil {
+				closeD1Bridges()
+				return nil, fmt.Errorf("building durable object binding %q: %w", name, err)
+			}
+			_ = envObj.Set(name, doVal)
+		}
+	}
+
 	// ASSETS binding.
 	if env.Assets != nil {
 		assetsVal, err := buildAssetsBinding(iso, ctx, env.Assets)

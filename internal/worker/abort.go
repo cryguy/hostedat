@@ -127,6 +127,27 @@ class CustomEvent extends Event {
 	}
 }
 
+AbortSignal.any = function(signals) {
+	if (!Array.isArray(signals)) signals = Array.from(signals);
+	const controller = new AbortController();
+	for (var i = 0; i < signals.length; i++) {
+		if (signals[i].aborted) {
+			controller.abort(signals[i].reason);
+			return controller.signal;
+		}
+	}
+	function onAbort(ev) {
+		controller.abort(ev.target.reason);
+		for (var j = 0; j < signals.length; j++) {
+			signals[j].removeEventListener('abort', onAbort);
+		}
+	}
+	for (var i = 0; i < signals.length; i++) {
+		signals[i].addEventListener('abort', onAbort);
+	}
+	return controller.signal;
+};
+
 globalThis.Event = Event;
 globalThis.EventTarget = EventTarget;
 globalThis.AbortSignal = AbortSignal;

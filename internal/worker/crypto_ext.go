@@ -30,7 +30,8 @@ subtle.importKey = async function(format, keyData, algorithm, extractable, usage
 	if (format === 'raw') {
 		var b64 = __bufferSourceToB64(keyData);
 		var id = __cryptoImportKey(algo.name, hashName, b64, namedCurve);
-		return new CK(id, algo, 'secret', extractable, usages);
+		var keyType = (namedCurve && (algo.name === 'ECDSA' || algo.name === 'ECDH')) ? 'public' : 'secret';
+		return new CK(id, algo, keyType, extractable, usages);
 	} else if (format === 'jwk') {
 		var jwkJSON = JSON.stringify(keyData);
 		var resultJSON = __cryptoImportKeyJWK(algo.name, hashName, jwkJSON, namedCurve);
@@ -220,6 +221,42 @@ func setupCryptoExt(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 			return throwError(iso, "importKey: no active request state")
 		}
 		val, _ := v8.NewValue(iso, int32(id))
+		return val
+	}).GetFunction(ctx))
+
+	// Override __cryptoExportKey to handle ECDSA EC keys (which store key
+	// material in ecKey, not data).
+	_ = ctx.Global().Set("__cryptoExportKey", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
+		if len(args) < 1 {
+			return throwError(iso, errMissingArg("exportKey", 1).Error())
+		}
+		keyID := args[0].Integer()
+		reqID := getReqIDFromJS(ctx)
+		entry := getCryptoKey(reqID, keyID)
+		if entry == nil {
+			return throwError(iso, "exportKey: key not found")
+		}
+		// For ECDSA keys, serialize the EC public key as uncompressed point.
+		if entry.ecKey != nil {
+			switch pub := entry.ecKey.(type) {
+			case *ecdsa.PublicKey:
+				ecdhPub, err := pub.ECDH()
+				if err != nil {
+					return throwError(iso, fmt.Sprintf("exportKey: %s", err.Error()))
+				}
+				val, _ := v8.NewValue(iso, base64.StdEncoding.EncodeToString(ecdhPub.Bytes()))
+				return val
+			case *ecdsa.PrivateKey:
+				ecdhPub, err := pub.PublicKey.ECDH()
+				if err != nil {
+					return throwError(iso, fmt.Sprintf("exportKey: %s", err.Error()))
+				}
+				val, _ := v8.NewValue(iso, base64.StdEncoding.EncodeToString(ecdhPub.Bytes()))
+				return val
+			}
+		}
+		val, _ := v8.NewValue(iso, base64.StdEncoding.EncodeToString(entry.data))
 		return val
 	}).GetFunction(ctx))
 

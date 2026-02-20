@@ -372,3 +372,69 @@ func TestEventSource_OnOpenSetter(t *testing.T) {
 		t.Error("onmessage property should exist on EventSource")
 	}
 }
+
+// TestEventSource_InvalidURL exercises the http.NewRequestWithContext error
+// path in the EventSource goroutine (eventsource.go ~line 188).
+func TestEventSource_InvalidURL(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// A URL with no scheme/host causes NewRequestWithContext to fail.
+	source := `export default {
+  async fetch(request, env) {
+    const es = new EventSource("://bad url");
+    // Give the goroutine time to hit the error path.
+    await new Promise(r => setTimeout(r, 300));
+    const state = es.readyState;
+    es.close();
+    return Response.json({ readyState: state });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		ReadyState int `json:"readyState"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Should be CLOSED (2) because the goroutine sets closed=true on error.
+	if data.ReadyState != 2 {
+		t.Errorf("readyState = %d, want 2 (CLOSED)", data.ReadyState)
+	}
+}
+
+// TestEventSource_ConnectionRefused exercises the client.Do error path
+// in the EventSource goroutine (eventsource.go ~line 203).
+func TestEventSource_ConnectionRefused(t *testing.T) {
+	disableEventSourceSSRF(t)
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Port 1 on localhost is almost certainly not listening.
+	source := `export default {
+  async fetch(request, env) {
+    const es = new EventSource("http://127.0.0.1:1/nope");
+    // Give the goroutine time to attempt the connection and fail.
+    await new Promise(r => setTimeout(r, 500));
+    const state = es.readyState;
+    es.close();
+    return Response.json({ readyState: state });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		ReadyState int `json:"readyState"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.ReadyState != 2 {
+		t.Errorf("readyState = %d, want 2 (CLOSED)", data.ReadyState)
+	}
+}

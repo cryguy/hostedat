@@ -210,6 +210,51 @@ func setupGlobals(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	return nil
 }
 
+// reportErrorJS defines ErrorEvent and reportError.
+// Must be evaluated AFTER setupAbort (which defines Event and EventTarget on globalThis).
+const reportErrorJS = `
+class ErrorEvent extends Event {
+	constructor(type, init) {
+		super(type);
+		this.error = init && init.error !== undefined ? init.error : null;
+		this.message = (init && init.message) || '';
+		this.filename = (init && init.filename) || '';
+		this.lineno = (init && init.lineno) || 0;
+		this.colno = (init && init.colno) || 0;
+	}
+}
+globalThis.ErrorEvent = ErrorEvent;
+globalThis.reportError = function(error) {
+	var msg = '';
+	if (error !== null && error !== undefined) {
+		msg = error.message !== undefined ? error.message : String(error);
+	}
+	var ev = new ErrorEvent('error', { error: error, message: msg });
+	globalThis.dispatchEvent(ev);
+};
+`
+
+// setupReportError evaluates the reportError/ErrorEvent polyfill.
+// Must be called AFTER setupAbort so Event and EventTarget exist.
+func setupReportError(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
+	// Ensure globalThis is an EventTarget.
+	if _, err := ctx.RunScript(`
+		if (typeof globalThis.addEventListener !== 'function') {
+			var __gt = new EventTarget();
+			globalThis.addEventListener = __gt.addEventListener.bind(__gt);
+			globalThis.removeEventListener = __gt.removeEventListener.bind(__gt);
+			globalThis.dispatchEvent = __gt.dispatchEvent.bind(__gt);
+			globalThis._listeners = __gt._listeners;
+		}
+	`, "globalthis_eventtarget.js"); err != nil {
+		return fmt.Errorf("setting up globalThis as EventTarget: %w", err)
+	}
+	if _, err := ctx.RunScript(reportErrorJS, "report_error.js"); err != nil {
+		return fmt.Errorf("evaluating report_error.js: %w", err)
+	}
+	return nil
+}
+
 // errMissingArg returns a formatted error for functions called with too few arguments.
 func errMissingArg(name string, required int) error {
 	return fmt.Errorf("%s requires at least %d argument(s)", name, required)

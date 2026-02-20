@@ -109,7 +109,13 @@ func (b *DurableObjectBridge) DeleteAll(namespace, objectID string) error {
 }
 
 // List returns entries matching an optional prefix, with limit and reverse support.
-func (b *DurableObjectBridge) List(namespace, objectID, prefix string, limit int, reverse bool) (map[string]string, error) {
+// KVPair represents an ordered key-value pair returned by List.
+type KVPair struct {
+	Key   string
+	Value string
+}
+
+func (b *DurableObjectBridge) List(namespace, objectID, prefix string, limit int, reverse bool) ([]KVPair, error) {
 	if limit <= 0 {
 		limit = 128
 	}
@@ -129,9 +135,9 @@ func (b *DurableObjectBridge) List(namespace, objectID, prefix string, limit int
 		return nil, err
 	}
 
-	result := make(map[string]string, len(entries))
-	for _, e := range entries {
-		result[e.Key] = e.ValueJSON
+	result := make([]KVPair, len(entries))
+	for i, e := range entries {
+		result[i] = KVPair{Key: e.Key, Value: e.ValueJSON}
 	}
 	return result, nil
 }
@@ -556,12 +562,16 @@ func buildDurableObjectStorage(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 			return resolver.GetPromise().Value
 		}
 
-		// Build a Map in JS
-		data, _ := json.Marshal(entries)
+		// Build a Map in JS from ordered pairs to preserve sort order.
+		pairs := make([][2]string, len(entries))
+		for i, e := range entries {
+			pairs[i] = [2]string{e.Key, e.Value}
+		}
+		data, _ := json.Marshal(pairs)
 		jsResult, err := ctx.RunScript(fmt.Sprintf(`(function() {
-			var obj = JSON.parse(%q);
+			var arr = JSON.parse(%q);
 			var m = new Map();
-			for (var k in obj) { m.set(k, JSON.parse(obj[k])); }
+			for (var i = 0; i < arr.length; i++) { m.set(arr[i][0], JSON.parse(arr[i][1])); }
 			return m;
 		})()`, string(data)), "do_list_result.js")
 		if err != nil {

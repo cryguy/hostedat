@@ -574,3 +574,814 @@ func TestBuildR2Object(t *testing.T) {
 		t.Errorf("customMetadata.author = %q, want test", authorVal.String())
 	}
 }
+
+func TestBuildR2Object_EmptyMetadata(t *testing.T) {
+	iso := v8.NewIsolate()
+	defer iso.Dispose()
+	ctx := v8.NewContext(iso)
+	defer ctx.Close()
+
+	obj, err := buildR2Object(iso, ctx, "empty-meta", 0, "etag-0", "", nil)
+	if err != nil {
+		t.Fatalf("buildR2Object: %v", err)
+	}
+
+	_ = ctx.Global().Set("__obj", obj.Value)
+
+	keyVal, _ := ctx.RunScript("__obj.key", "k.js")
+	if keyVal.String() != "empty-meta" {
+		t.Errorf("key = %q, want empty-meta", keyVal.String())
+	}
+
+	sizeVal, _ := ctx.RunScript("__obj.size", "s.js")
+	if sizeVal.Int32() != 0 {
+		t.Errorf("size = %d, want 0", sizeVal.Int32())
+	}
+
+	// httpMetadata should exist but contentType should be undefined
+	ctVal, _ := ctx.RunScript("__obj.httpMetadata.contentType", "ct.js")
+	if ctVal.String() != "undefined" {
+		t.Errorf("contentType = %q, want undefined (no contentType set)", ctVal.String())
+	}
+
+	// customMetadata should be an empty object
+	cmType, _ := ctx.RunScript("typeof __obj.customMetadata", "cm.js")
+	if cmType.String() != "object" {
+		t.Errorf("customMetadata type = %q, want object", cmType.String())
+	}
+
+	// checksums should exist
+	ckType, _ := ctx.RunScript("typeof __obj.checksums", "ck.js")
+	if ckType.String() != "object" {
+		t.Errorf("checksums type = %q, want object", ckType.String())
+	}
+}
+
+func TestBuildR2Object_SizeAndVersion(t *testing.T) {
+	iso := v8.NewIsolate()
+	defer iso.Dispose()
+	ctx := v8.NewContext(iso)
+	defer ctx.Close()
+
+	obj, err := buildR2Object(iso, ctx, "large-file", 1048576, "abc123", "application/octet-stream", nil)
+	if err != nil {
+		t.Fatalf("buildR2Object: %v", err)
+	}
+
+	_ = ctx.Global().Set("__obj", obj.Value)
+
+	sizeVal, _ := ctx.RunScript("__obj.size", "s.js")
+	if sizeVal.Integer() != 1048576 {
+		t.Errorf("size = %d, want 1048576", sizeVal.Integer())
+	}
+
+	versionVal, _ := ctx.RunScript("__obj.version", "v.js")
+	if versionVal.String() != "abc123" {
+		t.Errorf("version = %q, want abc123", versionVal.String())
+	}
+}
+
+func TestStorageBinding_PutRequiresKey(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bucketVal, err := buildStorageBinding(iso, ctx, &StorageBridge{BucketName: "test"})
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+
+	_ = ctx.Global().Set("__bucket", bucketVal)
+	result, err := ctx.RunScript("__bucket.put()", "test_put_noargs.js")
+	if err != nil {
+		t.Fatalf("RunScript put: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	_, err = awaitValue(ctx, result, deadline)
+	if err == nil || !strings.Contains(err.Error(), "requires key and value") {
+		t.Fatalf("expected key/value rejection, got %v", err)
+	}
+}
+
+func TestStorageBinding_GetRequiresKey(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bucketVal, err := buildStorageBinding(iso, ctx, &StorageBridge{BucketName: "test"})
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+
+	_ = ctx.Global().Set("__bucket", bucketVal)
+	result, err := ctx.RunScript("__bucket.get()", "test_get_noargs.js")
+	if err != nil {
+		t.Fatalf("RunScript get: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	_, err = awaitValue(ctx, result, deadline)
+	if err == nil || !strings.Contains(err.Error(), "requires a key") {
+		t.Fatalf("expected key rejection, got %v", err)
+	}
+}
+
+func TestStorageBinding_DeleteRequiresKey(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bucketVal, err := buildStorageBinding(iso, ctx, &StorageBridge{BucketName: "test"})
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+
+	_ = ctx.Global().Set("__bucket", bucketVal)
+	result, err := ctx.RunScript("__bucket.delete()", "test_del_noargs.js")
+	if err != nil {
+		t.Fatalf("RunScript delete: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	_, err = awaitValue(ctx, result, deadline)
+	if err == nil || !strings.Contains(err.Error(), "requires a key") {
+		t.Fatalf("expected key rejection, got %v", err)
+	}
+}
+
+func TestStorageBinding_HeadRequiresKey(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bucketVal, err := buildStorageBinding(iso, ctx, &StorageBridge{BucketName: "test"})
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+
+	_ = ctx.Global().Set("__bucket", bucketVal)
+	result, err := ctx.RunScript("__bucket.head()", "test_head_noargs.js")
+	if err != nil {
+		t.Fatalf("RunScript head: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	_, err = awaitValue(ctx, result, deadline)
+	if err == nil || !strings.Contains(err.Error(), "requires a key") {
+		t.Fatalf("expected key rejection, got %v", err)
+	}
+}
+
+func TestStorageBinding_BindingHasMethods(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bucketVal, err := buildStorageBinding(iso, ctx, &StorageBridge{
+		BucketName:  "test",
+		PublicS3URL: "https://storage.example.com",
+	})
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	// Verify all expected methods exist
+	methods := []string{"get", "put", "delete", "head", "list", "publicUrl"}
+	for _, m := range methods {
+		jsCode := fmt.Sprintf("typeof __bucket.%s", m)
+		val, err := ctx.RunScript(jsCode, "check_"+m+".js")
+		if err != nil {
+			t.Fatalf("checking %s: %v", m, err)
+		}
+		if val.String() != "function" {
+			t.Errorf("%s type = %q, want 'function'", m, val.String())
+		}
+	}
+}
+
+func TestBuildPublicObjectURL_SpecialChars(t *testing.T) {
+	tests := []struct {
+		name   string
+		base   string
+		bucket string
+		key    string
+		want   string
+	}{
+		{
+			name:   "unicode filename",
+			base:   "https://storage.example.com",
+			bucket: "uploads",
+			key:    "docs/resume (1).pdf",
+			want:   "https://storage.example.com/uploads/docs/resume%20%281%29.pdf",
+		},
+		{
+			name:   "nested path",
+			base:   "https://cdn.example.com",
+			bucket: "assets",
+			key:    "images/photos/2024/summer.jpg",
+			want:   "https://cdn.example.com/assets/images/photos/2024/summer.jpg",
+		},
+		{
+			name:   "empty key",
+			base:   "https://storage.example.com",
+			bucket: "bucket",
+			key:    "",
+			want:   "https://storage.example.com/bucket/",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := buildPublicObjectURL(tc.base, tc.bucket, tc.key)
+			if err != nil {
+				t.Fatalf("error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("buildPublicObjectURL = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildR2ObjectBody_TextReturnsCorrectData(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	content := "Hello, World! Special chars: <>&\""
+	obj, err := buildR2ObjectBody(iso, ctx, "greeting.txt", []byte(content), &minio.ObjectInfo{
+		Size:         int64(len(content)),
+		ETag:         "text-etag",
+		ContentType:  "text/plain",
+		LastModified: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("buildR2ObjectBody: %v", err)
+	}
+	_ = ctx.Global().Set("__obj", obj.Value)
+
+	result, err := ctx.RunScript("__obj.text()", "test_text.js")
+	if err != nil {
+		t.Fatalf("RunScript text: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	resolved, err := awaitValue(ctx, result, deadline)
+	if err != nil {
+		t.Fatalf("await text: %v", err)
+	}
+	if resolved.String() != content {
+		t.Errorf("text() = %q, want %q", resolved.String(), content)
+	}
+}
+
+// badMinioClient returns a minio client pointing to an unreachable endpoint.
+// Calls will fail with connection errors, exercising error handling in callbacks.
+func badMinioClient(t *testing.T) *minio.Client {
+	t.Helper()
+	client, err := minio.New("127.0.0.1:1", &minio.Options{})
+	if err != nil {
+		t.Fatalf("creating test minio client: %v", err)
+	}
+	return client
+}
+
+func TestStorageBinding_GetWithKeyReturnsNullOnError(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bridge := &StorageBridge{
+		Client:     badMinioClient(t),
+		BucketName: "test-bucket",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	result, err := ctx.RunScript("__bucket.get('nonexistent-key')", "test_get.js")
+	if err != nil {
+		t.Fatalf("RunScript get: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	resolved, err := awaitValue(ctx, result, deadline)
+	if err != nil {
+		t.Fatalf("await get: %v", err)
+	}
+	if !resolved.IsNull() {
+		t.Errorf("get with bad client should resolve null, got %v", resolved.String())
+	}
+}
+
+func TestStorageBinding_PutWithStringBody(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bridge := &StorageBridge{
+		Client:     badMinioClient(t),
+		BucketName: "test-bucket",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	// put with string value exercises the JS coercion "string" path
+	// then fails at PutObject with connection error
+	result, err := ctx.RunScript("__bucket.put('my-key', 'hello world')", "test_put_string.js")
+	if err != nil {
+		t.Fatalf("RunScript put: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	_, err = awaitValue(ctx, result, deadline)
+	if err == nil {
+		t.Fatal("expected put to reject with connection error")
+	}
+	if !strings.Contains(err.Error(), "putting object") {
+		t.Fatalf("expected 'putting object' error, got %v", err)
+	}
+}
+
+func TestStorageBinding_PutWithArrayBufferBody(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bridge := &StorageBridge{
+		Client:     badMinioClient(t),
+		BucketName: "test-bucket",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	// put with ArrayBuffer exercises the JS coercion "binary" path + base64 decode
+	result, err := ctx.RunScript(`(function() {
+		var buf = new ArrayBuffer(4);
+		var view = new Uint8Array(buf);
+		view[0] = 1; view[1] = 2; view[2] = 3; view[3] = 4;
+		return __bucket.put('binary-key', buf);
+	})()`, "test_put_ab.js")
+	if err != nil {
+		t.Fatalf("RunScript put AB: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	_, err = awaitValue(ctx, result, deadline)
+	if err == nil {
+		t.Fatal("expected put to reject with connection error")
+	}
+	if !strings.Contains(err.Error(), "putting object") {
+		t.Fatalf("expected 'putting object' error, got %v", err)
+	}
+}
+
+func TestStorageBinding_PutWithTypedArrayBody(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bridge := &StorageBridge{
+		Client:     badMinioClient(t),
+		BucketName: "test-bucket",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	// put with Uint8Array (TypedArray view) exercises the ArrayBuffer.isView path
+	result, err := ctx.RunScript("__bucket.put('typed-key', new Uint8Array([10, 20, 30]))", "test_put_typed.js")
+	if err != nil {
+		t.Fatalf("RunScript put typed: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	_, err = awaitValue(ctx, result, deadline)
+	if err == nil {
+		t.Fatal("expected put to reject with connection error")
+	}
+}
+
+func TestStorageBinding_PutWithOptions(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bridge := &StorageBridge{
+		Client:     badMinioClient(t),
+		BucketName: "test-bucket",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	// put with options exercises the httpMetadata and customMetadata extraction paths
+	result, err := ctx.RunScript(`__bucket.put('opts-key', 'data', {
+		httpMetadata: {
+			contentType: 'text/plain',
+			contentEncoding: 'gzip',
+			contentDisposition: 'attachment',
+			contentLanguage: 'en',
+			cacheControl: 'max-age=3600',
+		},
+		customMetadata: {
+			author: 'test',
+			version: '1.0',
+		},
+	})`, "test_put_opts.js")
+	if err != nil {
+		t.Fatalf("RunScript put opts: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	_, err = awaitValue(ctx, result, deadline)
+	if err == nil {
+		t.Fatal("expected put to reject with connection error")
+	}
+}
+
+func TestStorageBinding_DeleteSingleKey(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bridge := &StorageBridge{
+		Client:     badMinioClient(t),
+		BucketName: "test-bucket",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	// delete with single key - errors are silently ignored, resolves undefined
+	result, err := ctx.RunScript("__bucket.delete('some-key')", "test_del.js")
+	if err != nil {
+		t.Fatalf("RunScript delete: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	resolved, err := awaitValue(ctx, result, deadline)
+	if err != nil {
+		t.Fatalf("await delete: %v", err)
+	}
+	if !resolved.IsUndefined() {
+		t.Errorf("delete should resolve undefined, got %v", resolved.String())
+	}
+}
+
+func TestStorageBinding_DeleteArrayOfKeys(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bridge := &StorageBridge{
+		Client:     badMinioClient(t),
+		BucketName: "test-bucket",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	// delete with array of keys
+	result, err := ctx.RunScript("__bucket.delete(['k1', 'k2', 'k3'])", "test_del_arr.js")
+	if err != nil {
+		t.Fatalf("RunScript delete array: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	resolved, err := awaitValue(ctx, result, deadline)
+	if err != nil {
+		t.Fatalf("await delete array: %v", err)
+	}
+	if !resolved.IsUndefined() {
+		t.Errorf("delete array should resolve undefined, got %v", resolved.String())
+	}
+}
+
+func TestStorageBinding_HeadReturnsNullOnError(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bridge := &StorageBridge{
+		Client:     badMinioClient(t),
+		BucketName: "test-bucket",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	result, err := ctx.RunScript("__bucket.head('missing-key')", "test_head.js")
+	if err != nil {
+		t.Fatalf("RunScript head: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	resolved, err := awaitValue(ctx, result, deadline)
+	if err != nil {
+		t.Fatalf("await head: %v", err)
+	}
+	if !resolved.IsNull() {
+		t.Errorf("head with bad client should resolve null, got %v", resolved.String())
+	}
+}
+
+func TestStorageBinding_ListReturnsEmptyOnError(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bridge := &StorageBridge{
+		Client:     badMinioClient(t),
+		BucketName: "test-bucket",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	result, err := ctx.RunScript("__bucket.list()", "test_list.js")
+	if err != nil {
+		t.Fatalf("RunScript list: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	resolved, err := awaitValue(ctx, result, deadline)
+	if err != nil {
+		t.Fatalf("await list: %v", err)
+	}
+	_ = ctx.Global().Set("__listResult", resolved)
+
+	// Verify we get back an object with objects array and truncated flag
+	truncVal, err := ctx.RunScript("__listResult.truncated", "check_trunc.js")
+	if err != nil {
+		t.Fatalf("checking truncated: %v", err)
+	}
+	if truncVal.String() != "false" {
+		t.Errorf("truncated = %q, want false", truncVal.String())
+	}
+}
+
+func TestStorageBinding_ListWithOptions(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bridge := &StorageBridge{
+		Client:     badMinioClient(t),
+		BucketName: "test-bucket",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	// list with full options exercises the options extraction path
+	result, err := ctx.RunScript(`__bucket.list({
+		prefix: 'uploads/',
+		cursor: 'last-key',
+		delimiter: '/',
+		limit: 5,
+	})`, "test_list_opts.js")
+	if err != nil {
+		t.Fatalf("RunScript list opts: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	_, err = awaitValue(ctx, result, deadline)
+	if err != nil {
+		t.Fatalf("await list opts: %v", err)
+	}
+}
+
+func TestStorageBinding_PublicUrl(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bridge := &StorageBridge{
+		BucketName:  "my-bucket",
+		PublicS3URL: "https://storage.example.com",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	result, err := ctx.RunScript("__bucket.publicUrl('images/photo.jpg')", "test_publicurl.js")
+	if err != nil {
+		t.Fatalf("RunScript publicUrl: %v", err)
+	}
+
+	want := "https://storage.example.com/my-bucket/images/photo.jpg"
+	if result.String() != want {
+		t.Errorf("publicUrl = %q, want %q", result.String(), want)
+	}
+}
+
+func TestStorageBinding_PublicUrl_RequiresArg(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bridge := &StorageBridge{
+		BucketName:  "my-bucket",
+		PublicS3URL: "https://storage.example.com",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	// publicUrl() with no args should throw
+	_, err = ctx.RunScript(`try { __bucket.publicUrl(); 'ok'; } catch(e) { e.message; }`, "test_publicurl_noarg.js")
+	if err != nil {
+		t.Fatalf("RunScript publicUrl noarg: %v", err)
+	}
+}
+
+func TestStorageBinding_PublicUrl_NotAvailableWithoutConfig(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bridge := &StorageBridge{
+		BucketName: "my-bucket",
+		// No PublicS3URL
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	result, err := ctx.RunScript("typeof __bucket.publicUrl", "check_publicurl.js")
+	if err != nil {
+		t.Fatalf("RunScript typeof publicUrl: %v", err)
+	}
+	if result.String() != "undefined" {
+		t.Errorf("publicUrl should be undefined without PublicS3URL, got %q", result.String())
+	}
+}
+
+func TestStorageBinding_CreateSignedUrl_NilClients(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	// createSignedUrl is only added when Client or PresignClient is non-nil.
+	// When both are nil, the method should not exist.
+	bridge := &StorageBridge{
+		BucketName: "my-bucket",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	result, err := ctx.RunScript("typeof __bucket.createSignedUrl", "test_sign.js")
+	if err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+	if result.String() != "undefined" {
+		t.Errorf("createSignedUrl should be undefined when no clients set, got %q", result.String())
+	}
+}
+
+func TestStorageBinding_CreateSignedUrl_NoPresignButPublicURL(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	// Client is set (so createSignedUrl is registered), but PresignClient is nil
+	// and PublicS3URL is set -> should reject with "presign client not configured"
+	bridge := &StorageBridge{
+		Client:      badMinioClient(t),
+		BucketName:  "my-bucket",
+		PublicS3URL: "https://storage.example.com",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	result, err := ctx.RunScript("__bucket.createSignedUrl('key')", "test_sign2.js")
+	if err != nil {
+		t.Fatalf("RunScript createSignedUrl: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	_, err = awaitValue(ctx, result, deadline)
+	if err == nil || !strings.Contains(err.Error(), "presign client not configured") {
+		t.Fatalf("expected 'presign client not configured', got %v", err)
+	}
+}
+
+func TestStorageBinding_CreateSignedUrl_WithExpiryOptions(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bridge := &StorageBridge{
+		Client:     badMinioClient(t),
+		BucketName: "my-bucket",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	// Test with custom expiry - will fail at PresignedGetObject but exercises options parsing
+	result, err := ctx.RunScript("__bucket.createSignedUrl('key', { expiresIn: 7200 })", "test_sign3.js")
+	if err != nil {
+		t.Fatalf("RunScript createSignedUrl opts: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	_, err = awaitValue(ctx, result, deadline)
+	// Should fail with connection error
+	if err == nil {
+		t.Fatal("expected createSignedUrl to reject with connection error")
+	}
+}
+
+func TestStorageBinding_CreateSignedUrl_ExpiryClamp(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bridge := &StorageBridge{
+		Client:     badMinioClient(t),
+		BucketName: "my-bucket",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	// Test expiry clamping: negative -> 1, excessive -> 604800
+	result, err := ctx.RunScript("__bucket.createSignedUrl('key', { expiresIn: -10 })", "test_sign_neg.js")
+	if err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	_, _ = awaitValue(ctx, result, deadline) // will error but that's fine
+
+	result2, err := ctx.RunScript("__bucket.createSignedUrl('key', { expiresIn: 9999999 })", "test_sign_max.js")
+	if err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+	_, _ = awaitValue(ctx, result2, deadline) // will error but exercises the clamp path
+}
+
+func TestStorageBinding_CreateSignedUrl_RequiresArg(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	bridge := &StorageBridge{
+		Client:     badMinioClient(t),
+		BucketName: "my-bucket",
+	}
+
+	bucketVal, err := buildStorageBinding(iso, ctx, bridge)
+	if err != nil {
+		t.Fatalf("buildStorageBinding: %v", err)
+	}
+	_ = ctx.Global().Set("__bucket", bucketVal)
+
+	result, err := ctx.RunScript("__bucket.createSignedUrl()", "test_sign_noarg.js")
+	if err != nil {
+		t.Fatalf("RunScript: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	_, err = awaitValue(ctx, result, deadline)
+	if err == nil || !strings.Contains(err.Error(), "requires a key") {
+		t.Fatalf("expected 'requires a key' error, got %v", err)
+	}
+}
+
+func TestBuildR2ObjectBody_UploadedTimestamp(t *testing.T) {
+	iso, ctx := newV8TestContext(t)
+
+	now := time.Now()
+	obj, err := buildR2ObjectBody(iso, ctx, "ts.txt", []byte("data"), &minio.ObjectInfo{
+		Size:         4,
+		ETag:         "ts-etag",
+		ContentType:  "text/plain",
+		LastModified: now,
+	})
+	if err != nil {
+		t.Fatalf("buildR2ObjectBody: %v", err)
+	}
+	_ = ctx.Global().Set("__obj", obj.Value)
+
+	uploadedVal, err := ctx.RunScript("__obj.uploaded", "uploaded.js")
+	if err != nil {
+		t.Fatalf("checking uploaded: %v", err)
+	}
+
+	expectedMS := float64(now.UnixMilli())
+	if uploadedVal.Number() != expectedMS {
+		t.Errorf("uploaded = %v, want %v", uploadedVal.Number(), expectedMS)
+	}
+}

@@ -41,3 +41,85 @@ func setupConsole(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	_ = ctx.Global().Set("console", console)
 	return nil
 }
+
+// consoleExtJS adds extended console methods (time, count, assert, table, etc.)
+// as pure JS on top of the Go-backed base console.
+const consoleExtJS = `
+(function() {
+var __timers = {};
+var __counters = {};
+var __groupDepth = 0;
+
+console.time = function(label) {
+	__timers[label || 'default'] = performance.now();
+};
+console.timeEnd = function(label) {
+	var l = label || 'default';
+	var start = __timers[l];
+	if (start === undefined) { console.warn('Timer "' + l + '" does not exist'); return; }
+	var elapsed = performance.now() - start;
+	delete __timers[l];
+	console.log(l + ': ' + elapsed.toFixed(3) + 'ms');
+};
+console.timeLog = function(label) {
+	var l = label || 'default';
+	var start = __timers[l];
+	if (start === undefined) { console.warn('Timer "' + l + '" does not exist'); return; }
+	var elapsed = performance.now() - start;
+	var args = Array.prototype.slice.call(arguments, 1);
+	if (args.length > 0) {
+		console.log(l + ': ' + elapsed.toFixed(3) + 'ms', args.join(' '));
+	} else {
+		console.log(l + ': ' + elapsed.toFixed(3) + 'ms');
+	}
+};
+console.count = function(label) {
+	var l = label || 'default';
+	__counters[l] = (__counters[l] || 0) + 1;
+	console.log(l + ': ' + __counters[l]);
+};
+console.countReset = function(label) {
+	__counters[label || 'default'] = 0;
+};
+console.assert = function(cond) {
+	if (!cond) {
+		var args = Array.prototype.slice.call(arguments, 1);
+		if (args.length > 0) {
+			console.error('Assertion failed:', args.join(' '));
+		} else {
+			console.error('Assertion failed');
+		}
+	}
+};
+console.table = function(data) {
+	console.log(JSON.stringify(data, null, 2));
+};
+console.trace = function() {
+	var args = Array.prototype.slice.call(arguments);
+	if (args.length > 0) {
+		console.log('Trace:', args.join(' '));
+	} else {
+		console.log('Trace');
+	}
+};
+console.group = function(label) {
+	if (label) console.log(label);
+	__groupDepth++;
+};
+console.groupEnd = function() {
+	if (__groupDepth > 0) __groupDepth--;
+};
+console.dir = function(obj) {
+	console.log(JSON.stringify(obj, null, 2));
+};
+})();
+`
+
+// setupConsoleExt evaluates the extended console methods polyfill.
+// Must be called AFTER setupConsole so the base console object exists.
+func setupConsoleExt(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
+	if _, err := ctx.RunScript(consoleExtJS, "console_ext.js"); err != nil {
+		return fmt.Errorf("evaluating console_ext.js: %w", err)
+	}
+	return nil
+}
