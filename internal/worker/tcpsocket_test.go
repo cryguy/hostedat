@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -223,8 +224,12 @@ func TestTCPSocketObjectHasProperties(t *testing.T) {
 	}
 }
 
-// TestTCPCheckSSRFDirect tests the Go-level checkTCPSSRF function directly.
+// TestTCPCheckSSRFDirect tests the Go-level ssrfSafeTCPDial function directly.
 func TestTCPCheckSSRFDirect(t *testing.T) {
+	old := tcpSSRFEnabled
+	tcpSSRFEnabled = true
+	defer func() { tcpSSRFEnabled = old }()
+
 	tests := []struct {
 		hostname string
 		blocked  bool
@@ -236,18 +241,21 @@ func TestTCPCheckSSRFDirect(t *testing.T) {
 		{"0.0.0.0", true},
 		{"localhost", true},
 		{"::1", true},
-		// Public IPs should pass.
+		// Public IPs should pass (will fail to connect, but not with "private" error).
 		{"8.8.8.8", false},
 		{"1.1.1.1", false},
 	}
 
 	for _, tt := range tests {
-		err := checkTCPSSRF(tt.hostname)
+		_, err := ssrfSafeTCPDial(context.Background(), tt.hostname, "80")
 		if tt.blocked && err == nil {
-			t.Errorf("checkTCPSSRF(%q) should have been blocked but was allowed", tt.hostname)
+			t.Errorf("ssrfSafeTCPDial(%q) should have been blocked but was allowed", tt.hostname)
 		}
-		if !tt.blocked && err != nil {
-			t.Errorf("checkTCPSSRF(%q) should have been allowed but was blocked: %v", tt.hostname, err)
+		if tt.blocked && err != nil && !strings.Contains(err.Error(), "private") {
+			t.Errorf("ssrfSafeTCPDial(%q) should block with 'private' error, got: %v", tt.hostname, err)
+		}
+		if !tt.blocked && err != nil && strings.Contains(err.Error(), "private") {
+			t.Errorf("ssrfSafeTCPDial(%q) should have been allowed but was blocked: %v", tt.hostname, err)
 		}
 	}
 }
@@ -566,9 +574,13 @@ func TestTCPSocketSSRFBlocksIPv6Loopback(t *testing.T) {
 	}
 }
 
-// TestTCPSocketSSRFBlocksAllPrivateRangesExpanded verifies that checkTCPSSRF
+// TestTCPSocketSSRFBlocksAllPrivateRangesExpanded verifies that ssrfSafeTCPDial
 // blocks all commonly exploited private ranges including 172.16-31.x and 169.254.x.
 func TestTCPSocketSSRFBlocksAllPrivateRangesExpanded(t *testing.T) {
+	old := tcpSSRFEnabled
+	tcpSSRFEnabled = true
+	defer func() { tcpSSRFEnabled = old }()
+
 	tests := []struct {
 		hostname string
 		blocked  bool
@@ -590,18 +602,21 @@ func TestTCPSocketSSRFBlocksAllPrivateRangesExpanded(t *testing.T) {
 		// Loopback
 		{"127.0.0.1", true},
 		{"0.0.0.0", true},
-		// Non-private should pass
+		// Non-private should pass (connection will fail, but not with "private" error)
 		{"8.8.8.8", false},
 		{"93.184.216.34", false},
 	}
 
 	for _, tt := range tests {
-		err := checkTCPSSRF(tt.hostname)
+		_, err := ssrfSafeTCPDial(context.Background(), tt.hostname, "80")
 		if tt.blocked && err == nil {
-			t.Errorf("checkTCPSSRF(%q) should be blocked but was allowed", tt.hostname)
+			t.Errorf("ssrfSafeTCPDial(%q) should be blocked but was allowed", tt.hostname)
 		}
-		if !tt.blocked && err != nil {
-			t.Errorf("checkTCPSSRF(%q) should be allowed but was blocked: %v", tt.hostname, err)
+		if tt.blocked && err != nil && !strings.Contains(err.Error(), "private") {
+			t.Errorf("ssrfSafeTCPDial(%q) should block with 'private' error, got: %v", tt.hostname, err)
+		}
+		if !tt.blocked && err != nil && strings.Contains(err.Error(), "private") {
+			t.Errorf("ssrfSafeTCPDial(%q) should be allowed but was blocked: %v", tt.hostname, err)
 		}
 	}
 }
@@ -1208,5 +1223,58 @@ func TestTCPSocket_EchoRoundTripWithoutWait(t *testing.T) {
 	}
 	if data.Echo != "ping" {
 		t.Fatalf("expected echo %q, got %q", "ping", data.Echo)
+	}
+}
+
+// TestSSRFSafeTCPDial_BlocksPrivateIPs tests the ssrfSafeTCPDial function
+// directly to ensure it blocks connections to private IP ranges.
+func TestSSRFSafeTCPDial_BlocksPrivateIPs(t *testing.T) {
+	old := tcpSSRFEnabled
+	tcpSSRFEnabled = true
+	defer func() { tcpSSRFEnabled = old }()
+
+	blocked := []string{
+		"127.0.0.1", "10.0.0.1", "192.168.1.1", "172.16.0.1",
+		"169.254.1.1", "localhost", "foo.localhost",
+	}
+	for _, host := range blocked {
+		_, err := ssrfSafeTCPDial(context.Background(), host, "80")
+		if err == nil {
+			t.Errorf("expected SSRF block for %s, got nil error", host)
+		}
+		if !strings.Contains(err.Error(), "private") {
+			t.Errorf("expected 'private' in error for %s, got: %v", host, err)
+		}
+	}
+}
+
+// TestSSRFSafeTCPDial_DisabledAllowsAll verifies that when tcpSSRFEnabled
+// is false, connections to private IPs are allowed.
+func TestSSRFSafeTCPDial_DisabledAllowsAll(t *testing.T) {
+	old := tcpSSRFEnabled
+	tcpSSRFEnabled = false
+	defer func() { tcpSSRFEnabled = old }()
+
+	// Attempt to dial 127.0.0.1:1 (unlikely to be listening, but that's ok).
+	// We expect the error to be a connection refused, NOT an SSRF block.
+	_, err := ssrfSafeTCPDial(context.Background(), "127.0.0.1", "1")
+	if err != nil && strings.Contains(err.Error(), "private") {
+		t.Errorf("SSRF disabled should not block private IPs: %v", err)
+	}
+}
+
+// TestTCPSocket_MaxConnectionLimit verifies that the maxTCPSockets constant
+// is set to a reasonable value.
+func TestTCPSocket_MaxConnectionLimit(t *testing.T) {
+	if maxTCPSockets < 1 || maxTCPSockets > 100 {
+		t.Errorf("maxTCPSockets = %d, want 1-100", maxTCPSockets)
+	}
+}
+
+// TestTCPSocket_BufferSizeLimit verifies that the maxTCPBufferSize constant
+// is set to a reasonable value.
+func TestTCPSocket_BufferSizeLimit(t *testing.T) {
+	if maxTCPBufferSize < 1024 || maxTCPBufferSize > 100*1024*1024 {
+		t.Errorf("maxTCPBufferSize = %d, want 1KB-100MB", maxTCPBufferSize)
 	}
 }

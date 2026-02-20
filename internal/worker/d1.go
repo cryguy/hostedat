@@ -117,6 +117,30 @@ type D1Meta struct {
 // Exec runs a SQL statement with optional bindings and returns columns, rows, and metadata.
 func (d *D1Bridge) Exec(sqlStr string, bindings []interface{}) (*D1ExecResult, error) {
 	upperSQL := strings.TrimSpace(strings.ToUpper(sqlStr))
+
+	// Block dangerous SQL commands that could escape the D1 sandbox.
+	for _, blocked := range []string{"ATTACH", "DETACH"} {
+		if strings.HasPrefix(upperSQL, blocked) {
+			return nil, fmt.Errorf("D1: %s statements are not allowed", blocked)
+		}
+	}
+
+	// Block dangerous PRAGMAs (allow only safe introspection ones).
+	if strings.HasPrefix(upperSQL, "PRAGMA") {
+		allowed := []string{"PRAGMA TABLE_INFO", "PRAGMA TABLE_LIST", "PRAGMA INDEX_LIST",
+			"PRAGMA INDEX_INFO", "PRAGMA FOREIGN_KEY_LIST", "PRAGMA JOURNAL_MODE"}
+		isAllowed := false
+		for _, a := range allowed {
+			if strings.HasPrefix(upperSQL, a) {
+				isAllowed = true
+				break
+			}
+		}
+		if !isAllowed {
+			return nil, fmt.Errorf("D1: this PRAGMA is not allowed")
+		}
+	}
+
 	isQuery := strings.HasPrefix(upperSQL, "SELECT") ||
 		strings.HasPrefix(upperSQL, "PRAGMA") ||
 		strings.HasPrefix(upperSQL, "WITH")
@@ -371,13 +395,36 @@ func buildD1Binding(iso *v8.Isolate, ctx *v8.Context, bridge *D1Bridge) (*v8.Val
 		var self = this;
 		return new Promise(function(resolve, reject) {
 			try {
-				var statements = sql.split(";").filter(function(s) {
-					return s.trim().length > 0;
-				});
+				// Split on semicolons, respecting single-quoted strings
+				var statements = [];
+				var current = '';
+				var inStr = false;
+				for (var i = 0; i < sql.length; i++) {
+					var ch = sql[i];
+					if (ch === "'" && !inStr) {
+						inStr = true;
+						current += ch;
+					} else if (ch === "'" && inStr) {
+						if (i + 1 < sql.length && sql[i + 1] === "'") {
+							current += "''";
+							i++;
+						} else {
+							inStr = false;
+							current += ch;
+						}
+					} else if (ch === ';' && !inStr) {
+						if (current.trim().length > 0) statements.push(current.trim());
+						current = '';
+					} else {
+						current += ch;
+					}
+				}
+				if (current.trim().length > 0) statements.push(current.trim());
+
 				var count = 0;
 				for (var i = 0; i < statements.length; i++) {
 					var bindingsJSON = "[]";
-					var resultStr = execFn(statements[i].trim(), bindingsJSON);
+					var resultStr = execFn(statements[i], bindingsJSON);
 					var result = JSON.parse(resultStr);
 					if (result.error) {
 						throw new Error(result.error);

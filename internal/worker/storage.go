@@ -15,6 +15,8 @@ import (
 	v8 "github.com/tommie/v8go"
 )
 
+const maxObjectSize = 128 * 1024 * 1024 // 128 MB
+
 // StorageBridge backs a single R2-compatible bucket binding.
 type StorageBridge struct {
 	Client        *minio.Client
@@ -58,7 +60,13 @@ func buildStorageBinding(iso *v8.Isolate, ctx *v8.Context, bridge *StorageBridge
 			return resolver.GetPromise().Value
 		}
 
-		data, err := io.ReadAll(obj)
+		if stat.Size > int64(maxObjectSize) {
+			errVal, _ := v8.NewValue(iso, fmt.Sprintf("object too large: %d bytes (max %d)", stat.Size, maxObjectSize))
+			resolver.Reject(errVal)
+			return resolver.GetPromise().Value
+		}
+
+		data, err := io.ReadAll(io.LimitReader(obj, int64(maxObjectSize)+1))
 		if err != nil {
 			errVal, _ := v8.NewValue(iso, fmt.Sprintf("reading object: %s", err.Error()))
 			resolver.Reject(errVal)

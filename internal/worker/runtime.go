@@ -14,14 +14,18 @@ import (
 	"github.com/coder/websocket"
 )
 
+const maxLogEntries = 1000
+const maxLogMessageSize = 4096
+
 // cryptoKeyEntry holds imported key material and its associated hash algorithm.
 type cryptoKeyEntry struct {
-	data       []byte // Raw key bytes (symmetric keys)
-	hashAlgo   string // Associated hash algorithm
-	algoName   string // Algorithm name (HMAC, AES-GCM, ECDSA, AES-CBC)
-	keyType    string // "secret", "public", "private"
-	namedCurve string // For EC keys: "P-256", "P-384"
-	ecKey      any    // *ecdsa.PrivateKey or *ecdsa.PublicKey
+	data        []byte // Raw key bytes (symmetric keys)
+	hashAlgo    string // Associated hash algorithm
+	algoName    string // Algorithm name (HMAC, AES-GCM, ECDSA, AES-CBC)
+	keyType     string // "secret", "public", "private"
+	namedCurve  string // For EC keys: "P-256", "P-384"
+	ecKey       any    // *ecdsa.PrivateKey or *ecdsa.PublicKey
+	extractable bool   // WebCrypto extractable flag — checked in export functions
 }
 
 // requestState holds per-request mutable state (logs, fetch counter, env, crypto keys).
@@ -59,6 +63,9 @@ type requestState struct {
 	// In-flight fetch cancellation: maps fetchID -> cancel function.
 	fetchCancels map[string]context.CancelFunc
 	nextFetchID  int64
+
+	// D1 database bridges: tracked for cleanup on request completion.
+	d1Bridges []*D1Bridge
 }
 
 // eventSourceState holds state for a single EventSource SSE connection.
@@ -98,14 +105,47 @@ func getRequestState(id uint64) *requestState {
 }
 
 // clearRequestState removes the state for the given request ID and returns it.
-// It also cleans up any open TCP sockets.
+// It cleans up all per-request resources: event sources, TCP sockets,
+// compression streams, in-flight fetches, and D1 database bridges.
 func clearRequestState(id uint64) *requestState {
 	v, ok := requestStates.LoadAndDelete(id)
 	if !ok {
 		return nil
 	}
 	state := v.(*requestState)
+
+	// Clean up EventSource SSE connections.
+	for _, es := range state.eventSources {
+		closeEventSource(es)
+	}
+	state.eventSources = nil
+
+	// Clean up TCP sockets (existing).
 	cleanupTCPSockets(state)
+
+	// Clean up compression streams.
+	for _, cs := range state.compressStreams {
+		if cs.writer != nil {
+			_ = cs.writer.Close()
+		}
+		if cs.decompPW != nil {
+			_ = cs.decompPW.Close()
+		}
+	}
+	state.compressStreams = nil
+
+	// Cancel in-flight fetches.
+	for _, cancel := range state.fetchCancels {
+		cancel()
+	}
+	state.fetchCancels = nil
+
+	// Close D1 database bridges.
+	for _, b := range state.d1Bridges {
+		_ = b.Close()
+	}
+	state.d1Bridges = nil
+
 	return state
 }
 
@@ -120,7 +160,7 @@ func importCryptoKey(reqID uint64, hashAlgo string, data []byte) int64 {
 	if state.cryptoKeys == nil {
 		state.cryptoKeys = make(map[int64]*cryptoKeyEntry)
 	}
-	state.cryptoKeys[id] = &cryptoKeyEntry{data: data, hashAlgo: hashAlgo}
+	state.cryptoKeys[id] = &cryptoKeyEntry{data: data, hashAlgo: hashAlgo, extractable: true}
 	return id
 }
 
@@ -141,6 +181,12 @@ func addLog(id uint64, level, message string) {
 	state := getRequestState(id)
 	if state == nil {
 		return
+	}
+	if len(state.logs) >= maxLogEntries {
+		return
+	}
+	if len(message) > maxLogMessageSize {
+		message = message[:maxLogMessageSize] + "...(truncated)"
 	}
 	state.logs = append(state.logs, LogEntry{
 		Level:   level,

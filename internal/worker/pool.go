@@ -26,6 +26,31 @@ type v8Pool struct {
 // setupFunc configures a V8 context with Web APIs, crypto, console, etc.
 type setupFunc func(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error
 
+// globalThisCleanupJS removes per-request state and user-set globals from
+// globalThis before a worker is returned to the pool. Built-in APIs and
+// Go-registered helper functions (prefixed with __) are preserved, except
+// for known per-request __-prefixed globals.
+const globalThisCleanupJS = `
+(function() {
+	// Delete known per-request globals.
+	var perRequest = ['__requestID', '__ws_active_server'];
+	for (var i = 0; i < perRequest.length; i++) {
+		try { delete globalThis[perRequest[i]]; } catch(e) {}
+	}
+	// Delete all __d1_exec_, __tmp_, __kv_ prefixed globals.
+	var names = Object.getOwnPropertyNames(globalThis);
+	for (var i = 0; i < names.length; i++) {
+		var n = names[i];
+		if (n.indexOf('__d1_exec_') === 0 ||
+			n.indexOf('__tmp_') === 0 ||
+			n.indexOf('__kv_') === 0 ||
+			n.indexOf('__do_') === 0) {
+			try { delete globalThis[n]; } catch(e) {}
+		}
+	}
+})();
+`
+
 // newV8Pool creates a pool of V8 isolates, each configured with the given
 // setup functions and loaded with the worker script.
 func newV8Pool(size int, source string, setupFns []setupFunc, memoryLimitMB int) (*v8Pool, error) {
@@ -105,6 +130,8 @@ func (p *v8Pool) get() (*v8Worker, error) {
 
 // put returns a worker to the pool after resetting its event loop.
 func (p *v8Pool) put(w *v8Worker) {
+	// Clean per-request globals before reuse.
+	_, _ = w.ctx.RunScript(globalThisCleanupJS, "cleanup.js")
 	w.eventLoop.reset()
 	select {
 	case p.workers <- w:

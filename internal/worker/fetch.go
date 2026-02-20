@@ -20,6 +20,25 @@ import (
 // Tests set this to false so httptest servers on 127.0.0.1 are reachable.
 var fetchSSRFEnabled = true
 
+// forbiddenFetchHeaders is the blocklist of headers that workers cannot set.
+// These headers are controlled by the HTTP transport or could be used for
+// header smuggling attacks.
+var forbiddenFetchHeaders = map[string]bool{
+	"host":                 true,
+	"transfer-encoding":    true,
+	"connection":           true,
+	"keep-alive":           true,
+	"upgrade":              true,
+	"proxy-authorization":  true,
+	"proxy-connection":     true,
+	"te":                   true,
+	"trailer":              true,
+	"x-forwarded-for":      true,
+	"x-forwarded-host":     true,
+	"x-forwarded-proto":    true,
+	"x-real-ip":            true,
+}
+
 // fetchTransport is the http.RoundTripper used by fetch. Tests can override it.
 var fetchTransport http.RoundTripper = &http.Transport{
 	DialContext: ssrfSafeDialContext,
@@ -253,6 +272,9 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, cfg config.WorkerConfig) error
 			return resolver.GetPromise().Value
 		}
 		for k, v := range fetchArgs.Headers {
+			if forbiddenFetchHeaders[strings.ToLower(k)] {
+				continue
+			}
 			httpReq.Header.Set(k, v)
 		}
 

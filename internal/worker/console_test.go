@@ -233,3 +233,69 @@ func TestConsole_JSONSerializableLogs(t *testing.T) {
 		t.Errorf("parsed %d logs, want 2", len(parsed))
 	}
 }
+
+// TestConsoleLog_MaxEntriesLimit verifies that logging stops after maxLogEntries.
+func TestConsoleLog_MaxEntriesLimit(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    for (var i = 0; i < 1100; i++) {
+      console.log('msg ' + i);
+    }
+    return new Response('ok');
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	if len(r.Logs) > maxLogEntries {
+		t.Errorf("log count = %d, want <= %d", len(r.Logs), maxLogEntries)
+	}
+	// Should capture exactly maxLogEntries, dropping subsequent logs.
+	if len(r.Logs) != maxLogEntries {
+		t.Errorf("log count = %d, want %d", len(r.Logs), maxLogEntries)
+	}
+}
+
+// TestConsoleLog_MessageTruncation verifies that messages longer than
+// maxLogMessageSize are truncated with "...(truncated)" suffix.
+func TestConsoleLog_MessageTruncation(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    console.log('A'.repeat(10000));
+    return new Response('ok');
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	if len(r.Logs) == 0 {
+		t.Fatal("expected at least one log entry")
+	}
+
+	msg := r.Logs[0].Message
+	expectedMaxLen := maxLogMessageSize + len("...(truncated)")
+	if len(msg) > expectedMaxLen {
+		t.Errorf("message length = %d, want <= %d", len(msg), expectedMaxLen)
+	}
+	if !strings.HasSuffix(msg, "...(truncated)") {
+		t.Errorf("expected message to end with '...(truncated)', got: %q", msg[len(msg)-20:])
+	}
+}
+
+// TestConsoleLog_LimitConstants verifies that the log limit constants are reasonable.
+func TestConsoleLog_LimitConstants(t *testing.T) {
+	if maxLogEntries < 100 || maxLogEntries > 10000 {
+		t.Errorf("maxLogEntries = %d, want 100-10000", maxLogEntries)
+	}
+	if maxLogMessageSize < 1024 || maxLogMessageSize > 100*1024 {
+		t.Errorf("maxLogMessageSize = %d, want 1KB-100KB", maxLogMessageSize)
+	}
+}

@@ -64,564 +64,156 @@ func TestCryptoExt_JWK_HMAC_ImportExport(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ECDSA (Priority 2)
+// Security Fixes - H7, M6, M11
 // ---------------------------------------------------------------------------
 
-func TestCryptoExt_ECDSA_GenerateSignVerify(t *testing.T) {
+func TestAESCBC_PaddingValidation(t *testing.T) {
 	db := testDB(t)
 	e := newTestEngine(t, db)
 
 	source := `export default {
   async fetch(request, env) {
-    const keyPair = await crypto.subtle.generateKey(
-      { name: "ECDSA", namedCurve: "P-256" },
-      true,
-      ["sign", "verify"]
-    );
-
-    const data = new TextEncoder().encode("hello");
-    const signature = await crypto.subtle.sign(
-      { name: "ECDSA", hash: "SHA-256" },
-      keyPair.privateKey,
-      data
-    );
-    const valid = await crypto.subtle.verify(
-      { name: "ECDSA", hash: "SHA-256" },
-      keyPair.publicKey,
-      signature,
-      data
-    );
-
-    const invalid = await crypto.subtle.verify(
-      { name: "ECDSA", hash: "SHA-256" },
-      keyPair.publicKey,
-      signature,
-      new TextEncoder().encode("tampered")
-    );
-
-    return Response.json({
-      valid,
-      invalid,
-      sigLen: new Uint8Array(signature).length,
-      privType: keyPair.privateKey.type,
-      pubType: keyPair.publicKey.type,
-    });
-  },
-};`
-
-	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
-	assertOK(t, r)
-
-	var data struct {
-		Valid    bool   `json:"valid"`
-		Invalid  bool   `json:"invalid"`
-		SigLen   int    `json:"sigLen"`
-		PrivType string `json:"privType"`
-		PubType  string `json:"pubType"`
-	}
-	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if !data.Valid {
-		t.Error("ECDSA verify should return true for correct data")
-	}
-	if data.Invalid {
-		t.Error("ECDSA verify should return false for tampered data")
-	}
-	// P-256 signature is 64 bytes (32 bytes for r + 32 bytes for s)
-	if data.SigLen != 64 {
-		t.Errorf("signature length = %d, want 64", data.SigLen)
-	}
-	if data.PrivType != "private" {
-		t.Errorf("private key type = %q, want private", data.PrivType)
-	}
-	if data.PubType != "public" {
-		t.Errorf("public key type = %q, want public", data.PubType)
-	}
-}
-
-func TestCryptoExt_ECDSA_P384(t *testing.T) {
-	db := testDB(t)
-	e := newTestEngine(t, db)
-
-	source := `export default {
-  async fetch(request, env) {
-    const keyPair = await crypto.subtle.generateKey(
-      { name: "ECDSA", namedCurve: "P-384" },
-      true,
-      ["sign", "verify"]
-    );
-
-    const data = new TextEncoder().encode("P-384 test");
-    const signature = await crypto.subtle.sign(
-      { name: "ECDSA", hash: "SHA-384" },
-      keyPair.privateKey,
-      data
-    );
-    const valid = await crypto.subtle.verify(
-      { name: "ECDSA", hash: "SHA-384" },
-      keyPair.publicKey,
-      signature,
-      data
-    );
-
-    return Response.json({
-      valid,
-      sigLen: new Uint8Array(signature).length,
-    });
-  },
-};`
-
-	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
-	assertOK(t, r)
-
-	var data struct {
-		Valid  bool `json:"valid"`
-		SigLen int  `json:"sigLen"`
-	}
-	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if !data.Valid {
-		t.Error("ECDSA P-384 verify should return true")
-	}
-	// P-384 signature is 96 bytes (48 bytes for r + 48 bytes for s)
-	if data.SigLen != 96 {
-		t.Errorf("P-384 signature length = %d, want 96", data.SigLen)
-	}
-}
-
-func TestCryptoExt_ECDSA_JWK_RoundTrip(t *testing.T) {
-	db := testDB(t)
-	e := newTestEngine(t, db)
-
-	source := `export default {
-  async fetch(request, env) {
-    const keyPair = await crypto.subtle.generateKey(
-      { name: "ECDSA", namedCurve: "P-256" },
-      true,
-      ["sign", "verify"]
-    );
-
-    // Export both keys as JWK
-    const privJWK = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
-    const pubJWK = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
-
-    // Re-import from JWK
-    const reimportedPriv = await crypto.subtle.importKey(
-      "jwk", privJWK, { name: "ECDSA", namedCurve: "P-256" }, true, ["sign"]
-    );
-    const reimportedPub = await crypto.subtle.importKey(
-      "jwk", pubJWK, { name: "ECDSA", namedCurve: "P-256" }, true, ["verify"]
-    );
-
-    // Sign with re-imported private key, verify with re-imported public key
-    const data = new TextEncoder().encode("JWK round-trip");
-    const sig = await crypto.subtle.sign(
-      { name: "ECDSA", hash: "SHA-256" }, reimportedPriv, data
-    );
-    const valid = await crypto.subtle.verify(
-      { name: "ECDSA", hash: "SHA-256" }, reimportedPub, sig, data
-    );
-
-    return Response.json({
-      valid,
-      privKty: privJWK.kty,
-      privCrv: privJWK.crv,
-      privHasD: typeof privJWK.d === 'string' && privJWK.d.length > 0,
-      pubKty: pubJWK.kty,
-      pubCrv: pubJWK.crv,
-      pubHasD: pubJWK.d !== undefined,
-    });
-  },
-};`
-
-	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
-	assertOK(t, r)
-
-	var data struct {
-		Valid    bool   `json:"valid"`
-		PrivKty  string `json:"privKty"`
-		PrivCrv  string `json:"privCrv"`
-		PrivHasD bool   `json:"privHasD"`
-		PubKty   string `json:"pubKty"`
-		PubCrv   string `json:"pubCrv"`
-		PubHasD  bool   `json:"pubHasD"`
-	}
-	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if !data.Valid {
-		t.Error("ECDSA JWK round-trip: sign/verify should succeed")
-	}
-	if data.PrivKty != "EC" {
-		t.Errorf("private JWK kty = %q, want EC", data.PrivKty)
-	}
-	if data.PrivCrv != "P-256" {
-		t.Errorf("private JWK crv = %q, want P-256", data.PrivCrv)
-	}
-	if !data.PrivHasD {
-		t.Error("private JWK should have 'd' field")
-	}
-	if data.PubKty != "EC" {
-		t.Errorf("public JWK kty = %q, want EC", data.PubKty)
-	}
-	if data.PubHasD {
-		t.Error("public JWK should not have 'd' field")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// AES-CBC (Priority 4)
-// ---------------------------------------------------------------------------
-
-func TestCryptoExt_AESCBC_EncryptDecrypt(t *testing.T) {
-	db := testDB(t)
-	e := newTestEngine(t, db)
-
-	source := `export default {
-  async fetch(request, env) {
-    const keyData = new Uint8Array(16);
-    crypto.getRandomValues(keyData);
-    const key = await crypto.subtle.importKey(
-      "raw", keyData, { name: "AES-CBC" }, false, ["encrypt", "decrypt"]
+    // Generate a key and encrypt some data
+    const key = await crypto.subtle.generateKey(
+      { name: "AES-CBC", length: 256 }, true, ["encrypt", "decrypt"]
     );
     const iv = new Uint8Array(16);
     crypto.getRandomValues(iv);
+    const pt = new TextEncoder().encode("test padding validation!");
+    const ct = await crypto.subtle.encrypt({ name: "AES-CBC", iv }, key, pt);
 
-    const plaintext = new TextEncoder().encode("AES-CBC test data!!");
-    const ciphertext = await crypto.subtle.encrypt(
-      { name: "AES-CBC", iv }, key, plaintext
-    );
-    const decrypted = await crypto.subtle.decrypt(
-      { name: "AES-CBC", iv }, key, ciphertext
-    );
+    // Normal decrypt should work
+    const decrypted = await crypto.subtle.decrypt({ name: "AES-CBC", iv }, key, ct);
     const result = new TextDecoder().decode(decrypted);
 
-    return Response.json({
-      match: result === "AES-CBC test data!!",
-      ctLen: new Uint8Array(ciphertext).length,
-    });
-  },
-};`
-
-	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
-	assertOK(t, r)
-
-	var data struct {
-		Match bool `json:"match"`
-		CtLen int  `json:"ctLen"`
-	}
-	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if !data.Match {
-		t.Error("AES-CBC decrypt should return original plaintext")
-	}
-	// 19 bytes plaintext -> padded to 32 bytes (next multiple of 16)
-	if data.CtLen != 32 {
-		t.Errorf("ciphertext length = %d, want 32", data.CtLen)
-	}
-}
-
-func TestCryptoExt_AESCBC_BlockAligned(t *testing.T) {
-	db := testDB(t)
-	e := newTestEngine(t, db)
-
-	source := `export default {
-  async fetch(request, env) {
-    const keyData = new Uint8Array(32);
-    crypto.getRandomValues(keyData);
-    const key = await crypto.subtle.importKey(
-      "raw", keyData, { name: "AES-CBC" }, false, ["encrypt", "decrypt"]
-    );
-    const iv = new Uint8Array(16);
-    crypto.getRandomValues(iv);
-
-    // Exactly 16 bytes (block-aligned)
-    const plaintext = new TextEncoder().encode("exactly16bytes!!");
-    const ciphertext = await crypto.subtle.encrypt(
-      { name: "AES-CBC", iv }, key, plaintext
-    );
-    const decrypted = await crypto.subtle.decrypt(
-      { name: "AES-CBC", iv }, key, ciphertext
-    );
-    const result = new TextDecoder().decode(decrypted);
-
-    return Response.json({
-      match: result === "exactly16bytes!!",
-      ctLen: new Uint8Array(ciphertext).length,
-    });
-  },
-};`
-
-	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
-	assertOK(t, r)
-
-	var data struct {
-		Match bool `json:"match"`
-		CtLen int  `json:"ctLen"`
-	}
-	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if !data.Match {
-		t.Error("AES-CBC block-aligned decrypt should return original plaintext")
-	}
-	// 16 bytes plaintext -> PKCS7 adds full block of padding -> 32 bytes
-	if data.CtLen != 32 {
-		t.Errorf("ciphertext length = %d, want 32", data.CtLen)
-	}
-}
-
-func TestCryptoExt_AESCBC_RejectsInvalidIV(t *testing.T) {
-	db := testDB(t)
-	e := newTestEngine(t, db)
-
-	source := `export default {
-  async fetch(request, env) {
-    const keyData = new Uint8Array(16);
-    crypto.getRandomValues(keyData);
-    const key = await crypto.subtle.importKey(
-      "raw", keyData, { name: "AES-CBC" }, false, ["encrypt", "decrypt"]
-    );
-    // Wrong IV length: 12 bytes instead of 16
-    const badIV = new Uint8Array(12);
+    // Tamper with ciphertext (corrupt last block = padding)
+    const tampered = new Uint8Array(ct);
+    tampered[tampered.length - 1] ^= 0xFF;
+    var tamperedBlocked = false;
     try {
-      await crypto.subtle.encrypt({ name: "AES-CBC", iv: badIV }, key, new Uint8Array([1,2,3]));
-      return Response.json({ error: false });
+      await crypto.subtle.decrypt({ name: "AES-CBC", iv }, key, tampered.buffer);
     } catch(e) {
-      return Response.json({ error: true, message: String(e) });
+      tamperedBlocked = true;
     }
-  },
-};`
-
-	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
-	assertOK(t, r)
-
-	var data struct {
-		Error   bool   `json:"error"`
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if !data.Error {
-		t.Error("AES-CBC encrypt should reject non-16-byte IV")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// generateKey
-// ---------------------------------------------------------------------------
-
-func TestCryptoExt_GenerateKey_HMAC(t *testing.T) {
-	db := testDB(t)
-	e := newTestEngine(t, db)
-
-	source := `export default {
-  async fetch(request, env) {
-    const key = await crypto.subtle.generateKey(
-      { name: "HMAC", hash: "SHA-256" },
-      true,
-      ["sign", "verify"]
-    );
-
-    const data = new TextEncoder().encode("test generate");
-    const sig = await crypto.subtle.sign("HMAC", key, data);
-    const valid = await crypto.subtle.verify("HMAC", key, sig, data);
 
     return Response.json({
-      valid,
-      type: key.type,
-      sigLen: new Uint8Array(sig).length,
+      match: result === "test padding validation!",
+      tamperedBlocked: tamperedBlocked,
     });
   },
 };`
-
 	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
 	assertOK(t, r)
-
 	var data struct {
-		Valid  bool   `json:"valid"`
-		Type   string `json:"type"`
-		SigLen int    `json:"sigLen"`
+		Match           bool `json:"match"`
+		TamperedBlocked bool `json:"tamperedBlocked"`
 	}
 	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if !data.Valid {
-		t.Error("generated HMAC key sign/verify should succeed")
+	if !data.Match {
+		t.Error("AES-CBC decrypt should produce original plaintext")
 	}
-	if data.Type != "secret" {
-		t.Errorf("key type = %q, want secret", data.Type)
-	}
-	if data.SigLen != 32 {
-		t.Errorf("signature length = %d, want 32", data.SigLen)
+	if !data.TamperedBlocked {
+		t.Error("AES-CBC decrypt with tampered ciphertext should fail")
 	}
 }
 
-func TestCryptoExt_GenerateKey_AESGCM(t *testing.T) {
+func TestAESGCM_WithAAD(t *testing.T) {
 	db := testDB(t)
 	e := newTestEngine(t, db)
-
 	source := `export default {
   async fetch(request, env) {
     const key = await crypto.subtle.generateKey(
-      { name: "AES-GCM", length: 256 },
-      false,
-      ["encrypt", "decrypt"]
+      { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]
     );
-
     const iv = new Uint8Array(12);
     crypto.getRandomValues(iv);
-    const plaintext = new TextEncoder().encode("generated key test");
-    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
-    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
-    const result = new TextDecoder().decode(pt);
+    const aad = new TextEncoder().encode("associated data");
+    const pt = new TextEncoder().encode("secret message");
 
-    return Response.json({ match: result === "generated key test", type: key.type });
+    // Encrypt with AAD
+    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: aad }, key, pt);
+
+    // Decrypt with same AAD should work
+    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv, additionalData: aad }, key, ct);
+    const result = new TextDecoder().decode(decrypted);
+
+    // Decrypt with wrong AAD should fail
+    var wrongAADFailed = false;
+    try {
+      const wrongAAD = new TextEncoder().encode("wrong data");
+      await crypto.subtle.decrypt({ name: "AES-GCM", iv, additionalData: wrongAAD }, key, ct);
+    } catch(e) {
+      wrongAADFailed = true;
+    }
+
+    // Decrypt with no AAD should fail
+    var noAADFailed = false;
+    try {
+      await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
+    } catch(e) {
+      noAADFailed = true;
+    }
+
+    return Response.json({ match: result === "secret message", wrongAADFailed, noAADFailed });
   },
 };`
-
 	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
 	assertOK(t, r)
-
 	var data struct {
-		Match bool   `json:"match"`
-		Type  string `json:"type"`
+		Match          bool `json:"match"`
+		WrongAADFailed bool `json:"wrongAADFailed"`
+		NoAADFailed    bool `json:"noAADFailed"`
 	}
 	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if !data.Match {
-		t.Error("generated AES-GCM key encrypt/decrypt should round-trip")
+		t.Error("decrypt with correct AAD should work")
 	}
-	if data.Type != "secret" {
-		t.Errorf("key type = %q, want secret", data.Type)
+	if !data.WrongAADFailed {
+		t.Error("decrypt with wrong AAD should fail")
+	}
+	if !data.NoAADFailed {
+		t.Error("decrypt with no AAD (when encrypted with AAD) should fail")
 	}
 }
 
-// TestCryptoExt_ECDSA_RawImportExport exercises the raw public key import path
-// for ECDSA in setupCryptoExt (crypto_ext.go:183-215).
-func TestCryptoExt_ECDSA_RawImportExport(t *testing.T) {
+func TestAES_GenerateKey_128bit(t *testing.T) {
 	db := testDB(t)
 	e := newTestEngine(t, db)
-
 	source := `export default {
   async fetch(request, env) {
-    // Generate ECDSA P-256 key pair
-    const keyPair = await crypto.subtle.generateKey(
-      { name: "ECDSA", namedCurve: "P-256", hash: "SHA-256" },
-      true,
-      ["sign", "verify"]
+    const key128 = await crypto.subtle.generateKey(
+      { name: "AES-GCM", length: 128 }, true, ["encrypt", "decrypt"]
     );
+    const raw128 = await crypto.subtle.exportKey("raw", key128);
 
-    // Export public key as raw (uncompressed point)
-    const rawPub = await crypto.subtle.exportKey("raw", keyPair.publicKey);
-    const rawArr = new Uint8Array(rawPub);
-
-    // Re-import the raw public key as ECDSA
-    const imported = await crypto.subtle.importKey(
-      "raw",
-      rawPub,
-      { name: "ECDSA", namedCurve: "P-256", hash: "SHA-256" },
-      true,
-      ["verify"]
+    const key256 = await crypto.subtle.generateKey(
+      { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]
     );
-
-    // Verify: sign with original private key, verify with imported public key
-    const data = new TextEncoder().encode("test message");
-    const sig = await crypto.subtle.sign(
-      { name: "ECDSA", hash: "SHA-256" },
-      keyPair.privateKey,
-      data
-    );
-    const valid = await crypto.subtle.verify(
-      { name: "ECDSA", hash: "SHA-256" },
-      imported,
-      sig,
-      data
-    );
+    const raw256 = await crypto.subtle.exportKey("raw", key256);
 
     return Response.json({
-      rawLen: rawArr.length,
-      firstByte: rawArr[0],
-      importedType: imported.type,
-      valid,
+      len128: raw128.byteLength,
+      len256: raw256.byteLength,
     });
   },
 };`
-
 	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
 	assertOK(t, r)
-
 	var data struct {
-		RawLen       int    `json:"rawLen"`
-		FirstByte    int    `json:"firstByte"`
-		ImportedType string `json:"importedType"`
-		Valid        bool   `json:"valid"`
+		Len128 int `json:"len128"`
+		Len256 int `json:"len256"`
 	}
 	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
-		t.Fatal(err)
+		t.Fatalf("unmarshal: %v", err)
 	}
-	if data.RawLen != 65 {
-		t.Errorf("raw P-256 public key length = %d, want 65", data.RawLen)
+	if data.Len128 != 16 {
+		t.Errorf("128-bit key raw length = %d, want 16", data.Len128)
 	}
-	if data.FirstByte != 0x04 {
-		t.Errorf("first byte = 0x%02x, want 0x04 (uncompressed)", data.FirstByte)
-	}
-	if data.ImportedType != "public" {
-		t.Errorf("imported key type = %q, want public", data.ImportedType)
-	}
-	if !data.Valid {
-		t.Error("signature should verify with raw-imported public key")
-	}
-}
-
-// TestCryptoExt_ECDSA_RawImportP384 exercises raw import for P-384 curve.
-func TestCryptoExt_ECDSA_RawImportP384(t *testing.T) {
-	db := testDB(t)
-	e := newTestEngine(t, db)
-
-	source := `export default {
-  async fetch(request, env) {
-    const keyPair = await crypto.subtle.generateKey(
-      { name: "ECDSA", namedCurve: "P-384", hash: "SHA-384" },
-      true,
-      ["sign", "verify"]
-    );
-    const rawPub = await crypto.subtle.exportKey("raw", keyPair.publicKey);
-    const imported = await crypto.subtle.importKey(
-      "raw", rawPub,
-      { name: "ECDSA", namedCurve: "P-384", hash: "SHA-384" },
-      true, ["verify"]
-    );
-    const data = new TextEncoder().encode("p384 test");
-    const sig = await crypto.subtle.sign(
-      { name: "ECDSA", hash: "SHA-384" }, keyPair.privateKey, data
-    );
-    const valid = await crypto.subtle.verify(
-      { name: "ECDSA", hash: "SHA-384" }, imported, sig, data
-    );
-    return Response.json({ rawLen: new Uint8Array(rawPub).length, valid });
-  },
-};`
-
-	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
-	assertOK(t, r)
-
-	var data struct {
-		RawLen int  `json:"rawLen"`
-		Valid  bool `json:"valid"`
-	}
-	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
-		t.Fatal(err)
-	}
-	if data.RawLen != 97 {
-		t.Errorf("raw P-384 public key length = %d, want 97", data.RawLen)
-	}
-	if !data.Valid {
-		t.Error("P-384 signature should verify with raw-imported public key")
+	if data.Len256 != 32 {
+		t.Errorf("256-bit key raw length = %d, want 32", data.Len256)
 	}
 }

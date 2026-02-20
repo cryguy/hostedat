@@ -86,6 +86,9 @@ function isRSA(name) {
 }
 
 subtle.sign = async function(algorithm, key, data) {
+	if (key.usages && !key.usages.includes('sign')) {
+		throw new TypeError('key usages do not permit this operation');
+	}
 	var algo = typeof algorithm === 'string' ? { name: algorithm } : algorithm;
 	if (algo.name === 'RSASSA-PKCS1-v1_5' || algo.name === 'RSA-PSS') {
 		var hashName = key.algorithm.hash ? (typeof key.algorithm.hash === 'string' ? key.algorithm.hash : key.algorithm.hash.name) : '';
@@ -97,6 +100,9 @@ subtle.sign = async function(algorithm, key, data) {
 };
 
 subtle.verify = async function(algorithm, key, signature, data) {
+	if (key.usages && !key.usages.includes('verify')) {
+		throw new TypeError('key usages do not permit this operation');
+	}
 	var algo = typeof algorithm === 'string' ? { name: algorithm } : algorithm;
 	if (algo.name === 'RSASSA-PKCS1-v1_5' || algo.name === 'RSA-PSS') {
 		var hashName = key.algorithm.hash ? (typeof key.algorithm.hash === 'string' ? key.algorithm.hash : key.algorithm.hash.name) : '';
@@ -107,6 +113,9 @@ subtle.verify = async function(algorithm, key, signature, data) {
 };
 
 subtle.encrypt = async function(algorithm, key, data) {
+	if (key.usages && !key.usages.includes('encrypt')) {
+		throw new TypeError('key usages do not permit this operation');
+	}
 	var algo = typeof algorithm === 'string' ? { name: algorithm } : algorithm;
 	if (algo.name === 'RSA-OAEP') {
 		var labelB64 = algo.label ? __bufferSourceToB64(algo.label) : '';
@@ -117,6 +126,9 @@ subtle.encrypt = async function(algorithm, key, data) {
 };
 
 subtle.decrypt = async function(algorithm, key, data) {
+	if (key.usages && !key.usages.includes('decrypt')) {
+		throw new TypeError('key usages do not permit this operation');
+	}
 	var algo = typeof algorithm === 'string' ? { name: algorithm } : algorithm;
 	if (algo.name === 'RSA-OAEP') {
 		var labelB64 = algo.label ? __bufferSourceToB64(algo.label) : '';
@@ -136,7 +148,7 @@ subtle.importKey = async function(format, keyData, algorithm, extractable, usage
 		} else {
 			dataStr = __bufferSourceToB64(keyData);
 		}
-		var resultJSON = __cryptoImportKeyRSA(format, dataStr, algo.name, hashName);
+		var resultJSON = __cryptoImportKeyRSA(format, dataStr, algo.name, hashName, extractable);
 		var result = JSON.parse(resultJSON);
 		if (result.error) throw new TypeError(result.error);
 		var keyAlgo = { name: algo.name, hash: { name: hashName } };
@@ -180,7 +192,7 @@ subtle.generateKey = async function(algorithm, extractable, usages) {
 				pubExp = (pubExp << 8) | pe[i];
 			}
 		}
-		var resultJSON = __cryptoGenerateKeyRSA(algo.name, modulusLength, hashName, pubExp);
+		var resultJSON = __cryptoGenerateKeyRSA(algo.name, modulusLength, hashName, pubExp, extractable);
 		var result = JSON.parse(resultJSON);
 		if (result.error) throw new TypeError(result.error);
 		var keyAlgo = { name: algo.name, hash: { name: hashName }, modulusLength: modulusLength };
@@ -431,16 +443,17 @@ func setupCryptoRSA(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		return val
 	}).GetFunction(ctx))
 
-	// __cryptoGenerateKeyRSA(algoName, modulusLength, hashAlgo, publicExponent) -> JSON
+	// __cryptoGenerateKeyRSA(algoName, modulusLength, hashAlgo, publicExponent, extractable) -> JSON
 	_ = ctx.Global().Set("__cryptoGenerateKeyRSA", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
-		if len(args) < 4 {
-			return throwError(iso, "generateKeyRSA requires 4 argument(s)")
+		if len(args) < 5 {
+			return throwError(iso, "generateKeyRSA requires 5 argument(s)")
 		}
 		algoName := args[0].String()
 		modulusLength := int(args[1].Int32())
 		hashAlgo := args[2].String()
 		pubExp := int(args[3].Int32())
+		extractableVal := args[4].Boolean()
 
 		reqID := getReqIDFromJS(ctx)
 		if getRequestState(reqID) == nil {
@@ -452,36 +465,47 @@ func setupCryptoRSA(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 			pubExp = 65537
 		}
 
+		// Reject non-standard exponents (H10 security fix)
+		if pubExp != 65537 {
+			val, _ := v8.NewValue(iso, `{"error":"only publicExponent 65537 is supported"}`)
+			return val
+		}
+
+		if modulusLength != 2048 && modulusLength != 3072 && modulusLength != 4096 {
+			val, _ := v8.NewValue(iso, `{"error":"modulusLength must be 2048, 3072, or 4096"}`)
+			return val
+		}
+
 		privKey, err := rsa.GenerateKey(rand.Reader, modulusLength)
 		if err != nil {
 			val, _ := v8.NewValue(iso, fmt.Sprintf(`{"error":"key generation failed: %s"}`, err.Error()))
 			return val
 		}
-		privKey.PublicKey.E = pubExp
 
 		privID := importCryptoKeyFull(reqID, &cryptoKeyEntry{
 			algoName: normalizeAlgo(algoName), hashAlgo: hashAlgo,
-			keyType: "private", ecKey: privKey,
+			keyType: "private", ecKey: privKey, extractable: extractableVal,
 		})
 		pubID := importCryptoKeyFull(reqID, &cryptoKeyEntry{
 			algoName: normalizeAlgo(algoName), hashAlgo: hashAlgo,
-			keyType: "public", ecKey: &privKey.PublicKey,
+			keyType: "public", ecKey: &privKey.PublicKey, extractable: extractableVal,
 		})
 
 		val, _ := v8.NewValue(iso, fmt.Sprintf(`{"privateKeyId":%d,"publicKeyId":%d}`, privID, pubID))
 		return val
 	}).GetFunction(ctx))
 
-	// __cryptoImportKeyRSA(format, dataStr, algoName, hashAlgo) -> JSON
+	// __cryptoImportKeyRSA(format, dataStr, algoName, hashAlgo, extractable) -> JSON
 	_ = ctx.Global().Set("__cryptoImportKeyRSA", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
-		if len(args) < 4 {
-			return throwError(iso, "importKeyRSA requires 4 argument(s)")
+		if len(args) < 5 {
+			return throwError(iso, "importKeyRSA requires 5 argument(s)")
 		}
 		format := args[0].String()
 		dataStr := args[1].String()
 		algoName := args[2].String()
 		hashAlgo := args[3].String()
+		extractableVal := args[4].Boolean()
 
 		reqID := getReqIDFromJS(ctx)
 		if getRequestState(reqID) == nil {
@@ -491,11 +515,11 @@ func setupCryptoRSA(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 
 		switch format {
 		case "jwk":
-			return importRSAJWK(iso, reqID, dataStr, algoName, hashAlgo)
+			return importRSAJWK(iso, reqID, dataStr, algoName, hashAlgo, extractableVal)
 		case "spki":
-			return importRSASPKI(iso, reqID, dataStr, algoName, hashAlgo)
+			return importRSASPKI(iso, reqID, dataStr, algoName, hashAlgo, extractableVal)
 		case "pkcs8":
-			return importRSAPKCS8(iso, reqID, dataStr, algoName, hashAlgo)
+			return importRSAPKCS8(iso, reqID, dataStr, algoName, hashAlgo, extractableVal)
 		default:
 			val, _ := v8.NewValue(iso, fmt.Sprintf(`{"error":"unsupported format %q for RSA"}`, format))
 			return val
@@ -518,6 +542,9 @@ func setupCryptoRSA(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		if entry == nil {
 			return throwError(iso, "exportKeyRSA: key not found")
 		}
+		if !entry.extractable {
+			return throwError(iso, "exportKey: key is not extractable")
+		}
 
 		switch format {
 		case "jwk":
@@ -538,7 +565,7 @@ func setupCryptoRSA(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 }
 
 // importRSAJWK imports an RSA key from JWK format.
-func importRSAJWK(iso *v8.Isolate, reqID uint64, jwkJSON, algoName, hashAlgo string) *v8.Value {
+func importRSAJWK(iso *v8.Isolate, reqID uint64, jwkJSON, algoName, hashAlgo string, extractable bool) *v8.Value {
 	var jwk map[string]interface{}
 	if err := json.Unmarshal([]byte(jwkJSON), &jwk); err != nil {
 		val, _ := v8.NewValue(iso, `{"error":"invalid JWK JSON"}`)
@@ -604,7 +631,7 @@ func importRSAJWK(iso *v8.Isolate, reqID uint64, jwkJSON, algoName, hashAlgo str
 
 		id := importCryptoKeyFull(reqID, &cryptoKeyEntry{
 			algoName: normalizeAlgo(algoName), hashAlgo: hashAlgo,
-			keyType: "private", ecKey: privKey,
+			keyType: "private", ecKey: privKey, extractable: extractable,
 		})
 		val, _ := v8.NewValue(iso, fmt.Sprintf(
 			`{"keyId":%d,"keyType":"private","modulusLength":%d,"publicExponent":%d}`,
@@ -614,7 +641,7 @@ func importRSAJWK(iso *v8.Isolate, reqID uint64, jwkJSON, algoName, hashAlgo str
 
 	id := importCryptoKeyFull(reqID, &cryptoKeyEntry{
 		algoName: normalizeAlgo(algoName), hashAlgo: hashAlgo,
-		keyType: "public", ecKey: pubKey,
+		keyType: "public", ecKey: pubKey, extractable: extractable,
 	})
 	val, _ := v8.NewValue(iso, fmt.Sprintf(
 		`{"keyId":%d,"keyType":"public","modulusLength":%d,"publicExponent":%d}`,
@@ -623,7 +650,7 @@ func importRSAJWK(iso *v8.Isolate, reqID uint64, jwkJSON, algoName, hashAlgo str
 }
 
 // importRSASPKI imports an RSA public key from SPKI (DER) format.
-func importRSASPKI(iso *v8.Isolate, reqID uint64, dataB64, algoName, hashAlgo string) *v8.Value {
+func importRSASPKI(iso *v8.Isolate, reqID uint64, dataB64, algoName, hashAlgo string, extractable bool) *v8.Value {
 	derBytes, err := base64.StdEncoding.DecodeString(dataB64)
 	if err != nil {
 		val, _ := v8.NewValue(iso, `{"error":"invalid base64"}`)
@@ -644,7 +671,7 @@ func importRSASPKI(iso *v8.Isolate, reqID uint64, dataB64, algoName, hashAlgo st
 
 	id := importCryptoKeyFull(reqID, &cryptoKeyEntry{
 		algoName: normalizeAlgo(algoName), hashAlgo: hashAlgo,
-		keyType: "public", ecKey: rsaPub,
+		keyType: "public", ecKey: rsaPub, extractable: extractable,
 	})
 	val, _ := v8.NewValue(iso, fmt.Sprintf(
 		`{"keyId":%d,"keyType":"public","modulusLength":%d,"publicExponent":%d}`,
@@ -653,7 +680,7 @@ func importRSASPKI(iso *v8.Isolate, reqID uint64, dataB64, algoName, hashAlgo st
 }
 
 // importRSAPKCS8 imports an RSA private key from PKCS#8 (DER) format.
-func importRSAPKCS8(iso *v8.Isolate, reqID uint64, dataB64, algoName, hashAlgo string) *v8.Value {
+func importRSAPKCS8(iso *v8.Isolate, reqID uint64, dataB64, algoName, hashAlgo string, extractable bool) *v8.Value {
 	derBytes, err := base64.StdEncoding.DecodeString(dataB64)
 	if err != nil {
 		val, _ := v8.NewValue(iso, `{"error":"invalid base64"}`)
@@ -674,7 +701,7 @@ func importRSAPKCS8(iso *v8.Isolate, reqID uint64, dataB64, algoName, hashAlgo s
 
 	id := importCryptoKeyFull(reqID, &cryptoKeyEntry{
 		algoName: normalizeAlgo(algoName), hashAlgo: hashAlgo,
-		keyType: "private", ecKey: rsaKey,
+		keyType: "private", ecKey: rsaKey, extractable: extractable,
 	})
 	val, _ := v8.NewValue(iso, fmt.Sprintf(
 		`{"keyId":%d,"keyType":"private","modulusLength":%d,"publicExponent":%d}`,

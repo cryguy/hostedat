@@ -14,6 +14,8 @@ import (
 	v8 "github.com/tommie/v8go"
 )
 
+const maxDecompressedSize = 128 * 1024 * 1024 // 128 MB
+
 // compressStreamState holds the Go-side state for one streaming compressor or
 // decompressor. For compression the writer writes compressed chunks to buf.
 // For decompression an io.Pipe feeds a background goroutine that runs the
@@ -206,23 +208,32 @@ func setupCompression(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 			if err != nil {
 				return throwError(iso, fmt.Sprintf("decompress: %s", err.Error()))
 			}
-			result, err = io.ReadAll(r)
+			result, err = io.ReadAll(io.LimitReader(r, int64(maxDecompressedSize)+1))
 			if err != nil {
 				return throwError(iso, fmt.Sprintf("decompress: %s", err.Error()))
+			}
+			if len(result) > maxDecompressedSize {
+				return throwError(iso, "decompress: output exceeds maximum allowed size")
 			}
 			_ = r.Close()
 		case "deflate", "deflate-raw":
 			r := flate.NewReader(bytes.NewReader(data))
-			result, err = io.ReadAll(r)
+			result, err = io.ReadAll(io.LimitReader(r, int64(maxDecompressedSize)+1))
 			if err != nil {
 				return throwError(iso, fmt.Sprintf("decompress: %s", err.Error()))
+			}
+			if len(result) > maxDecompressedSize {
+				return throwError(iso, "decompress: output exceeds maximum allowed size")
 			}
 			_ = r.Close()
 		case "br":
 			r := brotli.NewReader(bytes.NewReader(data))
-			result, err = io.ReadAll(r)
+			result, err = io.ReadAll(io.LimitReader(r, int64(maxDecompressedSize)+1))
 			if err != nil {
 				return throwError(iso, fmt.Sprintf("decompress: %s", err.Error()))
+			}
+			if len(result) > maxDecompressedSize {
+				return throwError(iso, "decompress: output exceeds maximum allowed size")
 			}
 		default:
 			return throwError(iso, fmt.Sprintf("decompress: unsupported format %q", format))

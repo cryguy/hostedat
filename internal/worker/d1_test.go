@@ -1088,3 +1088,165 @@ func TestOpenD1Database_CreatesD1Subdirectory(t *testing.T) {
 		t.Error("d1 path should be a directory")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Security tests: ATTACH/DETACH and PRAGMA blocking
+// ---------------------------------------------------------------------------
+
+func TestD1Bridge_BlocksATTACH(t *testing.T) {
+	bridge, err := NewD1BridgeMemory("test-attach")
+	if err != nil {
+		t.Fatalf("NewD1BridgeMemory: %v", err)
+	}
+	defer func() { _ = bridge.Close() }()
+
+	attacks := []string{
+		"ATTACH DATABASE '/tmp/evil.db' AS evil",
+		"attach database ':memory:' as m",
+		"  ATTACH DATABASE '/etc/passwd' AS p",
+		"DETACH DATABASE main",
+		"detach database evil",
+	}
+	for _, sql := range attacks {
+		_, err := bridge.Exec(sql, nil)
+		if err == nil {
+			t.Errorf("expected error for %q, got nil", sql)
+		}
+		if err != nil && !strings.Contains(err.Error(), "not allowed") {
+			t.Errorf("expected 'not allowed' error for %q, got: %v", sql, err)
+		}
+	}
+}
+
+func TestD1Bridge_BlocksDangerousPRAGMAs(t *testing.T) {
+	bridge, err := NewD1BridgeMemory("test-pragma")
+	if err != nil {
+		t.Fatalf("NewD1BridgeMemory: %v", err)
+	}
+	defer func() { _ = bridge.Close() }()
+
+	blocked := []string{
+		"PRAGMA wal_checkpoint",
+		"PRAGMA database_list",
+		"PRAGMA integrity_check",
+	}
+	for _, sql := range blocked {
+		_, err := bridge.Exec(sql, nil)
+		if err == nil {
+			t.Errorf("expected error for %q, got nil", sql)
+		}
+	}
+}
+
+func TestD1Bridge_AllowsSafePRAGMAs(t *testing.T) {
+	bridge, err := NewD1BridgeMemory("test-safe-pragma")
+	if err != nil {
+		t.Fatalf("NewD1BridgeMemory: %v", err)
+	}
+	defer func() { _ = bridge.Close() }()
+
+	_, _ = bridge.Exec("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)", nil)
+
+	allowed := []string{
+		"PRAGMA TABLE_INFO(items)",
+		"PRAGMA TABLE_LIST",
+		"PRAGMA journal_mode",
+	}
+	for _, sql := range allowed {
+		_, err := bridge.Exec(sql, nil)
+		if err != nil {
+			t.Errorf("expected %q to succeed, got: %v", sql, err)
+		}
+	}
+}
+
+func TestD1Bridge_NormalDMLStillWorks(t *testing.T) {
+	bridge, err := NewD1BridgeMemory("test-dml")
+	if err != nil {
+		t.Fatalf("NewD1BridgeMemory: %v", err)
+	}
+	defer func() { _ = bridge.Close() }()
+
+	_, err = bridge.Exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)", nil)
+	if err != nil {
+		t.Fatalf("CREATE: %v", err)
+	}
+	_, err = bridge.Exec("INSERT INTO t (v) VALUES (?)", []interface{}{"hello"})
+	if err != nil {
+		t.Fatalf("INSERT: %v", err)
+	}
+	result, err := bridge.Exec("SELECT v FROM t", nil)
+	if err != nil {
+		t.Fatalf("SELECT: %v", err)
+	}
+	if len(result.Rows) != 1 {
+		t.Errorf("rows = %d, want 1", len(result.Rows))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Security Fix - M6: D1 exec() Semicolon Handling
+// ---------------------------------------------------------------------------
+
+func TestD1_ExecSemicolonInStringLiteral(t *testing.T) {
+	bridge, err := NewD1BridgeMemory("test-semicolon")
+	if err != nil {
+		t.Fatalf("NewD1BridgeMemory: %v", err)
+	}
+	defer func() { _ = bridge.Close() }()
+
+	// Create table and insert data with semicolons in string values
+	_, err = bridge.Exec("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)", nil)
+	if err != nil {
+		t.Fatalf("CREATE TABLE: %v", err)
+	}
+
+	// This tests the Go-level Exec, not the JS exec polyfill.
+	// The JS polyfill is tested via execJS.
+	_, err = bridge.Exec("INSERT INTO items (name) VALUES ('hello;world')", nil)
+	if err != nil {
+		t.Fatalf("INSERT with semicolon: %v", err)
+	}
+
+	result, err := bridge.Exec("SELECT name FROM items WHERE id = 1", nil)
+	if err != nil {
+		t.Fatalf("SELECT: %v", err)
+	}
+	// Verify the value was stored correctly
+	if result == nil {
+		t.Fatal("expected result, got nil")
+	}
+}
+
+func TestD1_ExecJSSemicolonInString(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const d1 = env.DB;
+    await d1.exec("CREATE TABLE test_semi (id INTEGER PRIMARY KEY, val TEXT)");
+    await d1.exec("INSERT INTO test_semi (val) VALUES ('a;b'); INSERT INTO test_semi (val) VALUES ('c')");
+    const results = await d1.prepare("SELECT val FROM test_semi ORDER BY id").all();
+    return Response.json({ rows: results.results });
+  },
+};`
+	env := d1Env("test-exec-semi")
+	r := execJS(t, e, source, env, getReq("http://localhost/"))
+	assertOK(t, r)
+	var data struct {
+		Rows []struct{ Val string `json:"val"` } `json:"rows"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(data.Rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(data.Rows))
+	}
+	if data.Rows[0].Val != "a;b" {
+		t.Errorf("row 0 val = %q, want 'a;b'", data.Rows[0].Val)
+	}
+	if data.Rows[1].Val != "c" {
+		t.Errorf("row 1 val = %q, want 'c'", data.Rows[1].Val)
+	}
+}

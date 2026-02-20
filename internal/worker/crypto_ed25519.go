@@ -49,7 +49,7 @@ subtle.importKey = async function(format, keyData, algorithm, extractable, usage
 		} else {
 			dataStr = __bufferSourceToB64(keyData);
 		}
-		var resultJSON = __cryptoImportKeyEd25519(format, dataStr);
+		var resultJSON = __cryptoImportKeyEd25519(format, dataStr, extractable);
 		var result = JSON.parse(resultJSON);
 		if (result.error) throw new TypeError(result.error);
 		return new CK(result.keyId, { name: 'Ed25519' }, result.keyType, extractable, usages);
@@ -72,7 +72,7 @@ subtle.exportKey = async function(format, key) {
 subtle.generateKey = async function(algorithm, extractable, usages) {
 	var algo = typeof algorithm === 'string' ? { name: algorithm } : algorithm;
 	if (algo.name === 'Ed25519') {
-		var resultJSON = __cryptoGenerateKeyEd25519();
+		var resultJSON = __cryptoGenerateKeyEd25519(extractable);
 		var result = JSON.parse(resultJSON);
 		if (result.error) throw new TypeError(result.error);
 		return {
@@ -160,8 +160,14 @@ func setupCryptoEd25519(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		return val
 	}).GetFunction(ctx))
 
-	// __cryptoGenerateKeyEd25519() -> JSON { privateKeyId, publicKeyId }
+	// __cryptoGenerateKeyEd25519(extractable) -> JSON { privateKeyId, publicKeyId }
 	_ = ctx.Global().Set("__cryptoGenerateKeyEd25519", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
+		extractableVal := false
+		if len(args) > 0 {
+			extractableVal = args[0].Boolean()
+		}
+
 		reqID := getReqIDFromJS(ctx)
 		if getRequestState(reqID) == nil {
 			val, _ := v8.NewValue(iso, `{"error":"no active request state"}`)
@@ -175,24 +181,25 @@ func setupCryptoEd25519(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		}
 
 		privID := importCryptoKeyFull(reqID, &cryptoKeyEntry{
-			algoName: "Ed25519", keyType: "private", ecKey: privKey,
+			algoName: "Ed25519", keyType: "private", ecKey: privKey, extractable: extractableVal,
 		})
 		pubID := importCryptoKeyFull(reqID, &cryptoKeyEntry{
-			algoName: "Ed25519", keyType: "public", ecKey: pubKey,
+			algoName: "Ed25519", keyType: "public", ecKey: pubKey, extractable: extractableVal,
 		})
 
 		val, _ := v8.NewValue(iso, fmt.Sprintf(`{"privateKeyId":%d,"publicKeyId":%d}`, privID, pubID))
 		return val
 	}).GetFunction(ctx))
 
-	// __cryptoImportKeyEd25519(format, dataStr) -> JSON { keyId, keyType }
+	// __cryptoImportKeyEd25519(format, dataStr, extractable) -> JSON { keyId, keyType }
 	_ = ctx.Global().Set("__cryptoImportKeyEd25519", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
-		if len(args) < 2 {
-			return throwError(iso, "importKeyEd25519 requires 2 argument(s)")
+		if len(args) < 3 {
+			return throwError(iso, "importKeyEd25519 requires 3 argument(s)")
 		}
 		format := args[0].String()
 		dataStr := args[1].String()
+		extractableVal := args[2].Boolean()
 
 		reqID := getReqIDFromJS(ctx)
 		if getRequestState(reqID) == nil {
@@ -210,7 +217,7 @@ func setupCryptoEd25519(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 			if len(keyData) == ed25519.PublicKeySize {
 				id := importCryptoKeyFull(reqID, &cryptoKeyEntry{
 					algoName: "Ed25519", keyType: "public",
-					ecKey: ed25519.PublicKey(keyData),
+					ecKey: ed25519.PublicKey(keyData), extractable: extractableVal,
 				})
 				val, _ := v8.NewValue(iso, fmt.Sprintf(`{"keyId":%d,"keyType":"public"}`, id))
 				return val
@@ -219,7 +226,7 @@ func setupCryptoEd25519(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 				privKey := ed25519.NewKeyFromSeed(keyData)
 				id := importCryptoKeyFull(reqID, &cryptoKeyEntry{
 					algoName: "Ed25519", keyType: "private",
-					ecKey: privKey,
+					ecKey: privKey, extractable: extractableVal,
 				})
 				val, _ := v8.NewValue(iso, fmt.Sprintf(`{"keyId":%d,"keyType":"private"}`, id))
 				return val
@@ -227,7 +234,7 @@ func setupCryptoEd25519(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 			if len(keyData) == ed25519.PrivateKeySize {
 				id := importCryptoKeyFull(reqID, &cryptoKeyEntry{
 					algoName: "Ed25519", keyType: "private",
-					ecKey: ed25519.PrivateKey(keyData),
+					ecKey: ed25519.PrivateKey(keyData), extractable: extractableVal,
 				})
 				val, _ := v8.NewValue(iso, fmt.Sprintf(`{"keyId":%d,"keyType":"private"}`, id))
 				return val
@@ -263,7 +270,7 @@ func setupCryptoEd25519(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 				}
 				privKey := ed25519.NewKeyFromSeed(dBytes)
 				id := importCryptoKeyFull(reqID, &cryptoKeyEntry{
-					algoName: "Ed25519", keyType: "private", ecKey: privKey,
+					algoName: "Ed25519", keyType: "private", ecKey: privKey, extractable: extractableVal,
 				})
 				val, _ := v8.NewValue(iso, fmt.Sprintf(`{"keyId":%d,"keyType":"private"}`, id))
 				return val
@@ -271,7 +278,7 @@ func setupCryptoEd25519(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 
 			id := importCryptoKeyFull(reqID, &cryptoKeyEntry{
 				algoName: "Ed25519", keyType: "public",
-				ecKey: ed25519.PublicKey(xBytes),
+				ecKey: ed25519.PublicKey(xBytes), extractable: extractableVal,
 			})
 			val, _ := v8.NewValue(iso, fmt.Sprintf(`{"keyId":%d,"keyType":"public"}`, id))
 			return val
@@ -295,6 +302,9 @@ func setupCryptoEd25519(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		entry := getCryptoKey(reqID, keyID)
 		if entry == nil {
 			return throwError(iso, "exportKeyEd25519: key not found")
+		}
+		if !entry.extractable {
+			return throwError(iso, "key is not extractable")
 		}
 
 		switch format {

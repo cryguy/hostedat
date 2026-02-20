@@ -599,3 +599,55 @@ func TestServiceBinding_FetchTargetError(t *testing.T) {
 		t.Error("fetch to failing target should reject")
 	}
 }
+
+// TestServiceBinding_TargetGetsOwnEnv verifies that the target worker receives
+// its own environment, not the caller's environment.
+func TestServiceBinding_TargetGetsOwnEnv(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	targetSource := `export default {
+  async fetch(request, env) {
+    return Response.json({
+      callerLeak: env.CALLER_SECRET || "NOT_LEAKED",
+    });
+  },
+};`
+	targetSiteID := "sb-env-target"
+	targetDeployKey := "deploy1"
+	if _, err := e.CompileAndCache(targetSiteID, targetDeployKey, targetSource); err != nil {
+		t.Fatalf("CompileAndCache target: %v", err)
+	}
+
+	callerSource := `export default {
+  async fetch(request, env) {
+    const resp = await env.TARGET.fetch("https://fake-host/test");
+    const data = await resp.json();
+    return Response.json(data);
+  },
+};`
+
+	callerEnv := &Env{
+		Vars:    map[string]string{},
+		Secrets: map[string]string{"CALLER_SECRET": "top-secret-caller-value"},
+		ServiceBindings: map[string]ServiceBindingConfig{
+			"TARGET": {
+				TargetSiteID:    targetSiteID,
+				TargetDeployKey: targetDeployKey,
+			},
+		},
+	}
+
+	r := execJS(t, e, callerSource, callerEnv, getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		CallerLeak string `json:"callerLeak"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.CallerLeak != "NOT_LEAKED" {
+		t.Errorf("caller's CALLER_SECRET leaked to target: got %q", data.CallerLeak)
+	}
+}

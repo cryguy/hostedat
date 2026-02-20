@@ -10,7 +10,7 @@ import (
 
 func TestCacheBridge_PutAndMatch(t *testing.T) {
 	db := testDB(t)
-	bridge := &CacheBridge{DB: db}
+	bridge := &CacheBridge{DB: db, SiteID: "test-site"}
 
 	err := bridge.Put("default", "https://example.com/test", 200, `{"content-type":"text/html"}`, []byte("hello"), nil)
 	if err != nil {
@@ -34,7 +34,7 @@ func TestCacheBridge_PutAndMatch(t *testing.T) {
 
 func TestCacheBridge_MatchNotFound(t *testing.T) {
 	db := testDB(t)
-	bridge := &CacheBridge{DB: db}
+	bridge := &CacheBridge{DB: db, SiteID: "test-site"}
 
 	entry, err := bridge.Match("default", "https://example.com/missing")
 	if err != nil {
@@ -47,7 +47,7 @@ func TestCacheBridge_MatchNotFound(t *testing.T) {
 
 func TestCacheBridge_PutReplaces(t *testing.T) {
 	db := testDB(t)
-	bridge := &CacheBridge{DB: db}
+	bridge := &CacheBridge{DB: db, SiteID: "test-site"}
 
 	_ = bridge.Put("default", "https://example.com/page", 200, "{}", []byte("first"), nil)
 	_ = bridge.Put("default", "https://example.com/page", 201, "{}", []byte("second"), nil)
@@ -73,7 +73,7 @@ func TestCacheBridge_PutReplaces(t *testing.T) {
 
 func TestCacheBridge_Delete(t *testing.T) {
 	db := testDB(t)
-	bridge := &CacheBridge{DB: db}
+	bridge := &CacheBridge{DB: db, SiteID: "test-site"}
 
 	_ = bridge.Put("default", "https://example.com/del", 200, "{}", []byte("data"), nil)
 	deleted, err := bridge.Delete("default", "https://example.com/del")
@@ -92,7 +92,7 @@ func TestCacheBridge_Delete(t *testing.T) {
 
 func TestCacheBridge_DeleteNotFound(t *testing.T) {
 	db := testDB(t)
-	bridge := &CacheBridge{DB: db}
+	bridge := &CacheBridge{DB: db, SiteID: "test-site"}
 
 	deleted, err := bridge.Delete("default", "https://example.com/nope")
 	if err != nil {
@@ -105,7 +105,7 @@ func TestCacheBridge_DeleteNotFound(t *testing.T) {
 
 func TestCacheBridge_TTLExpiration(t *testing.T) {
 	db := testDB(t)
-	bridge := &CacheBridge{DB: db}
+	bridge := &CacheBridge{DB: db, SiteID: "test-site"}
 
 	// Use TTL of 0 to create an already-expired entry.
 	ttl := -1 // negative value won't set ExpiresAt via Put
@@ -123,7 +123,7 @@ func TestCacheBridge_TTLExpiration(t *testing.T) {
 
 func TestCacheBridge_SeparateCacheNames(t *testing.T) {
 	db := testDB(t)
-	bridge := &CacheBridge{DB: db}
+	bridge := &CacheBridge{DB: db, SiteID: "test-site"}
 
 	_ = bridge.Put("cache-a", "https://example.com/url", 200, "{}", []byte("from-a"), nil)
 	_ = bridge.Put("cache-b", "https://example.com/url", 200, "{}", []byte("from-b"), nil)
@@ -424,9 +424,50 @@ func TestCache_DeleteNonExistent(t *testing.T) {
 	}
 }
 
+func TestCacheBridge_SiteIsolation(t *testing.T) {
+	db := testDB(t)
+	bridgeA := &CacheBridge{DB: db, SiteID: "site-a"}
+	bridgeB := &CacheBridge{DB: db, SiteID: "site-b"}
+
+	url := "https://example.com/shared-path"
+
+	_ = bridgeA.Put("default", url, 200, `{"x":"a"}`, []byte("site-a-data"), nil)
+	_ = bridgeB.Put("default", url, 200, `{"x":"b"}`, []byte("site-b-data"), nil)
+
+	entryA, _ := bridgeA.Match("default", url)
+	if entryA == nil || string(entryA.Body) != "site-a-data" {
+		t.Errorf("Site A should see its own data, got %v", entryA)
+	}
+
+	entryB, _ := bridgeB.Match("default", url)
+	if entryB == nil || string(entryB.Body) != "site-b-data" {
+		t.Errorf("Site B should see its own data, got %v", entryB)
+	}
+}
+
+func TestCacheBridge_DeleteScopedToSite(t *testing.T) {
+	db := testDB(t)
+	bridgeA := &CacheBridge{DB: db, SiteID: "site-del-a"}
+	bridgeB := &CacheBridge{DB: db, SiteID: "site-del-b"}
+
+	url := "https://example.com/delete-test"
+	_ = bridgeA.Put("default", url, 200, "{}", []byte("a"), nil)
+	_ = bridgeB.Put("default", url, 200, "{}", []byte("b"), nil)
+
+	deleted, _ := bridgeA.Delete("default", url)
+	if !deleted {
+		t.Error("Delete A should have deleted an entry")
+	}
+
+	entryB, _ := bridgeB.Match("default", url)
+	if entryB == nil {
+		t.Error("Site B cache entry should still exist after Site A deletion")
+	}
+}
+
 func TestCacheBridge_BinaryBody(t *testing.T) {
 	db := testDB(t)
-	bridge := &CacheBridge{DB: db}
+	bridge := &CacheBridge{DB: db, SiteID: "test-site"}
 
 	body := []byte{0x00, 0xFF, 0x01, 0xFE, 0x80, 0x7F, 0xAB, 0xCD}
 	err := bridge.Put("default", "https://example.com/binary", 200, "{}", body, nil)
@@ -489,7 +530,7 @@ func TestCache_PutNoResponse(t *testing.T) {
 
 func TestCacheBridge_TTLZeroNoExpiry(t *testing.T) {
 	db := testDB(t)
-	bridge := &CacheBridge{DB: db}
+	bridge := &CacheBridge{DB: db, SiteID: "test-site"}
 
 	ttl := 0
 	err := bridge.Put("default", "https://example.com/ttl-zero", 200, "{}", []byte("data"), &ttl)

@@ -13,14 +13,15 @@ import (
 
 // CacheBridge provides Go methods backing the Cache API JS bindings.
 type CacheBridge struct {
-	DB *gorm.DB
+	DB     *gorm.DB
+	SiteID string
 }
 
 // Match retrieves a cached response for the given cache name and URL.
 // Returns nil if not found or expired.
 func (cb *CacheBridge) Match(cacheName, url string) (*models.CacheEntry, error) {
 	var entry models.CacheEntry
-	err := cb.DB.Where("cache_name = ? AND url = ?", cacheName, url).First(&entry).Error
+	err := cb.DB.Where("site_id = ? AND cache_name = ? AND url = ?", cb.SiteID, cacheName, url).First(&entry).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
@@ -46,9 +47,10 @@ func (cb *CacheBridge) Put(cacheName, url string, status int, headers string, bo
 	}
 
 	// Delete existing entry if present.
-	cb.DB.Where("cache_name = ? AND url = ?", cacheName, url).Delete(&models.CacheEntry{})
+	cb.DB.Where("site_id = ? AND cache_name = ? AND url = ?", cb.SiteID, cacheName, url).Delete(&models.CacheEntry{})
 
 	entry := models.CacheEntry{
+		SiteID:    cb.SiteID,
 		CacheName: cacheName,
 		URL:       url,
 		Status:    status,
@@ -62,7 +64,7 @@ func (cb *CacheBridge) Put(cacheName, url string, status int, headers string, bo
 
 // Delete removes a cached response. Returns true if an entry was deleted.
 func (cb *CacheBridge) Delete(cacheName, url string) (bool, error) {
-	result := cb.DB.Where("cache_name = ? AND url = ?", cacheName, url).Delete(&models.CacheEntry{})
+	result := cb.DB.Where("site_id = ? AND cache_name = ? AND url = ?", cb.SiteID, cacheName, url).Delete(&models.CacheEntry{})
 	if result.Error != nil {
 		return false, result.Error
 	}
@@ -324,5 +326,5 @@ func getCacheBridge(ctx *v8.Context) *CacheBridge {
 		return nil
 	}
 
-	return &CacheBridge{DB: state.env.db}
+	return &CacheBridge{DB: state.env.db, SiteID: state.env.siteID}
 }

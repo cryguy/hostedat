@@ -2,7 +2,10 @@ package worker
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -20,6 +23,8 @@ const (
 	defuVersion            = "6.1.4"
 	nodeFetchNativeVersion = "1.6.6"
 	mimeVersion            = "3.0.0"
+
+	maxPolyfillDownloadSize = 50 * 1024 * 1024 // 50 MB
 )
 
 // polyfillPackages maps package names to their registry tarball URLs.
@@ -33,6 +38,13 @@ var polyfillPackages = []struct {
 	{"defu", defuVersion},
 	{"node-fetch-native", nodeFetchNativeVersion},
 	{"mime", mimeVersion},
+}
+
+// polyfillHashes maps download URLs to expected SHA-256 hex digests.
+// Empty map means integrity checking is opt-in (hashes added as packages are pinned).
+var polyfillHashes = map[string]string{
+	// Hashes will be populated when package versions are pinned.
+	// Example: "https://registry.npmjs.org/unenv/-/unenv-1.10.0.tgz": "abcdef...",
 }
 
 // EnsureUnenv downloads unenv and its dependencies from the npm registry
@@ -112,7 +124,25 @@ func downloadAndExtract(url, destDir string) error {
 		return fmt.Errorf("fetching %s: HTTP %d", url, resp.StatusCode)
 	}
 
-	gz, err := gzip.NewReader(resp.Body)
+	// Read with size limit
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPolyfillDownloadSize+1))
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", url, err)
+	}
+	if int64(len(body)) > maxPolyfillDownloadSize {
+		return fmt.Errorf("polyfill download too large: %s (>%d bytes)", url, maxPolyfillDownloadSize)
+	}
+
+	// Integrity check (if hash is configured for this URL)
+	if expectedHash, ok := polyfillHashes[url]; ok {
+		actualHash := sha256.Sum256(body)
+		if hex.EncodeToString(actualHash[:]) != expectedHash {
+			return fmt.Errorf("integrity check failed for %s: expected %s, got %s", url, expectedHash, hex.EncodeToString(actualHash[:]))
+		}
+	}
+
+	// Decompress from memory
+	gz, err := gzip.NewReader(bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("decompressing: %w", err)
 	}

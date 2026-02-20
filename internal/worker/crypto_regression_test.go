@@ -281,3 +281,282 @@ func TestRegression_MultiAlgoInSingleRequest(t *testing.T) {
 		t.Error("RSA failed in multi-algo request")
 	}
 }
+
+func TestCrypto_ExtractableFalse_BlocksExportViaGoFunction(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+	source := `export default {
+  async fetch(request, env) {
+    const key = await crypto.subtle.generateKey(
+      { name: "AES-GCM", length: 256 },
+      false, ["encrypt", "decrypt"]
+    );
+    try {
+      const raw = __cryptoExportKey(key._id);
+      return Response.json({ blocked: false });
+    } catch(e) {
+      return Response.json({ blocked: true, message: e.message || String(e) });
+    }
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+	var data struct {
+		Blocked bool   `json:"blocked"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Blocked {
+		t.Error("non-extractable key should be blocked from export via __cryptoExportKey")
+	}
+}
+
+func TestCrypto_ExtractableTrue_AllowsExport(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+	source := `export default {
+  async fetch(request, env) {
+    const key = await crypto.subtle.generateKey(
+      { name: "AES-GCM", length: 256 },
+      true, ["encrypt", "decrypt"]
+    );
+    const raw = await crypto.subtle.exportKey("raw", key);
+    return Response.json({ ok: raw.byteLength === 32 });
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+	var data struct{ OK bool `json:"ok"` }
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.OK {
+		t.Error("extractable key should be exportable")
+	}
+}
+
+func TestCrypto_ExtractableFalse_BlocksJWKExport(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+	source := `export default {
+  async fetch(request, env) {
+    const key = await crypto.subtle.generateKey(
+      { name: "AES-GCM", length: 256 },
+      false, ["encrypt", "decrypt"]
+    );
+    try {
+      __cryptoExportKeyJWK(key._id, "AES-GCM", "SHA-256", "");
+      return Response.json({ blocked: false });
+    } catch(e) {
+      return Response.json({ blocked: true });
+    }
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+	var data struct{ Blocked bool `json:"blocked"` }
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Blocked {
+		t.Error("non-extractable key should be blocked from JWK export")
+	}
+}
+
+func TestCrypto_RSA_ExtractableFalse_BlocksExport(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+	source := `export default {
+  async fetch(request, env) {
+    const kp = await crypto.subtle.generateKey(
+      { name: "RSA-OAEP", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+      false, ["encrypt", "decrypt"]
+    );
+    try {
+      __cryptoExportKeyRSA(kp.privateKey._id, "jwk", "RSA-OAEP", "SHA-256");
+      return Response.json({ blocked: false });
+    } catch(e) {
+      return Response.json({ blocked: true });
+    }
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+	var data struct{ Blocked bool `json:"blocked"` }
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Blocked {
+		t.Error("non-extractable RSA key should be blocked from export")
+	}
+}
+
+func TestCrypto_Ed25519_ExtractableFalse_BlocksExportViaGo(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+	source := `export default {
+  async fetch(request, env) {
+    const kp = await crypto.subtle.generateKey(
+      { name: "Ed25519" }, false, ["sign", "verify"]
+    );
+    try {
+      __cryptoExportKeyEd25519(kp.publicKey._id, "raw");
+      return Response.json({ blocked: false });
+    } catch(e) {
+      return Response.json({ blocked: true, message: e.message || String(e) });
+    }
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+	var data struct {
+		Blocked bool   `json:"blocked"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Blocked {
+		t.Error("non-extractable Ed25519 key should be blocked from export via __cryptoExportKeyEd25519")
+	}
+}
+
+func TestCrypto_ECDH_ExtractableFalse_BlocksExportViaGo(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+	source := `export default {
+  async fetch(request, env) {
+    const kp = await crypto.subtle.generateKey(
+      { name: "ECDH", namedCurve: "P-256" }, false, ["deriveKey", "deriveBits"]
+    );
+    try {
+      __cryptoExportECDH(kp.publicKey._id, "raw");
+      return Response.json({ blocked: false });
+    } catch(e) {
+      return Response.json({ blocked: true, message: e.message || String(e) });
+    }
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+	var data struct {
+		Blocked bool   `json:"blocked"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Blocked {
+		t.Error("non-extractable ECDH key should be blocked from export via __cryptoExportECDH")
+	}
+}
+
+func TestCrypto_X25519_ExtractableFalse_BlocksExportViaGo(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+	source := `export default {
+  async fetch(request, env) {
+    const kp = await crypto.subtle.generateKey(
+      { name: "X25519" }, false, ["deriveKey", "deriveBits"]
+    );
+    try {
+      __cryptoExportX25519(kp.publicKey._id, "raw");
+      return Response.json({ blocked: false });
+    } catch(e) {
+      return Response.json({ blocked: true, message: e.message || String(e) });
+    }
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+	var data struct {
+		Blocked bool   `json:"blocked"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Blocked {
+		t.Error("non-extractable X25519 key should be blocked from export via __cryptoExportX25519")
+	}
+}
+
+func TestCrypto_KeyUsageEnforced_SignOnly(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+	source := `export default {
+  async fetch(request, env) {
+    const key = await crypto.subtle.generateKey(
+      { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+    );
+    // sign should work
+    const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode("test"));
+    var signOK = sig.byteLength > 0;
+    // verify should fail (not in usages)
+    var verifyBlocked = false;
+    try {
+      await crypto.subtle.verify("HMAC", key, sig, new TextEncoder().encode("test"));
+    } catch(e) {
+      verifyBlocked = true;
+    }
+    return Response.json({ signOK, verifyBlocked });
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+	var data struct {
+		SignOK        bool `json:"signOK"`
+		VerifyBlocked bool `json:"verifyBlocked"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.SignOK {
+		t.Error("sign should work with usages=['sign']")
+	}
+	if !data.VerifyBlocked {
+		t.Error("verify should be blocked when key only has usages=['sign']")
+	}
+}
+
+func TestCrypto_KeyUsageEnforced_EncryptOnly(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+	source := `export default {
+  async fetch(request, env) {
+    const key = await crypto.subtle.generateKey(
+      { name: "AES-GCM", length: 256 }, false, ["encrypt"]
+    );
+    var iv = new Uint8Array(12);
+    crypto.getRandomValues(iv);
+    // encrypt should work
+    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode("test"));
+    var encryptOK = ct.byteLength > 0;
+    // decrypt should fail (not in usages)
+    var decryptBlocked = false;
+    try {
+      await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
+    } catch(e) {
+      decryptBlocked = true;
+    }
+    return Response.json({ encryptOK, decryptBlocked });
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+	var data struct {
+		EncryptOK      bool `json:"encryptOK"`
+		DecryptBlocked bool `json:"decryptBlocked"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.EncryptOK {
+		t.Error("encrypt should work with usages=['encrypt']")
+	}
+	if !data.DecryptBlocked {
+		t.Error("decrypt should be blocked when key only has usages=['encrypt']")
+	}
+}

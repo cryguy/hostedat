@@ -284,7 +284,7 @@ func buildAssetsBinding(iso *v8.Isolate, ctx *v8.Context, fetcher AssetsFetcher)
 
 // buildEnvObject creates the full env JS object passed to the worker's
 // fetch handler as the second argument.
-func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, minioClient interface{}, presignClient interface{}, publicS3URL string) (*v8.Value, error) {
+func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, minioClient interface{}, presignClient interface{}, publicS3URL string, reqID uint64) (*v8.Value, error) {
 	envObj, err := newJSObject(iso, ctx)
 	if err != nil {
 		return nil, fmt.Errorf("creating env object: %w", err)
@@ -344,7 +344,7 @@ func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, min
 
 	// Queue bindings.
 	if env.QueueBindings != nil && db != nil {
-		bridge := &QueueBridge{DB: db}
+		bridge := &QueueBridge{DB: db, SiteID: env.siteID}
 		for name, queueName := range env.QueueBindings {
 			qVal, err := buildQueueBinding(iso, ctx, bridge, queueName)
 			if err != nil {
@@ -394,6 +394,11 @@ func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, min
 				return nil, fmt.Errorf("building D1 binding %q: %w", name, err)
 			}
 			_ = envObj.Set(name, d1Val)
+		}
+		// Store bridges in request state for cleanup by clearRequestState.
+		state := getRequestState(reqID)
+		if state != nil {
+			state.d1Bridges = append(state.d1Bridges, d1Bridges...)
 		}
 	}
 

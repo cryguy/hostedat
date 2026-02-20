@@ -61,6 +61,7 @@ type Env struct {
 	engine                *Engine  // set internally for service binding dispatch
 	db                    *gorm.DB // set internally for cache API and other global bindings
 	d1DataDir             string   // set internally for D1 isolated database files
+	siteID                string   // set internally for cache API site isolation
 }
 
 // AssetsFetcher is implemented by the static pipeline to handle env.ASSETS.fetch().

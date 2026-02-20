@@ -164,7 +164,7 @@ subtle.generateKey = async function(algorithm, extractable, usages) {
 	var algo = typeof algorithm === 'string' ? { name: algorithm } : algorithm;
 	if (algo.name === 'AES-CTR' || algo.name === 'AES-KW') {
 		var length = algo.length || 256;
-		var resultJSON = __cryptoGenerateKeyAes(algo.name, length);
+		var resultJSON = __cryptoGenerateKeyAes(algo.name, length, extractable);
 		var result = JSON.parse(resultJSON);
 		if (result.error) throw new TypeError(result.error);
 		return new CK(result.keyId, algo, 'secret', extractable, usages);
@@ -284,14 +284,15 @@ func setupCryptoAesCtrKw(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		return val
 	}).GetFunction(ctx))
 
-	// __cryptoGenerateKeyAes(algoName, length) -> JSON { keyId } or { error }
+	// __cryptoGenerateKeyAes(algoName, length, extractable) -> JSON { keyId } or { error }
 	_ = ctx.Global().Set("__cryptoGenerateKeyAes", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
-		if len(args) < 2 {
-			return throwError(iso, "generateKeyAes requires 2 argument(s)")
+		if len(args) < 3 {
+			return throwError(iso, "generateKeyAes requires 3 argument(s)")
 		}
 		algoName := args[0].String()
 		bitLength := int(args[1].Int32())
+		extractableVal := args[2].Boolean()
 
 		var byteLength int
 		switch bitLength {
@@ -319,9 +320,10 @@ func setupCryptoAesCtrKw(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		}
 
 		id := importCryptoKeyFull(reqID, &cryptoKeyEntry{
-			data:     keyData,
-			algoName: normalizeAlgo(algoName),
-			keyType:  "secret",
+			data:        keyData,
+			algoName:    normalizeAlgo(algoName),
+			keyType:     "secret",
+			extractable: extractableVal,
 		})
 		val, _ := v8.NewValue(iso, fmt.Sprintf(`{"keyId":%d}`, id))
 		return val

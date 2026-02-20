@@ -342,7 +342,14 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 
 		switch valType {
 		case "json":
-			jsVal, err := ctx.RunScript(fmt.Sprintf(`({value: JSON.parse(%q), metadata: %s})`, result.Value, metaJSON), "kv_gwm_json.js")
+			// Safe metadata interpolation: use temp global instead of string formatting.
+			metaVal, _ := v8.NewValue(iso, metaJSON)
+			_ = ctx.Global().Set("__tmp_kv_meta", metaVal)
+			jsVal, err := ctx.RunScript(fmt.Sprintf(`(function() {
+				var m = JSON.parse(globalThis.__tmp_kv_meta);
+				delete globalThis.__tmp_kv_meta;
+				return {value: JSON.parse(%q), metadata: m};
+			})()`, result.Value), "kv_gwm_json.js")
 			if err != nil {
 				errVal, _ := v8.NewValue(iso, "KV.getWithMetadata: invalid JSON value")
 				resolver.Reject(errVal)
@@ -352,12 +359,17 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 		case "arrayBuffer":
 			strVal, _ := v8.NewValue(iso, result.Value)
 			_ = ctx.Global().Set("__tmp_kv_gwm_ab", strVal)
-			jsVal, err := ctx.RunScript(fmt.Sprintf(`(function() {
+			// Safe metadata interpolation: use temp global instead of string formatting.
+			metaVal, _ := v8.NewValue(iso, metaJSON)
+			_ = ctx.Global().Set("__tmp_kv_meta", metaVal)
+			jsVal, err := ctx.RunScript(`(function() {
 				var s = globalThis.__tmp_kv_gwm_ab;
 				delete globalThis.__tmp_kv_gwm_ab;
+				var m = JSON.parse(globalThis.__tmp_kv_meta);
+				delete globalThis.__tmp_kv_meta;
 				var enc = new TextEncoder();
-				return {value: enc.encode(s).buffer, metadata: %s};
-			})()`, metaJSON), "kv_gwm_arraybuffer.js")
+				return {value: enc.encode(s).buffer, metadata: m};
+			})()`, "kv_gwm_arraybuffer.js")
 			if err != nil {
 				errVal, _ := v8.NewValue(iso, "KV.getWithMetadata: failed to create ArrayBuffer")
 				resolver.Reject(errVal)
@@ -367,9 +379,14 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 		case "stream":
 			strVal, _ := v8.NewValue(iso, result.Value)
 			_ = ctx.Global().Set("__tmp_kv_gwm_stream", strVal)
-			jsVal, err := ctx.RunScript(fmt.Sprintf(`(function() {
+			// Safe metadata interpolation: use temp global instead of string formatting.
+			metaVal, _ := v8.NewValue(iso, metaJSON)
+			_ = ctx.Global().Set("__tmp_kv_meta", metaVal)
+			jsVal, err := ctx.RunScript(`(function() {
 				var s = globalThis.__tmp_kv_gwm_stream;
 				delete globalThis.__tmp_kv_gwm_stream;
+				var m = JSON.parse(globalThis.__tmp_kv_meta);
+				delete globalThis.__tmp_kv_meta;
 				var enc = new TextEncoder();
 				var bytes = enc.encode(s);
 				var stream = new ReadableStream({
@@ -378,8 +395,8 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 						controller.close();
 					}
 				});
-				return {value: stream, metadata: %s};
-			})()`, metaJSON), "kv_gwm_stream.js")
+				return {value: stream, metadata: m};
+			})()`, "kv_gwm_stream.js")
 			if err != nil {
 				errVal, _ := v8.NewValue(iso, "KV.getWithMetadata: failed to create ReadableStream")
 				resolver.Reject(errVal)
@@ -387,7 +404,14 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 				resolver.Resolve(jsVal)
 			}
 		default: // "text"
-			jsVal, err := ctx.RunScript(fmt.Sprintf(`({value: %q, metadata: %s})`, result.Value, metaJSON), "kv_gwm_text.js")
+			// Safe metadata interpolation: use temp global instead of string formatting.
+			metaVal, _ := v8.NewValue(iso, metaJSON)
+			_ = ctx.Global().Set("__tmp_kv_meta", metaVal)
+			jsVal, err := ctx.RunScript(fmt.Sprintf(`(function() {
+				var m = JSON.parse(globalThis.__tmp_kv_meta);
+				delete globalThis.__tmp_kv_meta;
+				return {value: %q, metadata: m};
+			})()`, result.Value), "kv_gwm_text.js")
 			if err != nil {
 				errVal, _ := v8.NewValue(iso, err.Error())
 				resolver.Reject(errVal)

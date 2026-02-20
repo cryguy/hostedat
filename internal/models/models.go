@@ -333,6 +333,7 @@ func (sc *S3Credential) BeforeCreate(_ *gorm.DB) error {
 // CacheEntry stores a cached HTTP response for the Cache API.
 type CacheEntry struct {
 	ID        uint   `gorm:"primaryKey"`
+	SiteID    string `gorm:"index:idx_cache_lookup"`
 	CacheName string `gorm:"index:idx_cache_lookup"`
 	URL       string `gorm:"index:idx_cache_lookup"`
 	Status    int

@@ -20,8 +20,9 @@ type ServiceBindingBridge struct {
 }
 
 // Fetch calls the target worker's fetch handler with the given request.
+// The target worker receives its own environment (not the caller's).
 func (sb *ServiceBindingBridge) Fetch(config ServiceBindingConfig, req *WorkerRequest) (*WorkerResponse, error) {
-	result := sb.Engine.Execute(config.TargetSiteID, config.TargetDeployKey, sb.Env, req)
+	result := sb.Engine.Execute(config.TargetSiteID, config.TargetDeployKey, nil, req)
 	if result.Error != nil {
 		return nil, result.Error
 	}

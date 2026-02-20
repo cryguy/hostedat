@@ -9,7 +9,7 @@ func queueTestDB(t *testing.T) *QueueBridge {
 	t.Helper()
 	db := testDB(t)
 	_ = db.AutoMigrate(&QueueMessage{})
-	return &QueueBridge{DB: db}
+	return &QueueBridge{DB: db, SiteID: "test-site"}
 }
 
 func TestQueueBridge_Send(t *testing.T) {
@@ -122,7 +122,7 @@ func TestQueue_JSSend(t *testing.T) {
 	db := testDB(t)
 	_ = db.AutoMigrate(&QueueMessage{})
 	e := newTestEngine(t, db)
-	bridge := &QueueBridge{DB: db}
+	bridge := &QueueBridge{DB: db, SiteID: "test-" + t.Name()}
 
 	source := `export default {
   async fetch(request, env) {
@@ -165,7 +165,7 @@ func TestQueue_JSSendBatch(t *testing.T) {
 	db := testDB(t)
 	_ = db.AutoMigrate(&QueueMessage{})
 	e := newTestEngine(t, db)
-	bridge := &QueueBridge{DB: db}
+	bridge := &QueueBridge{DB: db, SiteID: "test-" + t.Name()}
 
 	source := `export default {
   async fetch(request, env) {
@@ -194,7 +194,7 @@ func TestQueue_JSDefaultContentType(t *testing.T) {
 	db := testDB(t)
 	_ = db.AutoMigrate(&QueueMessage{})
 	e := newTestEngine(t, db)
-	bridge := &QueueBridge{DB: db}
+	bridge := &QueueBridge{DB: db, SiteID: "test-" + t.Name()}
 
 	source := `export default {
   async fetch(request, env) {
@@ -223,7 +223,7 @@ func TestQueue_JSBindingExists(t *testing.T) {
 	db := testDB(t)
 	_ = db.AutoMigrate(&QueueMessage{})
 	e := newTestEngine(t, db)
-	bridge := &QueueBridge{DB: db}
+	bridge := &QueueBridge{DB: db, SiteID: "test-" + t.Name()}
 
 	source := `export default {
   async fetch(request, env) {
@@ -257,7 +257,7 @@ func TestQueue_JSSendStringMessage(t *testing.T) {
 	db := testDB(t)
 	_ = db.AutoMigrate(&QueueMessage{})
 	e := newTestEngine(t, db)
-	bridge := &QueueBridge{DB: db}
+	bridge := &QueueBridge{DB: db, SiteID: "test-" + t.Name()}
 
 	source := `export default {
   async fetch(request, env) {
@@ -290,7 +290,7 @@ func TestQueue_JSSendJSONObject(t *testing.T) {
 	db := testDB(t)
 	_ = db.AutoMigrate(&QueueMessage{})
 	e := newTestEngine(t, db)
-	bridge := &QueueBridge{DB: db}
+	bridge := &QueueBridge{DB: db, SiteID: "test-" + t.Name()}
 
 	source := `export default {
   async fetch(request, env) {
@@ -331,7 +331,7 @@ func TestQueue_JSSendBatchMultipleMessages(t *testing.T) {
 	db := testDB(t)
 	_ = db.AutoMigrate(&QueueMessage{})
 	e := newTestEngine(t, db)
-	bridge := &QueueBridge{DB: db}
+	bridge := &QueueBridge{DB: db, SiteID: "test-" + t.Name()}
 
 	source := `export default {
   async fetch(request, env) {
@@ -437,7 +437,7 @@ func TestQueue_JSSendBatchNonArray(t *testing.T) {
 	db := testDB(t)
 	_ = db.AutoMigrate(&QueueMessage{})
 	e := newTestEngine(t, db)
-	bridge := &QueueBridge{DB: db}
+	bridge := &QueueBridge{DB: db, SiteID: "test-" + t.Name()}
 
 	source := `export default {
   async fetch(request, env) {
@@ -495,7 +495,7 @@ func TestQueue_AccessibleFromWorkerEnv(t *testing.T) {
 	db := testDB(t)
 	_ = db.AutoMigrate(&QueueMessage{})
 	e := newTestEngine(t, db)
-	bridge := &QueueBridge{DB: db}
+	bridge := &QueueBridge{DB: db, SiteID: "test-" + t.Name()}
 
 	source := `export default {
   async fetch(request, env) {

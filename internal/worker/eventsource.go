@@ -14,6 +14,9 @@ import (
 	v8 "github.com/tommie/v8go"
 )
 
+const maxEventSources = 10
+const maxSSEEvents = 1000
+
 // sseEvent represents a single Server-Sent Event.
 type sseEvent struct {
 	Type string `json:"type"`
@@ -165,6 +168,10 @@ func setupEventSource(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		state := getRequestState(reqID)
 		if state == nil {
 			return throwError(iso, "EventSource: invalid request state")
+		}
+
+		if state.eventSources != nil && len(state.eventSources) >= maxEventSources {
+			return throwError(iso, "EventSource: maximum connection limit reached")
 		}
 
 		if state.eventSources == nil {
@@ -340,6 +347,12 @@ func parseSSEStream(es *eventSourceState, resp *http.Response) {
 					ID:   lastID,
 				}
 				es.mu.Lock()
+				if len(es.events) >= maxSSEEvents {
+					es.mu.Unlock()
+					eventType = ""
+					dataLines = nil
+					continue // drop event (backpressure)
+				}
 				es.events = append(es.events, evt)
 				es.mu.Unlock()
 			}
@@ -388,7 +401,9 @@ func parseSSEStream(es *eventSourceState, resp *http.Response) {
 			ID:   lastID,
 		}
 		es.mu.Lock()
-		es.events = append(es.events, evt)
+		if len(es.events) < maxSSEEvents {
+			es.events = append(es.events, evt)
+		}
 		es.mu.Unlock()
 	}
 }
@@ -407,11 +422,10 @@ func closeEventSource(es *eventSourceState) {
 	}
 }
 
-// cleanupEventSources closes all open event sources for a request. This is
-// a safety measure; not wired in yet but available for the engine to call
-// on request cleanup.
-var _ = cleanupEventSources // prevent unused warning
-
+// cleanupEventSources closes all open event sources for a request.
+// The main cleanup path is clearRequestState() in runtime.go which inlines
+// the logic directly on the extracted state. This function remains available
+// for explicit mid-request cleanup.
 func cleanupEventSources(reqID uint64) {
 	state := getRequestState(reqID)
 	if state == nil || state.eventSources == nil {

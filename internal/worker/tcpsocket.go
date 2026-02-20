@@ -1,16 +1,21 @@
 package worker
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	v8 "github.com/tommie/v8go"
 )
+
+const maxTCPSockets = 10
+const maxTCPBufferSize = 1 * 1024 * 1024 // 1 MB
 
 // tcpSocketBuffer provides a thread-safe read buffer for a TCP socket.
 type tcpSocketBuffer struct {
@@ -29,6 +34,13 @@ func (b *tcpSocketBuffer) readLoop() {
 		n, err := b.conn.Read(tmp)
 		b.mu.Lock()
 		if n > 0 {
+			if len(b.buf)+n > maxTCPBufferSize {
+				b.err = fmt.Errorf("TCP: read buffer exceeded %d bytes", maxTCPBufferSize)
+				b.done = true
+				b.mu.Unlock()
+				b.signal()
+				return
+			}
 			b.buf = append(b.buf, tmp[:n]...)
 		}
 		if err != nil {
@@ -297,24 +309,33 @@ func setupTCPSocket(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 			return throwError(iso, "tcpConnect: invalid request state")
 		}
 
-		// SSRF protection: resolve hostname and check all IPs.
-		if err := checkTCPSSRF(hostname); err != nil {
-			return throwError(iso, fmt.Sprintf("tcpConnect: %s", err.Error()))
+		if state.tcpSockets != nil && len(state.tcpSockets) >= maxTCPSockets {
+			return throwError(iso, "TCP: maximum socket limit reached")
 		}
 
-		addr := net.JoinHostPort(hostname, port)
+		// SSRF-safe connection: DNS resolution + IP validation + direct connect.
 		var conn net.Conn
 		var err error
 
 		if secure == "on" {
-			conn, err = tls.Dial("tcp", addr, &tls.Config{
+			// For TLS: establish raw connection first, then upgrade.
+			rawConn, dialErr := ssrfSafeTCPDial(context.Background(), hostname, port)
+			if dialErr != nil {
+				return throwError(iso, fmt.Sprintf("tcpConnect: %s", dialErr.Error()))
+			}
+			tlsConn := tls.Client(rawConn, &tls.Config{
 				ServerName: hostname,
 			})
+			if err = tlsConn.Handshake(); err != nil {
+				_ = rawConn.Close()
+				return throwError(iso, fmt.Sprintf("tcpConnect: TLS handshake failed: %s", err.Error()))
+			}
+			conn = tlsConn
 		} else {
-			conn, err = net.Dial("tcp", addr)
-		}
-		if err != nil {
-			return throwError(iso, fmt.Sprintf("tcpConnect: %s", err.Error()))
+			conn, err = ssrfSafeTCPDial(context.Background(), hostname, port)
+			if err != nil {
+				return throwError(iso, fmt.Sprintf("tcpConnect: %s", err.Error()))
+			}
 		}
 
 		// Store connection in request state.
@@ -502,39 +523,52 @@ func setupTCPSocket(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 // Tests can set this to false to allow connections to loopback/private IPs.
 var tcpSSRFEnabled = true
 
-// checkTCPSSRF resolves the hostname and checks all IPs against private ranges.
-func checkTCPSSRF(hostname string) error {
+// ssrfSafeTCPDial performs SSRF-safe TCP connection by resolving DNS once
+// and connecting directly to the validated IP, preventing DNS rebinding attacks.
+func ssrfSafeTCPDial(ctx context.Context, hostname, port string) (net.Conn, error) {
 	if !tcpSSRFEnabled {
-		return nil
+		return net.Dial("tcp", net.JoinHostPort(hostname, port))
 	}
-	// Check literal "localhost".
-	lower := hostname
-	if lower == "localhost" || len(lower) > 10 && lower[len(lower)-10:] == ".localhost" {
-		return fmt.Errorf("connections to private addresses are not allowed")
+
+	// Check literal localhost hostnames.
+	lower := strings.ToLower(hostname)
+	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") {
+		return nil, fmt.Errorf("connections to private addresses are not allowed")
 	}
 
 	// Check if hostname is a literal IP.
 	if ip := net.ParseIP(hostname); ip != nil {
 		if isPrivateIP(ip) {
-			return fmt.Errorf("connections to private addresses are not allowed")
+			return nil, fmt.Errorf("connections to private addresses are not allowed")
 		}
-		return nil
+		// Connect directly to the literal IP.
+		dialer := &net.Dialer{}
+		return dialer.DialContext(ctx, "tcp", net.JoinHostPort(hostname, port))
 	}
 
-	// Resolve hostname and check all IPs.
-	ips, err := net.LookupHost(hostname)
+	// Resolve DNS once.
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, hostname)
 	if err != nil {
-		return fmt.Errorf("DNS lookup failed: %s", err.Error())
+		return nil, fmt.Errorf("DNS lookup failed: %w", err)
 	}
 
-	for _, ipStr := range ips {
-		ip := net.ParseIP(ipStr)
-		if ip != nil && isPrivateIP(ip) {
-			return fmt.Errorf("connections to private addresses are not allowed")
+	// Find the first non-private IP.
+	var safeIP net.IPAddr
+	found := false
+	for _, ip := range ips {
+		if !isPrivateIP(ip.IP) {
+			safeIP = ip
+			found = true
+			break
 		}
 	}
+	if !found {
+		return nil, fmt.Errorf("connections to private addresses are not allowed")
+	}
 
-	return nil
+	// Connect directly to the validated IP (no re-resolution).
+	dialer := &net.Dialer{}
+	return dialer.DialContext(ctx, "tcp", net.JoinHostPort(safeIP.IP.String(), port))
 }
 
 // cleanupTCPSockets closes all TCP sockets for a request state.

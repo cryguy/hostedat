@@ -266,15 +266,32 @@ func (e *Engine) getOrCreatePool(siteID string, deployKey string) (*v8Pool, erro
 
 // Execute runs the worker's fetch handler for the given request and returns
 // the result including the response, captured logs, and any error.
+// If env is nil, the target site's own environment is loaded from the database.
 func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerRequest) (result *WorkerResult) {
 	start := time.Now()
 	result = &WorkerResult{}
+
+	// If env is nil, load the target site's environment from the database.
+	// This ensures service bindings call target workers with their own env.
+	if env == nil {
+		if e.db == nil {
+			result.Error = fmt.Errorf("cannot load env for site %s: database not available", siteID)
+			result.Duration = time.Since(start)
+			return result
+		}
+		// Load the target site's own environment from the database.
+		// Assets are nil for service-binding calls — the target worker runs JS,
+		// not static files.  If static asset access is needed in the future,
+		// the caller should provide a fully-constructed Env instead.
+		env = BuildEnvFromDB(e.db, siteID, nil)
+	}
 
 	// Set engine and DB references so buildEnvObject can wire up service bindings
 	// and global APIs like Cache can access the database.
 	env.engine = e
 	env.db = e.db
 	env.d1DataDir = e.config.DataDir
+	env.siteID = siteID
 
 	// Ensure source is loaded (handles server restart).
 	if err := e.EnsureSource(siteID, deployKey); err != nil {
@@ -360,7 +377,7 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 		return result
 	}
 
-	jsEnv, err := buildEnvObject(iso, ctx, env, e.db, e.minioClient, e.presignMinioClient, e.publicS3URL)
+	jsEnv, err := buildEnvObject(iso, ctx, env, e.db, e.minioClient, e.presignMinioClient, e.publicS3URL, reqID)
 	if err != nil {
 		state := clearRequestState(reqID)
 		if state != nil {
@@ -593,7 +610,7 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 		return result
 	}
 
-	jsEnv, err := buildEnvObject(iso, ctx, env, e.db, e.minioClient, e.presignMinioClient, e.publicS3URL)
+	jsEnv, err := buildEnvObject(iso, ctx, env, e.db, e.minioClient, e.presignMinioClient, e.publicS3URL, reqID)
 	if err != nil {
 		state := clearRequestState(reqID)
 		if state != nil {
@@ -778,7 +795,7 @@ func (e *Engine) ExecuteTail(siteID string, deployKey string, env *Env, events [
 		return result
 	}
 
-	jsEnv, err := buildEnvObject(iso, ctx, env, e.db, e.minioClient, e.presignMinioClient, e.publicS3URL)
+	jsEnv, err := buildEnvObject(iso, ctx, env, e.db, e.minioClient, e.presignMinioClient, e.publicS3URL, reqID)
 	if err != nil {
 		state := clearRequestState(reqID)
 		if state != nil {

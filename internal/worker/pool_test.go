@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -280,5 +281,70 @@ func TestWrapESModule_ExportVar(t *testing.T) {
 	}
 	if strings.Contains(result, "export var") {
 		t.Errorf("should strip 'export var', got %q", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pool cleanup: globalThis should be cleaned between requests
+// ---------------------------------------------------------------------------
+
+func TestPool_GlobalThisCleanedBetweenRequests(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Use a single source that handles both "set" and "check" via URL path.
+	// This avoids the pool-reuse issue where CompileAndCache doesn't
+	// invalidate existing pools for the same siteID+deployKey.
+	source := `export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (url.pathname === '/set') {
+      globalThis.mySecret = 'leaked';
+      globalThis.__tmp_test = 'tmp';
+      return new Response('set');
+    }
+    return Response.json({
+      mySecret: typeof globalThis.mySecret,
+      tmpTest: typeof globalThis.__tmp_test,
+      hasConsole: typeof console !== 'undefined',
+      hasFetch: typeof fetch !== 'undefined',
+      hasCrypto: typeof crypto !== 'undefined',
+    });
+  },
+};`
+
+	// Request 1: set custom globals
+	r1 := execJS(t, e, source, defaultEnv(), getReq("http://localhost/set"))
+	assertOK(t, r1)
+
+	// Request 2: check if the globals persist (same pool, cleanup runs between)
+	r2 := execJS(t, e, source, defaultEnv(), getReq("http://localhost/check"))
+	assertOK(t, r2)
+
+	var data struct {
+		MySecret   string `json:"mySecret"`
+		TmpTest    string `json:"tmpTest"`
+		HasConsole bool   `json:"hasConsole"`
+		HasFetch   bool   `json:"hasFetch"`
+		HasCrypto  bool   `json:"hasCrypto"`
+	}
+	if err := json.Unmarshal(r2.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// NOTE: Pool reuse is not guaranteed (may get a fresh worker).
+	// If we get the same worker, __tmp_test should be cleaned.
+	// If we get a new worker, it never had the globals.
+	// Either way, both should be "undefined".
+	if data.TmpTest != "undefined" {
+		t.Errorf("__tmp_test should be cleaned, got type %q", data.TmpTest)
+	}
+	if !data.HasConsole {
+		t.Error("console should still exist after cleanup")
+	}
+	if !data.HasFetch {
+		t.Error("fetch should still exist after cleanup")
+	}
+	if !data.HasCrypto {
+		t.Error("crypto should still exist after cleanup")
 	}
 }

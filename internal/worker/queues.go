@@ -40,7 +40,8 @@ type QueueMessageInput struct {
 
 // QueueBridge provides Go methods that back the Queue JS bindings.
 type QueueBridge struct {
-	DB *gorm.DB
+	DB     *gorm.DB
+	SiteID string
 }
 
 // Send creates a single message in the given queue and returns its ID.
@@ -48,8 +49,10 @@ func (q *QueueBridge) Send(queueName, body, contentType string) (string, error) 
 	if contentType == "" {
 		contentType = "json"
 	}
+	// Prefix queue name with siteID for isolation between sites.
+	actualName := q.SiteID + ":" + queueName
 	msg := QueueMessage{
-		QueueName:   queueName,
+		QueueName:   actualName,
 		Body:        body,
 		ContentType: contentType,
 		CreatedAt:   time.Now(),
@@ -83,8 +86,10 @@ func (q *QueueBridge) Consume(queueName string, batchSize int) ([]QueueMessage, 
 	if batchSize <= 0 {
 		batchSize = 10
 	}
+	// Prefix queue name with siteID for isolation between sites.
+	actualName := q.SiteID + ":" + queueName
 	var msgs []QueueMessage
-	err := q.DB.Where("queue_name = ? AND acked = ?", queueName, false).
+	err := q.DB.Where("queue_name = ? AND acked = ?", actualName, false).
 		Order("created_at ASC").
 		Limit(batchSize).
 		Find(&msgs).Error

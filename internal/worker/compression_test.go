@@ -5,6 +5,15 @@ import (
 	"testing"
 )
 
+func TestDecompression_LimitConstantExists(t *testing.T) {
+	if maxDecompressedSize < 1*1024*1024 {
+		t.Errorf("maxDecompressedSize = %d, too small", maxDecompressedSize)
+	}
+	if maxDecompressedSize > 512*1024*1024 {
+		t.Errorf("maxDecompressedSize = %d, too large", maxDecompressedSize)
+	}
+}
+
 func TestCompression_GzipRoundTrip(t *testing.T) {
 	db := testDB(t)
 	e := newTestEngine(t, db)

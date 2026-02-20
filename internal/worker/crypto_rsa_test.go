@@ -2,6 +2,7 @@ package worker
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -897,5 +898,67 @@ func TestCrypto_RSA_OAEPWithSHA512(t *testing.T) {
 	}
 	if data.CTLen != 256 {
 		t.Errorf("ciphertext length = %d, want 256", data.CTLen)
+	}
+}
+
+func TestCrypto_RSA_RejectsInvalidModulusLength(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+	for _, ml := range []int{512, 1024, 8192, 65536} {
+		source := fmt.Sprintf(`export default {
+  async fetch(request, env) {
+    try {
+      await crypto.subtle.generateKey(
+        { name: "RSA-OAEP", modulusLength: %d, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+        true, ["encrypt", "decrypt"]
+      );
+      return Response.json({ error: false });
+    } catch(e) {
+      return Response.json({ error: true, message: e.message || String(e) });
+    }
+  },
+};`, ml)
+		r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+		assertOK(t, r)
+		var data struct {
+			Error   bool   `json:"error"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatalf("ml=%d: unmarshal: %v", ml, err)
+		}
+		if !data.Error {
+			t.Errorf("ml=%d: expected error for invalid modulusLength, got success", ml)
+		}
+	}
+}
+
+func TestRSA_RejectsCustomPublicExponent(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+	source := `export default {
+  async fetch(request, env) {
+    try {
+      const kp = await crypto.subtle.generateKey(
+        { name: "RSA-OAEP", modulusLength: 2048, publicExponent: new Uint8Array([0, 0, 3]), hash: "SHA-256" },
+        true, ["encrypt", "decrypt"]
+      );
+      return Response.json({ blocked: false });
+    } catch(e) {
+      return Response.json({ blocked: true, message: e.message || String(e) });
+    }
+  },
+};`
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+	var data struct {
+		Blocked bool   `json:"blocked"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Blocked {
+		t.Error("custom publicExponent (3) should be rejected")
 	}
 }

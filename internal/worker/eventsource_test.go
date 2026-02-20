@@ -438,3 +438,19 @@ func TestEventSource_ConnectionRefused(t *testing.T) {
 		t.Errorf("readyState = %d, want 2 (CLOSED)", data.ReadyState)
 	}
 }
+
+// TestEventSource_MaxConnectionLimit verifies that the maxEventSources constant
+// is set to a reasonable value.
+func TestEventSource_MaxConnectionLimit(t *testing.T) {
+	if maxEventSources < 1 || maxEventSources > 100 {
+		t.Errorf("maxEventSources = %d, want 1-100", maxEventSources)
+	}
+}
+
+// TestEventSource_MaxEventsLimit verifies that the maxSSEEvents constant
+// is set to a reasonable value.
+func TestEventSource_MaxEventsLimit(t *testing.T) {
+	if maxSSEEvents < 100 || maxSSEEvents > 10000 {
+		t.Errorf("maxSSEEvents = %d, want 100-10000", maxSSEEvents)
+	}
+}

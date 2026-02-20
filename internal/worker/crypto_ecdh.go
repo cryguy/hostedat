@@ -43,7 +43,7 @@ subtle.generateKey = async function(algorithm, extractable, usages) {
 	var algo = typeof algorithm === 'string' ? { name: algorithm } : algorithm;
 	if (algo.name === 'ECDH') {
 		var curve = algo.namedCurve || 'P-256';
-		var resultJSON = __cryptoGenerateECDH(curve);
+		var resultJSON = __cryptoGenerateECDH(curve, extractable);
 		var result = JSON.parse(resultJSON);
 		if (result.error) throw new TypeError(result.error);
 		return {
@@ -53,7 +53,7 @@ subtle.generateKey = async function(algorithm, extractable, usages) {
 		};
 	}
 	if (algo.name === 'X25519') {
-		var resultJSON = __cryptoGenerateX25519();
+		var resultJSON = __cryptoGenerateX25519(extractable);
 		var result = JSON.parse(resultJSON);
 		if (result.error) throw new TypeError(result.error);
 		return {
@@ -119,7 +119,7 @@ subtle.importKey = async function(format, keyData, algorithm, extractable, usage
 		} else {
 			dataStr = __bufferSourceToB64(keyData);
 		}
-		var resultJSON = __cryptoImportECDH(format, dataStr, curve);
+		var resultJSON = __cryptoImportECDH(format, dataStr, curve, extractable);
 		var result = JSON.parse(resultJSON);
 		if (result.error) throw new TypeError(result.error);
 		return new CK(result.keyId, { name: 'ECDH', namedCurve: curve }, result.keyType, extractable, usages);
@@ -130,7 +130,7 @@ subtle.importKey = async function(format, keyData, algorithm, extractable, usage
 		if (usages && (usages.indexOf('deriveBits') >= 0 || usages.indexOf('deriveKey') >= 0)) {
 			keyType = 'private';
 		}
-		var resultJSON = __cryptoImportX25519(format, dataStr, keyType);
+		var resultJSON = __cryptoImportX25519(format, dataStr, keyType, extractable);
 		var result = JSON.parse(resultJSON);
 		if (result.error) throw new TypeError(result.error);
 		return new CK(result.keyId, { name: 'X25519' }, result.keyType, extractable, usages);
@@ -161,13 +161,14 @@ subtle.exportKey = async function(format, key) {
 // setupCryptoECDH registers ECDH and X25519 key agreement operations.
 // Must run after setupCryptoDerive.
 func setupCryptoECDH(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
-	// __cryptoGenerateECDH(curve) -> JSON { privateKeyId, publicKeyId }
+	// __cryptoGenerateECDH(curve, extractable) -> JSON { privateKeyId, publicKeyId }
 	_ = ctx.Global().Set("__cryptoGenerateECDH", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
-		if len(args) < 1 {
-			return throwError(iso, "generateECDH requires 1 argument(s)")
+		if len(args) < 2 {
+			return throwError(iso, "generateECDH requires 2 argument(s)")
 		}
 		curveName := args[0].String()
+		extractableVal := args[1].Boolean()
 
 		reqID := getReqIDFromJS(ctx)
 		if getRequestState(reqID) == nil {
@@ -188,10 +189,10 @@ func setupCryptoECDH(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		}
 
 		privID := importCryptoKeyFull(reqID, &cryptoKeyEntry{
-			algoName: "ECDH", keyType: "private", namedCurve: curveName, ecKey: privKey,
+			algoName: "ECDH", keyType: "private", namedCurve: curveName, ecKey: privKey, extractable: extractableVal,
 		})
 		pubID := importCryptoKeyFull(reqID, &cryptoKeyEntry{
-			algoName: "ECDH", keyType: "public", namedCurve: curveName, ecKey: privKey.PublicKey(),
+			algoName: "ECDH", keyType: "public", namedCurve: curveName, ecKey: privKey.PublicKey(), extractable: extractableVal,
 		})
 
 		val, _ := v8.NewValue(iso, fmt.Sprintf(`{"privateKeyId":%d,"publicKeyId":%d}`, privID, pubID))
@@ -242,15 +243,16 @@ func setupCryptoECDH(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		return val
 	}).GetFunction(ctx))
 
-	// __cryptoImportECDH(format, dataB64, curve) -> JSON { keyId, keyType }
+	// __cryptoImportECDH(format, dataB64, curve, extractable) -> JSON { keyId, keyType }
 	_ = ctx.Global().Set("__cryptoImportECDH", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
-		if len(args) < 3 {
-			return throwError(iso, "importECDH requires 3 argument(s)")
+		if len(args) < 4 {
+			return throwError(iso, "importECDH requires 4 argument(s)")
 		}
 		format := args[0].String()
 		dataStr := args[1].String()
 		curveName := args[2].String()
+		extractableVal := args[3].Boolean()
 
 		reqID := getReqIDFromJS(ctx)
 		if getRequestState(reqID) == nil {
@@ -278,13 +280,13 @@ func setupCryptoECDH(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 				return val
 			}
 			id := importCryptoKeyFull(reqID, &cryptoKeyEntry{
-				algoName: "ECDH", keyType: "public", namedCurve: curveName, ecKey: pubKey,
+				algoName: "ECDH", keyType: "public", namedCurve: curveName, ecKey: pubKey, extractable: extractableVal,
 			})
 			val, _ := v8.NewValue(iso, fmt.Sprintf(`{"keyId":%d,"keyType":"public"}`, id))
 			return val
 
 		case "jwk":
-			return importECDHJWK(iso, reqID, dataStr, curveName, curve)
+			return importECDHJWK(iso, reqID, dataStr, curveName, curve, extractableVal)
 
 		default:
 			val, _ := v8.NewValue(iso, fmt.Sprintf(`{"error":"unsupported format %q"}`, format))
@@ -305,6 +307,9 @@ func setupCryptoECDH(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		entry := getCryptoKey(reqID, keyID)
 		if entry == nil {
 			return throwError(iso, "exportECDH: key not found")
+		}
+		if !entry.extractable {
+			return throwError(iso, "key is not extractable")
 		}
 
 		switch format {
@@ -331,8 +336,14 @@ func setupCryptoECDH(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 
 	// --- X25519 callbacks ---
 
-	// __cryptoGenerateX25519() -> JSON { privateKeyId, publicKeyId }
+	// __cryptoGenerateX25519(extractable) -> JSON { privateKeyId, publicKeyId }
 	_ = ctx.Global().Set("__cryptoGenerateX25519", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
+		extractableVal := false
+		if len(args) > 0 {
+			extractableVal = args[0].Boolean()
+		}
+
 		reqID := getReqIDFromJS(ctx)
 		if getRequestState(reqID) == nil {
 			val, _ := v8.NewValue(iso, `{"error":"no active request state"}`)
@@ -346,10 +357,10 @@ func setupCryptoECDH(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		}
 
 		privID := importCryptoKeyFull(reqID, &cryptoKeyEntry{
-			algoName: "X25519", keyType: "private", ecKey: privKey,
+			algoName: "X25519", keyType: "private", ecKey: privKey, extractable: extractableVal,
 		})
 		pubID := importCryptoKeyFull(reqID, &cryptoKeyEntry{
-			algoName: "X25519", keyType: "public", ecKey: privKey.PublicKey(),
+			algoName: "X25519", keyType: "public", ecKey: privKey.PublicKey(), extractable: extractableVal,
 		})
 
 		val, _ := v8.NewValue(iso, fmt.Sprintf(`{"privateKeyId":%d,"publicKeyId":%d}`, privID, pubID))
@@ -400,15 +411,16 @@ func setupCryptoECDH(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		return val
 	}).GetFunction(ctx))
 
-	// __cryptoImportX25519(format, dataB64, keyType) -> JSON { keyId, keyType }
+	// __cryptoImportX25519(format, dataB64, keyType, extractable) -> JSON { keyId, keyType }
 	_ = ctx.Global().Set("__cryptoImportX25519", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
-		if len(args) < 3 {
-			return throwError(iso, "importX25519 requires 3 argument(s)")
+		if len(args) < 4 {
+			return throwError(iso, "importX25519 requires 4 argument(s)")
 		}
 		format := args[0].String()
 		dataStr := args[1].String()
 		keyType := args[2].String()
+		extractableVal := args[3].Boolean()
 
 		reqID := getReqIDFromJS(ctx)
 		if getRequestState(reqID) == nil {
@@ -440,7 +452,7 @@ func setupCryptoECDH(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 				return val
 			}
 			id := importCryptoKeyFull(reqID, &cryptoKeyEntry{
-				algoName: "X25519", keyType: "private", ecKey: privKey,
+				algoName: "X25519", keyType: "private", ecKey: privKey, extractable: extractableVal,
 			})
 			val, _ := v8.NewValue(iso, fmt.Sprintf(`{"keyId":%d,"keyType":"private"}`, id))
 			return val
@@ -452,7 +464,7 @@ func setupCryptoECDH(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 			return val
 		}
 		id := importCryptoKeyFull(reqID, &cryptoKeyEntry{
-			algoName: "X25519", keyType: "public", ecKey: pubKey,
+			algoName: "X25519", keyType: "public", ecKey: pubKey, extractable: extractableVal,
 		})
 		val, _ := v8.NewValue(iso, fmt.Sprintf(`{"keyId":%d,"keyType":"public"}`, id))
 		return val
@@ -476,6 +488,9 @@ func setupCryptoECDH(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		if entry == nil {
 			return throwError(iso, "exportX25519: key not found")
 		}
+		if !entry.extractable {
+			return throwError(iso, "key is not extractable")
+		}
 
 		switch k := entry.ecKey.(type) {
 		case *ecdh.PublicKey:
@@ -496,7 +511,7 @@ func setupCryptoECDH(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 }
 
 // importECDHJWK imports an ECDH key from JWK format.
-func importECDHJWK(iso *v8.Isolate, reqID uint64, dataStr, curveName string, curve ecdh.Curve) *v8.Value {
+func importECDHJWK(iso *v8.Isolate, reqID uint64, dataStr, curveName string, curve ecdh.Curve, extractable bool) *v8.Value {
 	var jwk struct {
 		Kty string `json:"kty"`
 		Crv string `json:"crv"`
@@ -541,7 +556,7 @@ func importECDHJWK(iso *v8.Isolate, reqID uint64, dataStr, curveName string, cur
 			return val
 		}
 		id := importCryptoKeyFull(reqID, &cryptoKeyEntry{
-			algoName: "ECDH", keyType: "private", namedCurve: curveName, ecKey: privKey,
+			algoName: "ECDH", keyType: "private", namedCurve: curveName, ecKey: privKey, extractable: extractable,
 		})
 		val, _ := v8.NewValue(iso, fmt.Sprintf(`{"keyId":%d,"keyType":"private"}`, id))
 		return val
@@ -559,7 +574,7 @@ func importECDHJWK(iso *v8.Isolate, reqID uint64, dataStr, curveName string, cur
 		return val
 	}
 	id := importCryptoKeyFull(reqID, &cryptoKeyEntry{
-		algoName: "ECDH", keyType: "public", namedCurve: curveName, ecKey: pubKey,
+		algoName: "ECDH", keyType: "public", namedCurve: curveName, ecKey: pubKey, extractable: extractable,
 	})
 	val, _ := v8.NewValue(iso, fmt.Sprintf(`{"keyId":%d,"keyType":"public"}`, id))
 	return val

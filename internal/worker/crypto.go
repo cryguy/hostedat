@@ -89,6 +89,9 @@ const cryptoJS = `
 	};
 
 	subtle.sign = async function(algorithm, key, data) {
+		if (key.usages && !key.usages.includes('sign')) {
+			throw new TypeError('key usages do not permit this operation');
+		}
 		const algo = typeof algorithm === 'string' ? { name: algorithm } : algorithm;
 		const dataB64 = __bufferSourceToB64(data);
 		const resultB64 = __cryptoSign(algo.name, key._id, dataB64);
@@ -96,6 +99,9 @@ const cryptoJS = `
 	};
 
 	subtle.verify = async function(algorithm, key, signature, data) {
+		if (key.usages && !key.usages.includes('verify')) {
+			throw new TypeError('key usages do not permit this operation');
+		}
 		const algo = typeof algorithm === 'string' ? { name: algorithm } : algorithm;
 		const sigB64 = __bufferSourceToB64(signature);
 		const dataB64 = __bufferSourceToB64(data);
@@ -103,24 +109,38 @@ const cryptoJS = `
 	};
 
 	subtle.encrypt = async function(algorithm, key, data) {
+		if (key.usages && !key.usages.includes('encrypt')) {
+			throw new TypeError('key usages do not permit this operation');
+		}
 		const algo = typeof algorithm === 'string' ? { name: algorithm } : algorithm;
 		const dataB64 = __bufferSourceToB64(data);
 		let ivB64 = '';
 		if (algo.iv) {
 			ivB64 = __bufferSourceToB64(algo.iv);
 		}
-		const resultB64 = __cryptoEncrypt(algo.name, key._id, dataB64, ivB64);
+		let aadB64 = '';
+		if (algo.additionalData) {
+			aadB64 = __bufferSourceToB64(algo.additionalData);
+		}
+		const resultB64 = __cryptoEncrypt(algo.name, key._id, dataB64, ivB64, aadB64);
 		return __b64ToBuffer(resultB64);
 	};
 
 	subtle.decrypt = async function(algorithm, key, data) {
+		if (key.usages && !key.usages.includes('decrypt')) {
+			throw new TypeError('key usages do not permit this operation');
+		}
 		const algo = typeof algorithm === 'string' ? { name: algorithm } : algorithm;
 		const dataB64 = __bufferSourceToB64(data);
 		let ivB64 = '';
 		if (algo.iv) {
 			ivB64 = __bufferSourceToB64(algo.iv);
 		}
-		const resultB64 = __cryptoDecrypt(algo.name, key._id, dataB64, ivB64);
+		let aadB64 = '';
+		if (algo.additionalData) {
+			aadB64 = __bufferSourceToB64(algo.additionalData);
+		}
+		const resultB64 = __cryptoDecrypt(algo.name, key._id, dataB64, ivB64, aadB64);
 		return __b64ToBuffer(resultB64);
 	};
 
@@ -272,6 +292,9 @@ func setupCrypto(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		entry := getCryptoKey(reqID, keyID)
 		if entry == nil {
 			return throwError(iso, "exportKey: key not found")
+		}
+		if !entry.extractable {
+			return throwError(iso, "exportKey: key is not extractable")
 		}
 		val, _ := v8.NewValue(iso, base64.StdEncoding.EncodeToString(entry.data))
 		return val

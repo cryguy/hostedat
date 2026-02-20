@@ -712,6 +712,28 @@ func TestFetch_Redirect_Manual_307(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Header filtering: forbidden headers
+// ---------------------------------------------------------------------------
+
+func TestFetch_ForbiddenHeadersFiltered(t *testing.T) {
+	forbidden := []string{"Host", "Transfer-Encoding", "Connection", "X-Forwarded-For", "Proxy-Authorization"}
+	for _, h := range forbidden {
+		if !forbiddenFetchHeaders[strings.ToLower(h)] {
+			t.Errorf("expected %q to be in forbidden list", h)
+		}
+	}
+}
+
+func TestFetch_AllowedHeadersNotFiltered(t *testing.T) {
+	allowed := []string{"Content-Type", "Authorization", "Accept", "X-Custom-Header"}
+	for _, h := range allowed {
+		if forbiddenFetchHeaders[strings.ToLower(h)] {
+			t.Errorf("expected %q to NOT be in forbidden list", h)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Binary body round-trip
 // ---------------------------------------------------------------------------
 
