@@ -3,6 +3,7 @@ package worker
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -1191,5 +1192,388 @@ func TestKVBridge_EncodeCursorDecodeCursorRoundtrip(t *testing.T) {
 
 	if got := decodeCursor(""); got != 0 {
 		t.Errorf("decodeCursor(\"\") = %d, want 0", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Regression tests — Bug 1: KV list() metadata serialization
+//
+// When metadata stored as a JSON string (e.g. '{"tag":"test"}'), list() must
+// return the parsed JSON object, not "[object Object]". Plain-string metadata
+// must be preserved as-is.
+// ---------------------------------------------------------------------------
+
+func TestKVBridge_ListMetadataJSONRoundTrip(t *testing.T) {
+	db := testDB(t)
+	kv := &KVBridge{DB: db, NamespaceID: "test-ns-meta-json-rt"}
+
+	jsonMeta := `{"tag":"test","count":42}`
+	if err := kv.Put("k1", "v1", &jsonMeta, nil); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	result, err := kv.List("k1", 0, "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(result.Keys) != 1 {
+		t.Fatalf("List count = %d, want 1", len(result.Keys))
+	}
+
+	// The metadata should be a json.RawMessage (for valid JSON), which
+	// marshals into the JSON object inline, not as a quoted string.
+	data, err := json.Marshal(result.Keys[0])
+	if err != nil {
+		t.Fatalf("Marshal key entry: %v", err)
+	}
+
+	var entry struct {
+		Name     string          `json:"name"`
+		Metadata json.RawMessage `json:"metadata"`
+	}
+	if err := json.Unmarshal(data, &entry); err != nil {
+		t.Fatalf("Unmarshal key entry: %v", err)
+	}
+	if entry.Name != "k1" {
+		t.Errorf("name = %q, want %q", entry.Name, "k1")
+	}
+
+	// Parse the metadata back to verify structure is preserved.
+	var meta map[string]interface{}
+	if err := json.Unmarshal(entry.Metadata, &meta); err != nil {
+		t.Fatalf("metadata is not valid JSON object: %v (raw: %s)", err, string(entry.Metadata))
+	}
+	if meta["tag"] != "test" {
+		t.Errorf("metadata.tag = %v, want %q", meta["tag"], "test")
+	}
+	if meta["count"] != float64(42) {
+		t.Errorf("metadata.count = %v, want 42", meta["count"])
+	}
+}
+
+func TestKVBridge_ListMetadataPlainString(t *testing.T) {
+	db := testDB(t)
+	kv := &KVBridge{DB: db, NamespaceID: "test-ns-meta-plain"}
+
+	plainMeta := "simple-string-metadata"
+	if err := kv.Put("k1", "v1", &plainMeta, nil); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	result, err := kv.List("k1", 0, "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(result.Keys) != 1 {
+		t.Fatalf("List count = %d, want 1", len(result.Keys))
+	}
+
+	// Plain string metadata is not valid JSON, so it should be stored as a
+	// plain string (not json.RawMessage).
+	got, ok := result.Keys[0]["metadata"].(string)
+	if !ok {
+		t.Fatalf("metadata type = %T, want string", result.Keys[0]["metadata"])
+	}
+	if got != "simple-string-metadata" {
+		t.Errorf("metadata = %q, want %q", got, "simple-string-metadata")
+	}
+}
+
+func TestKVBridge_ListMetadataNestedJSON(t *testing.T) {
+	db := testDB(t)
+	kv := &KVBridge{DB: db, NamespaceID: "test-ns-meta-nested"}
+
+	nestedMeta := `{"user":{"name":"alice","roles":["admin","editor"]},"active":true}`
+	if err := kv.Put("k1", "v1", &nestedMeta, nil); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	result, err := kv.List("k1", 0, "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(result.Keys) != 1 {
+		t.Fatalf("List count = %d, want 1", len(result.Keys))
+	}
+
+	// Marshal the full list result to JSON and verify the nested metadata
+	// round-trips without becoming "[object Object]".
+	data, err := json.Marshal(result.Keys[0])
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	// Must NOT contain the broken "[object Object]" string.
+	if jsonStr := string(data); jsonStr == "" {
+		t.Fatal("empty marshaled data")
+	} else if strings.Contains(jsonStr, "[object Object]") {
+		t.Errorf("marshaled metadata contains [object Object]: %s", jsonStr)
+	}
+
+	var entry struct {
+		Name     string          `json:"name"`
+		Metadata json.RawMessage `json:"metadata"`
+	}
+	if err := json.Unmarshal(data, &entry); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	var meta map[string]interface{}
+	if err := json.Unmarshal(entry.Metadata, &meta); err != nil {
+		t.Fatalf("metadata is not valid JSON: %v (raw: %s)", err, string(entry.Metadata))
+	}
+
+	user, ok := meta["user"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("metadata.user type = %T, want map", meta["user"])
+	}
+	if user["name"] != "alice" {
+		t.Errorf("metadata.user.name = %v, want %q", user["name"], "alice")
+	}
+	if meta["active"] != true {
+		t.Errorf("metadata.active = %v, want true", meta["active"])
+	}
+}
+
+func TestKVBridge_ListMetadataMixedEntries(t *testing.T) {
+	db := testDB(t)
+	kv := &KVBridge{DB: db, NamespaceID: "test-ns-meta-mixed"}
+
+	jsonMeta := `{"type":"json"}`
+	plainMeta := "plain"
+
+	_ = kv.Put("a-json", "v1", &jsonMeta, nil)
+	_ = kv.Put("b-plain", "v2", &plainMeta, nil)
+	_ = kv.Put("c-none", "v3", nil, nil)
+
+	result, err := kv.List("", 0, "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(result.Keys) != 3 {
+		t.Fatalf("List count = %d, want 3", len(result.Keys))
+	}
+
+	// Marshal the entire result to JSON to simulate what buildKVBinding does.
+	data, err := json.Marshal(result.Keys)
+	if err != nil {
+		t.Fatalf("Marshal keys: %v", err)
+	}
+
+	var keys []struct {
+		Name     string           `json:"name"`
+		Metadata *json.RawMessage `json:"metadata,omitempty"`
+	}
+	if err := json.Unmarshal(data, &keys); err != nil {
+		t.Fatalf("Unmarshal keys: %v", err)
+	}
+
+	// a-json: metadata should be a JSON object
+	if keys[0].Name != "a-json" {
+		t.Errorf("keys[0].name = %q, want %q", keys[0].Name, "a-json")
+	}
+	if keys[0].Metadata == nil {
+		t.Fatal("keys[0] metadata should not be nil")
+	}
+	var jsonObj map[string]interface{}
+	if err := json.Unmarshal(*keys[0].Metadata, &jsonObj); err != nil {
+		t.Errorf("keys[0] metadata not valid JSON object: %v (raw: %s)", err, string(*keys[0].Metadata))
+	}
+
+	// b-plain: metadata should be a plain JSON string
+	if keys[1].Name != "b-plain" {
+		t.Errorf("keys[1].name = %q, want %q", keys[1].Name, "b-plain")
+	}
+	if keys[1].Metadata == nil {
+		t.Fatal("keys[1] metadata should not be nil")
+	}
+	var plainStr string
+	if err := json.Unmarshal(*keys[1].Metadata, &plainStr); err != nil {
+		t.Errorf("keys[1] metadata not a JSON string: %v (raw: %s)", err, string(*keys[1].Metadata))
+	}
+	if plainStr != "plain" {
+		t.Errorf("keys[1] metadata = %q, want %q", plainStr, "plain")
+	}
+
+	// c-none: metadata should be absent
+	if keys[2].Name != "c-none" {
+		t.Errorf("keys[2].name = %q, want %q", keys[2].Name, "c-none")
+	}
+	if keys[2].Metadata != nil {
+		t.Errorf("keys[2] metadata should be nil, got %s", string(*keys[2].Metadata))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// JS-level regression: list() metadata must not become "[object Object]"
+// ---------------------------------------------------------------------------
+
+func TestKV_JSListMetadataJSONObject(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// This is the exact reproduction from the bug report: storing JSON string
+	// metadata and verifying list() returns a parsed object, not "[object Object]".
+	source := `export default {
+  async fetch(request, env) {
+    await env.MY_KV.put("key", "value", { metadata: '{"tag":"test"}' });
+    const list = await env.MY_KV.list({ prefix: "key" });
+    const meta = list.keys[0].metadata;
+    const metaStr = typeof meta === "string" ? meta : JSON.stringify(meta);
+    return Response.json({
+      metaType: typeof meta,
+      metaStr: metaStr,
+      isNotBroken: metaStr !== "[object Object]",
+      tag: typeof meta === "object" ? meta.tag : null,
+    });
+  },
+};`
+
+	env := kvEnv(t, db, "js-list-meta-json")
+	r := execJS(t, e, source, env, getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		MetaType    string `json:"metaType"`
+		MetaStr     string `json:"metaStr"`
+		IsNotBroken bool   `json:"isNotBroken"`
+		Tag         string `json:"tag"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !data.IsNotBroken {
+		t.Error("list() metadata returned \"[object Object]\" — Bug 1 regression")
+	}
+	if data.MetaStr != `{"tag":"test"}` {
+		t.Errorf("metadata string = %q, want %q", data.MetaStr, `{"tag":"test"}`)
+	}
+}
+
+func TestKV_JSListMetadataStringPreserved(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Plain string metadata (not JSON) should remain a string in list().
+	source := `export default {
+  async fetch(request, env) {
+    await env.MY_KV.put("key", "value", { metadata: "plain-tag" });
+    const list = await env.MY_KV.list({ prefix: "key" });
+    const meta = list.keys[0].metadata;
+    return Response.json({
+      metaType: typeof meta,
+      metaValue: String(meta),
+      isString: typeof meta === "string",
+    });
+  },
+};`
+
+	env := kvEnv(t, db, "js-list-meta-str")
+	r := execJS(t, e, source, env, getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		MetaType  string `json:"metaType"`
+		MetaValue string `json:"metaValue"`
+		IsString  bool   `json:"isString"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !data.IsString {
+		t.Errorf("plain string metadata type = %q, want \"string\"", data.MetaType)
+	}
+	if data.MetaValue != "plain-tag" {
+		t.Errorf("metadata value = %q, want %q", data.MetaValue, "plain-tag")
+	}
+}
+
+func TestKV_JSListMetadataComplexJSON(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Complex nested JSON metadata (passed as an object) should round-trip
+	// through list() correctly. Note: passing an object (not a pre-stringified
+	// string) is the standard Cloudflare Workers usage. The put bridge calls
+	// JSON.stringify on it, and list() returns the parsed object.
+	source := `export default {
+  async fetch(request, env) {
+    const meta = {user: {name: "alice"}, tags: ["a", "b"], count: 99};
+    await env.MY_KV.put("k1", "v1", { metadata: meta });
+    const list = await env.MY_KV.list({ prefix: "k1" });
+    const m = list.keys[0].metadata;
+    return Response.json({
+      isObject: typeof m === "object" && m !== null,
+      userName: m && m.user ? m.user.name : null,
+      tagCount: m && m.tags ? m.tags.length : 0,
+      count: m ? m.count : null,
+      notBroken: JSON.stringify(m) !== "[object Object]",
+    });
+  },
+};`
+
+	env := kvEnv(t, db, "js-list-meta-complex")
+	r := execJS(t, e, source, env, getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		IsObject  bool   `json:"isObject"`
+		UserName  string `json:"userName"`
+		TagCount  int    `json:"tagCount"`
+		Count     int    `json:"count"`
+		NotBroken bool   `json:"notBroken"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !data.NotBroken {
+		t.Error("complex JSON metadata returned \"[object Object]\" — Bug 1 regression")
+	}
+	if !data.IsObject {
+		t.Error("metadata should be a parsed JS object")
+	}
+	if data.UserName != "alice" {
+		t.Errorf("metadata.user.name = %q, want %q", data.UserName, "alice")
+	}
+	if data.TagCount != 2 {
+		t.Errorf("metadata.tags.length = %d, want 2", data.TagCount)
+	}
+	if data.Count != 99 {
+		t.Errorf("metadata.count = %d, want 99", data.Count)
+	}
+}
+
+func TestKV_JSListMetadataNoMeta(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Keys stored without metadata should have undefined/null metadata in list().
+	source := `export default {
+  async fetch(request, env) {
+    await env.MY_KV.put("k1", "v1");
+    const list = await env.MY_KV.list({ prefix: "k1" });
+    const meta = list.keys[0].metadata;
+    return Response.json({
+      isUndefined: meta === undefined,
+      isNull: meta === null,
+      isAbsent: meta === undefined || meta === null,
+    });
+  },
+};`
+
+	env := kvEnv(t, db, "js-list-meta-none")
+	r := execJS(t, e, source, env, getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		IsUndefined bool `json:"isUndefined"`
+		IsNull      bool `json:"isNull"`
+		IsAbsent    bool `json:"isAbsent"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !data.IsAbsent {
+		t.Error("key without metadata should have undefined/null metadata in list()")
 	}
 }

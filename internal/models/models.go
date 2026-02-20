@@ -302,6 +302,15 @@ func (d *DurableObjectNamespace) BeforeCreate(_ *gorm.DB) error {
 	return nil
 }
 
+// DurableObjectEntry is the GORM model for durable object storage.
+type DurableObjectEntry struct {
+	ID        uint   `gorm:"primaryKey"`
+	Namespace string `gorm:"uniqueIndex:idx_do_lookup"`
+	ObjectID  string `gorm:"uniqueIndex:idx_do_lookup"`
+	Key       string `gorm:"uniqueIndex:idx_do_lookup"`
+	ValueJSON string
+}
+
 type S3Credential struct {
 	ID            string     `gorm:"primaryKey;size:20" json:"id"`
 	UserID        string     `gorm:"index;not null" json:"user_id"`

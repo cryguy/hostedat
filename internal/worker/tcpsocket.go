@@ -7,17 +7,19 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"time"
 
 	v8 "github.com/tommie/v8go"
 )
 
 // tcpSocketBuffer provides a thread-safe read buffer for a TCP socket.
 type tcpSocketBuffer struct {
-	mu   sync.Mutex
-	conn net.Conn
-	buf  []byte // accumulated unread data
-	err  error  // sticky read error (io.EOF, etc.)
-	done bool   // true once background reader exits
+	mu      sync.Mutex
+	conn    net.Conn
+	buf     []byte         // accumulated unread data
+	err     error          // sticky read error (io.EOF, etc.)
+	done    bool           // true once background reader exits
+	hasData chan struct{}   // signaled (non-blocking) when new data arrives or done
 }
 
 // readLoop reads from conn into the buffer in the background.
@@ -33,9 +35,27 @@ func (b *tcpSocketBuffer) readLoop() {
 			b.err = err
 			b.done = true
 			b.mu.Unlock()
+			b.signal()
 			return
 		}
 		b.mu.Unlock()
+		b.signal()
+	}
+}
+
+// signal notifies any blocked reader that data (or EOF) is available.
+func (b *tcpSocketBuffer) signal() {
+	select {
+	case b.hasData <- struct{}{}:
+	default:
+	}
+}
+
+// waitForData blocks until new data arrives or the timeout elapses.
+func (b *tcpSocketBuffer) waitForData(timeout time.Duration) {
+	select {
+	case <-b.hasData:
+	case <-time.After(timeout):
 	}
 }
 
@@ -59,6 +79,14 @@ func (b *tcpSocketBuffer) take(maxBytes int) (string, bool, error) {
 	data := make([]byte, n)
 	copy(data, b.buf[:n])
 	b.buf = b.buf[n:]
+
+	// Drain any pending signal so future signals from readLoop aren't blocked
+	// by a stale entry in the channel. Without this, a signal sent for chunk N
+	// can sit unconsumed, causing signal() for chunk N+1 to be dropped.
+	select {
+	case <-b.hasData:
+	default:
+	}
 
 	eof := len(b.buf) == 0 && b.done
 	return base64.StdEncoding.EncodeToString(data), eof, nil
@@ -302,7 +330,7 @@ func setupTCPSocket(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 
 		state.tcpSockets[socketID] = conn
 
-		buf := &tcpSocketBuffer{conn: conn}
+		buf := &tcpSocketBuffer{conn: conn, hasData: make(chan struct{}, 1)}
 		state.tcpSocketBuffers[socketID] = buf
 		go buf.readLoop()
 
@@ -332,11 +360,15 @@ func setupTCPSocket(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		}
 
 		data, eof, _ := buf.take(maxBytes)
+		if data == "" && !eof {
+			// No data yet — block until data arrives or timeout (5s).
+			// This prevents the JS pull() loop from busy-spinning.
+			buf.waitForData(5 * time.Second)
+			data, eof, _ = buf.take(maxBytes)
+		}
 		if data == "" && eof {
 			// Return null for EOF.
-			null, _ := v8.NewValue(iso, "null")
 			result, _ := ctx.RunScript("null", "null.js")
-			_ = null
 			return result
 		}
 
@@ -445,7 +477,7 @@ func setupTCPSocket(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 		newSocketID := fmt.Sprintf("tcp_%d", state.nextTCPSocketID)
 		state.tcpSockets[newSocketID] = tlsConn
 
-		buf := &tcpSocketBuffer{conn: tlsConn}
+		buf := &tcpSocketBuffer{conn: tlsConn, hasData: make(chan struct{}, 1)}
 		state.tcpSocketBuffers[newSocketID] = buf
 		go buf.readLoop()
 

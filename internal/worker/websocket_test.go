@@ -945,3 +945,194 @@ func TestWebSocket_SendAfterCloseThrows(t *testing.T) {
 		t.Error("send() after close() should throw")
 	}
 }
+
+func TestWebSocketPair_InProcessTextMessage(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    var pair = new WebSocketPair();
+    var client = pair[0];
+    var server = pair[1];
+    client.accept();
+    server.accept();
+
+    var received = null;
+    client.addEventListener('message', function(e) {
+      received = e.data;
+    });
+
+    server.send("hello");
+    await new Promise(resolve => queueMicrotask(resolve));
+
+    return Response.json({ received: received });
+  }
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Received string `json:"received"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Received != "hello" {
+		t.Errorf("received = %q, want 'hello'", data.Received)
+	}
+}
+
+func TestWebSocketPair_InProcessBinaryMessage(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    var pair = new WebSocketPair();
+    var client = pair[0];
+    var server = pair[1];
+    client.accept();
+    server.accept();
+
+    var received = null;
+    client.addEventListener('message', function(e) {
+      if (e.data instanceof ArrayBuffer) {
+        var view = new Uint8Array(e.data);
+        received = Array.from(view);
+      }
+    });
+
+    var buf = new Uint8Array([1, 2, 3, 4, 5]);
+    server.send(buf);
+    await new Promise(resolve => queueMicrotask(resolve));
+
+    return Response.json({ received: received });
+  }
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Received []int `json:"received"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	expected := []int{1, 2, 3, 4, 5}
+	if len(data.Received) != len(expected) {
+		t.Fatalf("received length = %d, want %d", len(data.Received), len(expected))
+	}
+	for i, b := range expected {
+		if data.Received[i] != b {
+			t.Errorf("byte[%d] = %d, want %d", i, data.Received[i], b)
+		}
+	}
+}
+
+func TestWebSocketPair_InProcessCloseEvent(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    var pair = new WebSocketPair();
+    var client = pair[0];
+    var server = pair[1];
+    client.accept();
+    server.accept();
+
+    var closeCalled = false;
+    var closeCode = null;
+    var closeReason = null;
+    client.addEventListener('close', function(e) {
+      closeCalled = true;
+      closeCode = e.code;
+      closeReason = e.reason;
+    });
+
+    server.close(1001, 'going away');
+    await new Promise(resolve => queueMicrotask(resolve));
+
+    return Response.json({
+      closeCalled: closeCalled,
+      closeCode: closeCode,
+      closeReason: closeReason,
+    });
+  }
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		CloseCalled bool   `json:"closeCalled"`
+		CloseCode   int    `json:"closeCode"`
+		CloseReason string `json:"closeReason"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.CloseCalled {
+		t.Error("close event should have been dispatched to peer")
+	}
+	if data.CloseCode != 1001 {
+		t.Errorf("closeCode = %d, want 1001", data.CloseCode)
+	}
+	if data.CloseReason != "going away" {
+		t.Errorf("closeReason = %q, want 'going away'", data.CloseReason)
+	}
+}
+
+func TestWebSocketPair_InProcessBidirectional(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    var pair = new WebSocketPair();
+    var client = pair[0];
+    var server = pair[1];
+    client.accept();
+    server.accept();
+
+    var clientReceived = [];
+    var serverReceived = [];
+
+    client.addEventListener('message', function(e) {
+      clientReceived.push(e.data);
+    });
+    server.addEventListener('message', function(e) {
+      serverReceived.push(e.data);
+    });
+
+    server.send("from-server");
+    client.send("from-client");
+    await new Promise(resolve => queueMicrotask(resolve));
+
+    return Response.json({
+      clientReceived: clientReceived,
+      serverReceived: serverReceived,
+    });
+  }
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		ClientReceived []string `json:"clientReceived"`
+		ServerReceived []string `json:"serverReceived"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(data.ClientReceived) != 1 || data.ClientReceived[0] != "from-server" {
+		t.Errorf("clientReceived = %v, want ['from-server']", data.ClientReceived)
+	}
+	if len(data.ServerReceived) != 1 || data.ServerReceived[0] != "from-client" {
+		t.Errorf("serverReceived = %v, want ['from-client']", data.ServerReceived)
+	}
+}

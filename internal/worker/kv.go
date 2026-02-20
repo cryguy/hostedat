@@ -167,7 +167,13 @@ func (kv *KVBridge) List(prefix string, limit int, cursor string) (*KVListResult
 			"name": e.Key,
 		}
 		if e.Metadata != nil {
-			item["metadata"] = *e.Metadata
+			// Embed metadata as raw JSON so it round-trips as a JS object,
+			// matching Cloudflare's KV list() behavior.
+			if json.Valid([]byte(*e.Metadata)) {
+				item["metadata"] = json.RawMessage(*e.Metadata)
+			} else {
+				item["metadata"] = *e.Metadata
+			}
 		}
 		keys = append(keys, item)
 	}
@@ -321,10 +327,15 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 			return resolver.GetPromise().Value
 		}
 
-		// Build metadata JS value
+		// Build metadata JS value — metadata is stored as JSON, so embed it
+		// as raw JS to return the parsed object (Cloudflare KV behavior).
 		var metaJSON string
 		if result.Metadata != nil {
-			metaJSON = fmt.Sprintf("%q", *result.Metadata)
+			if json.Valid([]byte(*result.Metadata)) {
+				metaJSON = *result.Metadata
+			} else {
+				metaJSON = fmt.Sprintf("%q", *result.Metadata)
+			}
 		} else {
 			metaJSON = "null"
 		}
@@ -408,7 +419,7 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 				var o = globalThis.__tmp_kv_opts;
 				delete globalThis.__tmp_kv_opts;
 				return JSON.stringify({
-					metadata: o.metadata !== undefined && o.metadata !== null ? String(o.metadata) : null,
+					metadata: o.metadata !== undefined && o.metadata !== null ? JSON.stringify(o.metadata) : null,
 					expirationTtl: o.expirationTtl !== undefined && o.expirationTtl !== null ? Number(o.expirationTtl) : null,
 				});
 			})()`, "kv_opts.js")

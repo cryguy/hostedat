@@ -58,6 +58,7 @@ func InitDB(cfg config.DBConfig) (*gorm.DB, error) {
 		&StorageBucket{},
 		&D1Database{},
 		&DurableObjectNamespace{},
+		&DurableObjectEntry{},
 		&S3Credential{},
 		&RevokedToken{},
 		&CacheEntry{},

@@ -2909,3 +2909,591 @@ func TestServing_WorkerNilResponse(t *testing.T) {
 		t.Fatalf("status = %d, want 500 for nil worker response; body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+// ──────────────────────────────────────────────
+// D1 Database tests
+// ──────────────────────────────────────────────
+
+func TestWorker_CreateD1Database_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "d1test", Name: "D1Test"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/d1",
+		jsonBody(map[string]string{"name": "MY_DB"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	if body["name"] != "MY_DB" {
+		t.Errorf("name = %v", body["name"])
+	}
+	if body["database_id"] == nil || body["database_id"] == "" {
+		t.Error("expected database_id in response")
+	}
+	if body["site_id"] != site.ID {
+		t.Errorf("site_id = %v, want %s", body["site_id"], site.ID)
+	}
+}
+
+func TestWorker_CreateD1Database_MissingName(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "d1test", Name: "D1Test"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/d1",
+		jsonBody(map[string]string{}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestWorker_CreateD1Database_AccessDenied(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "d1test", Name: "D1Test"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/d1",
+		jsonBody(map[string]string{"name": "DB"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestWorker_CreateD1Database_AdminBypass(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, adminToken := env.createTestUser(t, "admin@t.com", "password123", "admin")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "d1test", Name: "D1Test"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/d1",
+		jsonBody(map[string]string{"name": "ADMIN_DB"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWorker_CreateD1Database_SiteNotFound(t *testing.T) {
+	env := setupTestEnv(t)
+	_, token := env.createTestUser(t, "u@t.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/nonexistent/worker/d1",
+		jsonBody(map[string]string{"name": "DB"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestWorker_CreateD1Database_DuplicateName(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "d1test", Name: "D1Test"}
+	env.db.Create(&site)
+
+	// Create first
+	env.db.Create(&models.D1Database{SiteID: site.ID, Name: "SAME_NAME"})
+
+	// Try duplicate via API
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/d1",
+		jsonBody(map[string]string{"name": "SAME_NAME"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code == http.StatusCreated {
+		t.Error("expected duplicate name to be rejected, got 201")
+	}
+}
+
+func TestWorker_ListD1Databases_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "d1test", Name: "D1Test"}
+	env.db.Create(&site)
+
+	env.db.Create(&models.D1Database{SiteID: site.ID, Name: "DB1"})
+	env.db.Create(&models.D1Database{SiteID: site.ID, Name: "DB2"})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+site.ID+"/worker/d1", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	body := parseJSON(t, rec)
+	items, ok := body["items"].([]interface{})
+	if !ok {
+		t.Fatal("expected items array in response")
+	}
+	if len(items) != 2 {
+		t.Errorf("got %d items, want 2", len(items))
+	}
+	if total, _ := body["total"].(float64); total != 2 {
+		t.Errorf("total = %v, want 2", body["total"])
+	}
+}
+
+func TestWorker_ListD1Databases_Empty(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "d1test", Name: "D1Test"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+site.ID+"/worker/d1", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	body := parseJSON(t, rec)
+	if total, _ := body["total"].(float64); total != 0 {
+		t.Errorf("total = %v, want 0", body["total"])
+	}
+}
+
+func TestWorker_ListD1Databases_AccessDenied(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "d1test", Name: "D1Test"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+site.ID+"/worker/d1", nil)
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestWorker_DeleteD1Database_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "d1test", Name: "D1Test"}
+	env.db.Create(&site)
+
+	d1 := models.D1Database{SiteID: site.ID, Name: "DELETE_ME"}
+	env.db.Create(&d1)
+
+	// Create a fake SQLite file to verify cleanup
+	dataDir := t.TempDir()
+	t.Setenv("HOSTEDAT_DATA_DIR", dataDir)
+	d1Dir := filepath.Join(dataDir, "d1")
+	os.MkdirAll(d1Dir, 0o755)
+	dbFile := filepath.Join(d1Dir, d1.DatabaseID+".sqlite3")
+	os.WriteFile(dbFile, []byte("fake-db"), 0o644)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+site.ID+"/worker/d1/"+d1.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify DB record deleted
+	var count int64
+	env.db.Model(&models.D1Database{}).Where("id = ?", d1.ID).Count(&count)
+	if count != 0 {
+		t.Error("D1 database not deleted from DB")
+	}
+
+	// Verify SQLite file removed
+	if _, err := os.Stat(dbFile); !os.IsNotExist(err) {
+		t.Error("D1 SQLite file not removed from disk")
+	}
+}
+
+func TestWorker_DeleteD1Database_NotFound(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "d1test", Name: "D1Test"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+site.ID+"/worker/d1/nonexistent", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestWorker_DeleteD1Database_AccessDenied(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "d1test", Name: "D1Test"}
+	env.db.Create(&site)
+
+	d1 := models.D1Database{SiteID: site.ID, Name: "DB"}
+	env.db.Create(&d1)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+site.ID+"/worker/d1/"+d1.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+// ──────────────────────────────────────────────
+// Durable Object Namespace tests
+// ──────────────────────────────────────────────
+
+func TestWorker_CreateDONamespace_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "dotest", Name: "DOTest"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/do",
+		jsonBody(map[string]string{"name": "MY_DO"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := parseJSON(t, rec)
+	if body["name"] != "MY_DO" {
+		t.Errorf("name = %v", body["name"])
+	}
+	if body["namespace_id"] == nil || body["namespace_id"] == "" {
+		t.Error("expected namespace_id in response")
+	}
+	if body["site_id"] != site.ID {
+		t.Errorf("site_id = %v, want %s", body["site_id"], site.ID)
+	}
+}
+
+func TestWorker_CreateDONamespace_MissingName(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "dotest", Name: "DOTest"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/do",
+		jsonBody(map[string]string{}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestWorker_CreateDONamespace_AccessDenied(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "dotest", Name: "DOTest"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/do",
+		jsonBody(map[string]string{"name": "DO"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestWorker_CreateDONamespace_AdminBypass(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, adminToken := env.createTestUser(t, "admin@t.com", "password123", "admin")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "dotest", Name: "DOTest"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/do",
+		jsonBody(map[string]string{"name": "ADMIN_DO"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWorker_CreateDONamespace_SiteNotFound(t *testing.T) {
+	env := setupTestEnv(t)
+	_, token := env.createTestUser(t, "u@t.com", "password123", "user")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/nonexistent/worker/do",
+		jsonBody(map[string]string{"name": "DO"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestWorker_CreateDONamespace_DuplicateName(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "dotest", Name: "DOTest"}
+	env.db.Create(&site)
+
+	env.db.Create(&models.DurableObjectNamespace{SiteID: site.ID, Name: "SAME_NAME"})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/do",
+		jsonBody(map[string]string{"name": "SAME_NAME"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code == http.StatusCreated {
+		t.Error("expected duplicate name to be rejected, got 201")
+	}
+}
+
+func TestWorker_ListDONamespaces_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "dotest", Name: "DOTest"}
+	env.db.Create(&site)
+
+	env.db.Create(&models.DurableObjectNamespace{SiteID: site.ID, Name: "DO1"})
+	env.db.Create(&models.DurableObjectNamespace{SiteID: site.ID, Name: "DO2"})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+site.ID+"/worker/do", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	body := parseJSON(t, rec)
+	items, ok := body["items"].([]interface{})
+	if !ok {
+		t.Fatal("expected items array in response")
+	}
+	if len(items) != 2 {
+		t.Errorf("got %d items, want 2", len(items))
+	}
+	if total, _ := body["total"].(float64); total != 2 {
+		t.Errorf("total = %v, want 2", body["total"])
+	}
+}
+
+func TestWorker_ListDONamespaces_Empty(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "dotest", Name: "DOTest"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+site.ID+"/worker/do", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	body := parseJSON(t, rec)
+	if total, _ := body["total"].(float64); total != 0 {
+		t.Errorf("total = %v, want 0", body["total"])
+	}
+}
+
+func TestWorker_ListDONamespaces_AccessDenied(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "dotest", Name: "DOTest"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+site.ID+"/worker/do", nil)
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestWorker_DeleteDONamespace_Success(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "dotest", Name: "DOTest"}
+	env.db.Create(&site)
+
+	ns := models.DurableObjectNamespace{SiteID: site.ID, Name: "DELETE_ME"}
+	env.db.Create(&ns)
+
+	// Create some entries in the namespace
+	env.db.Create(&models.DurableObjectEntry{Namespace: ns.NamespaceID, ObjectID: "obj1", Key: "key1", ValueJSON: `"val1"`})
+	env.db.Create(&models.DurableObjectEntry{Namespace: ns.NamespaceID, ObjectID: "obj1", Key: "key2", ValueJSON: `"val2"`})
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+site.ID+"/worker/do/"+ns.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify namespace deleted
+	var nsCount int64
+	env.db.Model(&models.DurableObjectNamespace{}).Where("id = ?", ns.ID).Count(&nsCount)
+	if nsCount != 0 {
+		t.Error("DO namespace not deleted")
+	}
+
+	// Verify entries cascaded
+	var entryCount int64
+	env.db.Model(&models.DurableObjectEntry{}).Where("namespace = ?", ns.NamespaceID).Count(&entryCount)
+	if entryCount != 0 {
+		t.Error("DO entries not cascaded")
+	}
+}
+
+func TestWorker_DeleteDONamespace_NotFound(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "dotest", Name: "DOTest"}
+	env.db.Create(&site)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+site.ID+"/worker/do/nonexistent", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestWorker_DeleteDONamespace_AccessDenied(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "dotest", Name: "DOTest"}
+	env.db.Create(&site)
+
+	ns := models.DurableObjectNamespace{SiteID: site.ID, Name: "DO"}
+	env.db.Create(&ns)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+site.ID+"/worker/do/"+ns.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+// ──────────────────────────────────────────────
+// Site deletion cascade tests (D1 + DO)
+// ──────────────────────────────────────────────
+
+func TestSite_Delete_CascadesD1Databases(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "cascade-d1", Name: "CascadeD1"}
+	env.db.Create(&site)
+
+	d1 := models.D1Database{SiteID: site.ID, Name: "DB1"}
+	env.db.Create(&d1)
+
+	// Create a fake SQLite file to verify cleanup
+	dataDir := t.TempDir()
+	t.Setenv("HOSTEDAT_DATA_DIR", dataDir)
+	d1Dir := filepath.Join(dataDir, "d1")
+	os.MkdirAll(d1Dir, 0o755)
+	dbFile := filepath.Join(d1Dir, d1.DatabaseID+".sqlite3")
+	os.WriteFile(dbFile, []byte("fake"), 0o644)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+site.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify D1 records cascaded
+	var d1Count int64
+	env.db.Model(&models.D1Database{}).Where("site_id = ?", site.ID).Count(&d1Count)
+	if d1Count != 0 {
+		t.Error("D1 databases not cascaded on site delete")
+	}
+
+	// Verify SQLite file removed
+	if _, err := os.Stat(dbFile); !os.IsNotExist(err) {
+		t.Error("D1 SQLite file not removed on site delete")
+	}
+}
+
+func TestSite_Delete_CascadesDurableObjects(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "cascade-do", Name: "CascadeDO"}
+	env.db.Create(&site)
+
+	ns := models.DurableObjectNamespace{SiteID: site.ID, Name: "DO1"}
+	env.db.Create(&ns)
+
+	env.db.Create(&models.DurableObjectEntry{Namespace: ns.NamespaceID, ObjectID: "obj1", Key: "k1", ValueJSON: `"v1"`})
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sites/"+site.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify DO namespace cascaded
+	var nsCount int64
+	env.db.Model(&models.DurableObjectNamespace{}).Where("site_id = ?", site.ID).Count(&nsCount)
+	if nsCount != 0 {
+		t.Error("DO namespaces not cascaded on site delete")
+	}
+
+	// Verify DO entries cascaded
+	var entryCount int64
+	env.db.Model(&models.DurableObjectEntry{}).Where("namespace = ?", ns.NamespaceID).Count(&entryCount)
+	if entryCount != 0 {
+		t.Error("DO entries not cascaded on site delete")
+	}
+}

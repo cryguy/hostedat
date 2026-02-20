@@ -104,12 +104,49 @@ function parseMultipart(text, contentType) {
 	return fd;
 }
 
+// Async helper: read all chunks from a ReadableStream and return merged bytes.
+async function __readStreamBytes(stream) {
+	var reader = stream.getReader();
+	var chunks = [];
+	var totalLen = 0;
+	for (;;) {
+		var result = await reader.read();
+		if (result.done) break;
+		var chunk = result.value;
+		var bytes;
+		if (chunk instanceof Uint8Array) { bytes = chunk; }
+		else if (chunk instanceof ArrayBuffer) { bytes = new Uint8Array(chunk); }
+		else if (ArrayBuffer.isView(chunk)) { bytes = new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength); }
+		else if (typeof chunk === 'string') { bytes = new TextEncoder().encode(chunk); }
+		else { bytes = new TextEncoder().encode(String(chunk)); }
+		chunks.push(bytes);
+		totalLen += bytes.length;
+	}
+	var merged = new Uint8Array(totalLen);
+	var offset = 0;
+	for (var i = 0; i < chunks.length; i++) {
+		merged.set(chunks[i], offset);
+		offset += chunks[i].length;
+	}
+	return merged;
+}
+
 // Patch text() on both prototypes to handle non-string _body.
+// ReadableStream bodies (e.g. from TransformStream) are consumed via the
+// async reader API so that data from transform/flush callbacks is captured.
 Request.prototype.text = async function() {
+	if (this._body instanceof ReadableStream) {
+		var bytes = await __readStreamBytes(this._body);
+		return new TextDecoder().decode(bytes);
+	}
 	return bodyToString(this._body);
 };
 
 Response.prototype.text = async function() {
+	if (this._body instanceof ReadableStream) {
+		var bytes = await __readStreamBytes(this._body);
+		return new TextDecoder().decode(bytes);
+	}
 	return bodyToString(this._body);
 };
 
@@ -117,6 +154,10 @@ Response.prototype.text = async function() {
 Request.prototype.arrayBuffer = async function() {
 	if (this._body instanceof ArrayBuffer) return this._body;
 	if (ArrayBuffer.isView(this._body)) return this._body.buffer.slice(this._body.byteOffset, this._body.byteOffset + this._body.byteLength);
+	if (this._body instanceof ReadableStream) {
+		var bytes = await __readStreamBytes(this._body);
+		return bytes.buffer;
+	}
 	var t = bodyToString(this._body);
 	var enc = new TextEncoder();
 	return enc.encode(t).buffer;
@@ -125,18 +166,24 @@ Request.prototype.arrayBuffer = async function() {
 Response.prototype.arrayBuffer = async function() {
 	if (this._body instanceof ArrayBuffer) return this._body;
 	if (ArrayBuffer.isView(this._body)) return this._body.buffer.slice(this._body.byteOffset, this._body.byteOffset + this._body.byteLength);
+	if (this._body instanceof ReadableStream) {
+		var bytes = await __readStreamBytes(this._body);
+		return bytes.buffer;
+	}
 	var t = bodyToString(this._body);
 	var enc = new TextEncoder();
 	return enc.encode(t).buffer;
 };
 
-// Patch json() to use bodyToString.
+// Patch json() to use async text().
 Request.prototype.json = async function() {
-	return JSON.parse(bodyToString(this._body));
+	var t = await this.text();
+	return JSON.parse(t);
 };
 
 Response.prototype.json = async function() {
-	return JSON.parse(bodyToString(this._body));
+	var t = await this.text();
+	return JSON.parse(t);
 };
 
 // Add formData() to both prototypes.

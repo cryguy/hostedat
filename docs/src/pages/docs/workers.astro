@@ -1162,6 +1162,36 @@ hostedat storage update <site> <bucket-id> --public`}
       </tr>
       <tr>
         <td><code>POST</code></td>
+        <td><code>/worker/d1</code></td>
+        <td>Create D1 database binding</td>
+      </tr>
+      <tr>
+        <td><code>GET</code></td>
+        <td><code>/worker/d1</code></td>
+        <td>List D1 databases</td>
+      </tr>
+      <tr>
+        <td><code>DELETE</code></td>
+        <td><code>/worker/d1/:d1Id</code></td>
+        <td>Delete D1 database and its SQLite file</td>
+      </tr>
+      <tr>
+        <td><code>POST</code></td>
+        <td><code>/worker/do</code></td>
+        <td>Create Durable Object namespace binding</td>
+      </tr>
+      <tr>
+        <td><code>GET</code></td>
+        <td><code>/worker/do</code></td>
+        <td>List Durable Object namespaces</td>
+      </tr>
+      <tr>
+        <td><code>DELETE</code></td>
+        <td><code>/worker/do/:doId</code></td>
+        <td>Delete Durable Object namespace and all entries</td>
+      </tr>
+      <tr>
+        <td><code>POST</code></td>
         <td><code>/storage/buckets</code></td>
         <td>Create a storage bucket binding</td>
       </tr>

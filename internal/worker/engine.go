@@ -473,10 +473,11 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 	// WebSocket upgrade: if the response is 101 with a webSocket, hold the
 	// worker for the bridge loop instead of returning it to the pool.
 	if resp.HasWebSocket && resp.StatusCode == 101 {
-		// Store the server WebSocket reference for the bridge.
+		// Store the server WebSocket reference for the bridge and mark it as HTTP-bridged.
 		_, _ = ctx.RunScript(`
 			if (globalThis.__ws_check_resp && globalThis.__ws_check_resp._peer) {
 				globalThis.__ws_active_server = globalThis.__ws_check_resp._peer;
+				globalThis.__ws_active_server._isHTTPBridged = true;
 			}
 			delete globalThis.__ws_check_resp;
 		`, "ws_setup_bridge.js")

@@ -41,6 +41,24 @@ class WebSocket {
 		if (this._readyState !== 1) {
 			throw new DOMException('WebSocket is not open', 'InvalidStateError');
 		}
+		// In-process pair: deliver directly to peer via microtask queue
+		if (!this._isHTTPBridged && this._peer && this._peer._readyState >= 1) {
+			var peer = this._peer;
+			var evt;
+			if (typeof data === 'string') {
+				evt = { data: data };
+			} else if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+				var buf = data instanceof ArrayBuffer ? data : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+				evt = { data: buf.slice(0) };
+			} else {
+				evt = { data: String(data) };
+			}
+			queueMicrotask(function() {
+				peer._dispatch('message', evt);
+			});
+			return;
+		}
+		// HTTP bridge path
 		if (typeof data === 'string') {
 			__wsSend(data, false);
 		} else if (data instanceof ArrayBuffer) {
@@ -55,8 +73,22 @@ class WebSocket {
 	close(code, reason) {
 		if (this._readyState >= 2) return;
 		this._readyState = 2;
-		__wsClose(code || 1000, reason || '');
+		// Notify peer for in-process pairs
+		if (!this._isHTTPBridged && this._peer && this._peer._readyState === 1) {
+			var peer = this._peer;
+			var closeCode = code || 1000;
+			var closeReason = reason || '';
+			queueMicrotask(function() {
+				peer._readyState = 3;
+				peer._dispatch('close', { code: closeCode, reason: closeReason, wasClean: true });
+			});
+		}
+		// HTTP bridge path
+		if (this._isHTTPBridged) {
+			__wsClose(code || 1000, reason || '');
+		}
 		this._readyState = 3;
+		this._dispatch('close', { code: code || 1000, reason: reason || '', wasClean: true });
 	}
 
 	addEventListener(type, handler) {

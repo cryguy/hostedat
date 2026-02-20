@@ -8,19 +8,16 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/cryguy/hostedat/internal/models"
 	v8 "github.com/tommie/v8go"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-// DurableObjectEntry is the GORM model for durable object storage.
-type DurableObjectEntry struct {
-	ID        uint   `gorm:"primaryKey"`
-	Namespace string `gorm:"uniqueIndex:idx_do_lookup"`
-	ObjectID  string `gorm:"uniqueIndex:idx_do_lookup"`
-	Key       string `gorm:"uniqueIndex:idx_do_lookup"`
-	ValueJSON string
-}
+// DurableObjectEntry is a type alias so existing worker code can reference it
+// without fully qualifying models.DurableObjectEntry. The struct definition
+// lives in internal/models/models.go to avoid an import cycle.
+type DurableObjectEntry = models.DurableObjectEntry
 
 // DurableObjectBridge provides Go methods backing the Durable Object JS bindings.
 type DurableObjectBridge struct {

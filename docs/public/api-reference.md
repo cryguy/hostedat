@@ -315,7 +315,7 @@ curl -X PATCH https://example.com/api/v1/sites/abc123def456 \
 
 ### DELETE /sites/:id
 
-Delete a site and all associated data (deployments, env vars, KV, cron schedules, logs, storage buckets).
+Delete a site and all associated data (deployments, env vars, KV, D1 databases, Durable Object namespaces, cron schedules, logs, storage buckets).
 
 **Auth:** JWT or API key (must own site or be admin)
 
@@ -615,6 +615,150 @@ Get the last 100 worker console logs for a site (newest first).
     "created_at": "2024-01-01T00:00:00Z"
   }
 ]
+```
+
+---
+
+### POST /sites/:id/worker/d1
+
+Create a D1 database binding for a site. Each D1 database gets its own isolated SQLite file on disk.
+
+**Auth:** JWT or API key (must own site or be admin)
+
+**Request:**
+```json
+{ "name": "MY_DB" }
+```
+
+- `name` (string, required): Binding name used in worker `env`. Must be unique per site.
+
+**Response:** `201 Created`
+```json
+{
+  "id": "d1abc123def456",
+  "site_id": "abc123def456",
+  "name": "MY_DB",
+  "database_id": "dbid12345678",
+  "created_at": "2024-01-01T00:00:00Z"
+}
+```
+
+```bash
+curl -X POST https://example.com/api/v1/sites/abc123def456/worker/d1 \
+  -H "Authorization: Bearer eyJ..." \
+  -H "Content-Type: application/json" \
+  -d '{"name":"MY_DB"}'
+```
+
+---
+
+### GET /sites/:id/worker/d1
+
+List D1 databases for a site.
+
+**Auth:** JWT or API key (must own site or be admin)
+
+**Response:** `200 OK`
+```json
+{
+  "items": [
+    {
+      "id": "d1abc123def456",
+      "site_id": "abc123def456",
+      "name": "MY_DB",
+      "database_id": "dbid12345678",
+      "created_at": "2024-01-01T00:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+---
+
+### DELETE /sites/:id/worker/d1/:d1Id
+
+Delete a D1 database and remove its SQLite file from disk.
+
+**Auth:** JWT or API key (must own site or be admin)
+
+**Response:** `204 No Content`
+
+```bash
+curl -X DELETE https://example.com/api/v1/sites/abc123def456/worker/d1/d1abc123def456 \
+  -H "Authorization: Bearer eyJ..."
+```
+
+---
+
+### POST /sites/:id/worker/do
+
+Create a Durable Object namespace binding for a site.
+
+**Auth:** JWT or API key (must own site or be admin)
+
+**Request:**
+```json
+{ "name": "MY_DO" }
+```
+
+- `name` (string, required): Binding name used in worker `env`. Must be unique per site.
+
+**Response:** `201 Created`
+```json
+{
+  "id": "do123abc456789",
+  "site_id": "abc123def456",
+  "name": "MY_DO",
+  "namespace_id": "nsid12345678",
+  "created_at": "2024-01-01T00:00:00Z"
+}
+```
+
+```bash
+curl -X POST https://example.com/api/v1/sites/abc123def456/worker/do \
+  -H "Authorization: Bearer eyJ..." \
+  -H "Content-Type: application/json" \
+  -d '{"name":"MY_DO"}'
+```
+
+---
+
+### GET /sites/:id/worker/do
+
+List Durable Object namespaces for a site.
+
+**Auth:** JWT or API key (must own site or be admin)
+
+**Response:** `200 OK`
+```json
+{
+  "items": [
+    {
+      "id": "do123abc456789",
+      "site_id": "abc123def456",
+      "name": "MY_DO",
+      "namespace_id": "nsid12345678",
+      "created_at": "2024-01-01T00:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+---
+
+### DELETE /sites/:id/worker/do/:doId
+
+Delete a Durable Object namespace and all its stored entries.
+
+**Auth:** JWT or API key (must own site or be admin)
+
+**Response:** `204 No Content`
+
+```bash
+curl -X DELETE https://example.com/api/v1/sites/abc123def456/worker/do/do123abc456789 \
+  -H "Authorization: Bearer eyJ..."
 ```
 
 ---

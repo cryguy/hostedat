@@ -13,6 +13,7 @@ import (
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/seaweedfs"
 	"github.com/cryguy/hostedat/internal/storage"
+	"github.com/cryguy/hostedat/internal/worker"
 	"github.com/labstack/echo/v4"
 	"github.com/minio/minio-go/v7"
 	"gorm.io/gorm"
@@ -173,12 +174,18 @@ func (h *SiteHandler) Delete(c echo.Context) error {
 		return errorJSON(c, http.StatusForbidden, "access denied")
 	}
 
-	// Collect storage buckets and S3 credentials before deleting DB records.
+	// Collect storage buckets, S3 credentials, and D1 databases before deleting DB records.
 	var storageBuckets []models.StorageBucket
 	h.DB.Where("site_id = ?", siteID).Find(&storageBuckets)
 
 	var s3Creds []models.S3Credential
 	h.DB.Where("user_id = ?", site.UserID).Find(&s3Creds)
+
+	var d1Databases []models.D1Database
+	h.DB.Where("site_id = ?", siteID).Find(&d1Databases)
+
+	var doNamespaces []models.DurableObjectNamespace
+	h.DB.Where("site_id = ?", siteID).Find(&doNamespaces)
 
 	// Delete all child records and the site in a single transaction.
 	if err := h.DB.Transaction(func(tx *gorm.DB) error {
@@ -191,11 +198,22 @@ func (h *SiteHandler) Delete(c echo.Context) error {
 			}
 		}
 
+		// Delete Durable Object entries via namespace IDs.
+		var doNsIDs []string
+		tx.Model(&models.DurableObjectNamespace{}).Where("site_id = ?", siteID).Pluck("namespace_id", &doNsIDs)
+		if len(doNsIDs) > 0 {
+			if err := tx.Where("namespace IN ?", doNsIDs).Delete(&models.DurableObjectEntry{}).Error; err != nil {
+				return err
+			}
+		}
+
 		// Delete all site-scoped child records.
 		for _, model := range []interface{}{
 			&models.Deployment{},
 			&models.WorkerEnvVar{},
 			&models.KVNamespace{},
+			&models.D1Database{},
+			&models.DurableObjectNamespace{},
 			&models.CronSchedule{},
 			&models.WorkerLog{},
 			&models.StorageBucket{},
@@ -216,6 +234,15 @@ func (h *SiteHandler) Delete(c echo.Context) error {
 
 	// External cleanup after successful DB transaction (best-effort).
 	_ = h.Storage.DeleteSite(siteID)
+
+	// Remove D1 SQLite database files from disk.
+	dataDir := worker.GetDataDir()
+	for _, d1 := range d1Databases {
+		dbPath := worker.GetD1Path(dataDir, d1.DatabaseID)
+		if err := worker.DeleteFile(dbPath); err != nil {
+			log.Printf("warning: failed to remove D1 database file %s: %v", dbPath, err)
+		}
+	}
 
 	// Remove external S3 buckets that belonged to this site.
 	if h.S3Client != nil {

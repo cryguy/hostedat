@@ -14,6 +14,24 @@ import (
 	_ "github.com/glebarez/sqlite"
 )
 
+// GetDataDir returns the data directory path from env or default.
+func GetDataDir() string {
+	if dir := os.Getenv("HOSTEDAT_DATA_DIR"); dir != "" {
+		return dir
+	}
+	return "./data"
+}
+
+// GetD1Path returns the full path to a D1 database file.
+func GetD1Path(dataDir, databaseID string) string {
+	return filepath.Join(dataDir, "d1", databaseID+".sqlite3")
+}
+
+// DeleteFile removes a file from disk (best-effort, ignores errors).
+func DeleteFile(path string) error {
+	return os.Remove(path)
+}
+
 // D1Bridge provides Go methods that back the D1 database JS bindings.
 // Each D1 binding gets its own isolated SQLite database, completely
 // separate from the application's main database.

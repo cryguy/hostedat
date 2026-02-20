@@ -1772,3 +1772,399 @@ func TestCompression_BrotliInStreamingFormats(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Bug 2 regression: new Response(stream).text() / .arrayBuffer() with
+// ReadableStream bodies from CompressionStream/DecompressionStream.
+//
+// Before the fix, Response.prototype.text() and .arrayBuffer() did not
+// handle ReadableStream bodies -- they fell through to bodyToString() which
+// only drained the synchronous _queue, missing data produced asynchronously
+// by transform streams. The fix added __readStreamBytes() in bodytypes.go
+// to properly await and collect all chunks from a ReadableStream.
+// ---------------------------------------------------------------------------
+
+// TestCompression_ResponseTextFromDecompressionStream verifies that
+// new Response(decompressedStream).text() correctly reads a ReadableStream
+// body produced by DecompressionStream (gzip round-trip).
+func TestCompression_ResponseTextFromDecompressionStream(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const original = "Bug2 regression: Response.text() must handle ReadableStream bodies! " +
+      "Bug2 regression: Response.text() must handle ReadableStream bodies! " +
+      "Bug2 regression: Response.text() must handle ReadableStream bodies!";
+
+    // Compress via CompressionStream
+    const cs = new CompressionStream("gzip");
+    const cw = cs.writable.getWriter();
+    cw.write(new TextEncoder().encode(original));
+    cw.close();
+
+    // Collect compressed bytes
+    const chunks = [];
+    const cr = cs.readable.getReader();
+    while (true) {
+      const { done, value } = await cr.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    let cLen = 0;
+    for (const c of chunks) cLen += c.length;
+    const compressed = new Uint8Array(cLen);
+    let off = 0;
+    for (const c of chunks) { compressed.set(c, off); off += c.length; }
+
+    // Decompress -- pass the ReadableStream directly to new Response()
+    const ds = new DecompressionStream("gzip");
+    const dw = ds.writable.getWriter();
+    dw.write(compressed);
+    dw.close();
+
+    // KEY: This is the regression path -- new Response(readableStream).text()
+    const resp = new Response(ds.readable);
+    const text = await resp.text();
+
+    return Response.json({
+      match: text === original,
+      textLen: text.length,
+      originalLen: original.length,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Match       bool `json:"match"`
+		TextLen     int  `json:"textLen"`
+		OriginalLen int  `json:"originalLen"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Match {
+		t.Errorf("new Response(decompressedStream).text() mismatch: got len %d, want %d", data.TextLen, data.OriginalLen)
+	}
+}
+
+// TestCompression_ResponseArrayBufferFromDecompressionStream verifies that
+// new Response(decompressedStream).arrayBuffer() correctly reads a
+// ReadableStream body produced by DecompressionStream (gzip round-trip).
+func TestCompression_ResponseArrayBufferFromDecompressionStream(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const original = "Bug2 regression: Response.arrayBuffer() must handle ReadableStream! " +
+      "Bug2 regression: Response.arrayBuffer() must handle ReadableStream! " +
+      "Bug2 regression: Response.arrayBuffer() must handle ReadableStream!";
+    const originalBytes = new TextEncoder().encode(original);
+
+    // Compress
+    const cs = new CompressionStream("gzip");
+    const cw = cs.writable.getWriter();
+    cw.write(originalBytes);
+    cw.close();
+    const chunks = [];
+    const cr = cs.readable.getReader();
+    while (true) {
+      const { done, value } = await cr.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    let cLen = 0;
+    for (const c of chunks) cLen += c.length;
+    const compressed = new Uint8Array(cLen);
+    let off = 0;
+    for (const c of chunks) { compressed.set(c, off); off += c.length; }
+
+    // Decompress -- pass the ReadableStream directly to new Response()
+    const ds = new DecompressionStream("gzip");
+    const dw = ds.writable.getWriter();
+    dw.write(compressed);
+    dw.close();
+
+    // KEY: This is the regression path -- new Response(readableStream).arrayBuffer()
+    const resp = new Response(ds.readable);
+    const ab = await resp.arrayBuffer();
+    const resultBytes = new Uint8Array(ab);
+
+    // Verify byte-for-byte match
+    let match = resultBytes.length === originalBytes.length;
+    for (let i = 0; i < originalBytes.length && match; i++) {
+      if (resultBytes[i] !== originalBytes[i]) match = false;
+    }
+
+    return Response.json({
+      match,
+      resultLen: resultBytes.length,
+      originalLen: originalBytes.length,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Match       bool `json:"match"`
+		ResultLen   int  `json:"resultLen"`
+		OriginalLen int  `json:"originalLen"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Match {
+		t.Errorf("new Response(decompressedStream).arrayBuffer() mismatch: got len %d, want %d", data.ResultLen, data.OriginalLen)
+	}
+}
+
+// TestCompression_ResponseTextFromCompressionStream verifies that
+// new Response(compressedStream).arrayBuffer() works, and the compressed
+// bytes can then be decompressed back to the original text. This exercises
+// the Response.arrayBuffer() -> ReadableStream path on the compression side.
+func TestCompression_ResponseTextFromCompressionStream(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const original = "Testing Response.arrayBuffer() on compressed stream output. ".repeat(5);
+    const encoded = new TextEncoder().encode(original);
+
+    // Compress
+    const cs = new CompressionStream("gzip");
+    const cw = cs.writable.getWriter();
+    cw.write(encoded);
+    cw.close();
+
+    // Use new Response(compressedStream).arrayBuffer() to read compressed bytes
+    const compResp = new Response(cs.readable);
+    const compressedAB = await compResp.arrayBuffer();
+    const compressed = new Uint8Array(compressedAB);
+
+    // Now decompress those bytes and use Response.text() to read the result
+    const ds = new DecompressionStream("gzip");
+    const dw = ds.writable.getWriter();
+    dw.write(compressed);
+    dw.close();
+
+    const decompResp = new Response(ds.readable);
+    const text = await decompResp.text();
+
+    return Response.json({
+      match: text === original,
+      compressedLen: compressed.length,
+      decompressedTextLen: text.length,
+      originalLen: original.length,
+      wasCompressed: compressed.length < encoded.length,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Match               bool `json:"match"`
+		CompressedLen       int  `json:"compressedLen"`
+		DecompressedTextLen int  `json:"decompressedTextLen"`
+		OriginalLen         int  `json:"originalLen"`
+		WasCompressed       bool `json:"wasCompressed"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Match {
+		t.Errorf("Response.arrayBuffer()+Response.text() roundtrip mismatch: got len %d, want %d", data.DecompressedTextLen, data.OriginalLen)
+	}
+	if !data.WasCompressed {
+		t.Errorf("compressed (%d) should be smaller than original (%d)", data.CompressedLen, data.OriginalLen)
+	}
+}
+
+// TestCompression_ResponseTextAllFormats verifies new Response(decompressedStream).text()
+// works for all supported compression formats: gzip, deflate, deflate-raw, br.
+func TestCompression_ResponseTextAllFormats(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	for _, format := range []string{"gzip", "deflate", "deflate-raw", "br"} {
+		t.Run(format, func(t *testing.T) {
+			source := `export default {
+  async fetch(request, env) {
+    const format = "` + format + `";
+    const original = "Response.text() regression for " + format + "! ".repeat(10);
+
+    // Compress
+    const cs = new CompressionStream(format);
+    const cw = cs.writable.getWriter();
+    cw.write(new TextEncoder().encode(original));
+    cw.close();
+
+    // Read compressed via Response.arrayBuffer()
+    const compResp = new Response(cs.readable);
+    const compAB = await compResp.arrayBuffer();
+
+    // Decompress
+    const ds = new DecompressionStream(format);
+    const dw = ds.writable.getWriter();
+    dw.write(new Uint8Array(compAB));
+    dw.close();
+
+    // Read decompressed via Response.text()
+    const decompResp = new Response(ds.readable);
+    const text = await decompResp.text();
+
+    return Response.json({
+      match: text === original,
+      textLen: text.length,
+      originalLen: original.length,
+    });
+  },
+};`
+
+			r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+			assertOK(t, r)
+
+			var data struct {
+				Match       bool `json:"match"`
+				TextLen     int  `json:"textLen"`
+				OriginalLen int  `json:"originalLen"`
+			}
+			if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if !data.Match {
+				t.Errorf("Response.text() for %s: got len %d, want %d", format, data.TextLen, data.OriginalLen)
+			}
+		})
+	}
+}
+
+// TestCompression_ResponseJsonFromDecompressionStream verifies that
+// new Response(decompressedStream).json() works, since json() delegates
+// to text() which uses __readStreamBytes() for ReadableStream bodies.
+func TestCompression_ResponseJsonFromDecompressionStream(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const obj = { key: "value", nested: { arr: [1, 2, 3] }, flag: true };
+    const jsonStr = JSON.stringify(obj);
+
+    // Compress the JSON string
+    const cs = new CompressionStream("gzip");
+    const cw = cs.writable.getWriter();
+    cw.write(new TextEncoder().encode(jsonStr));
+    cw.close();
+
+    // Read compressed bytes via Response.arrayBuffer()
+    const compResp = new Response(cs.readable);
+    const compAB = await compResp.arrayBuffer();
+
+    // Decompress and read via Response.json()
+    const ds = new DecompressionStream("gzip");
+    const dw = ds.writable.getWriter();
+    dw.write(new Uint8Array(compAB));
+    dw.close();
+
+    const decompResp = new Response(ds.readable);
+    const parsed = await decompResp.json();
+
+    return Response.json({
+      keyMatch: parsed.key === "value",
+      arrMatch: JSON.stringify(parsed.nested.arr) === "[1,2,3]",
+      flagMatch: parsed.flag === true,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		KeyMatch  bool `json:"keyMatch"`
+		ArrMatch  bool `json:"arrMatch"`
+		FlagMatch bool `json:"flagMatch"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.KeyMatch {
+		t.Error("Response.json() from decompression stream: key mismatch")
+	}
+	if !data.ArrMatch {
+		t.Error("Response.json() from decompression stream: nested array mismatch")
+	}
+	if !data.FlagMatch {
+		t.Error("Response.json() from decompression stream: flag mismatch")
+	}
+}
+
+// TestCompression_ResponseTextBinaryRoundTrip verifies that binary data
+// (all byte values 0-255) survives a compress -> Response.arrayBuffer() ->
+// decompress -> Response.arrayBuffer() round-trip without corruption.
+func TestCompression_ResponseTextBinaryRoundTrip(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    // Create binary data with all byte values
+    const binary = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) binary[i] = i;
+
+    // Compress
+    const cs = new CompressionStream("gzip");
+    const cw = cs.writable.getWriter();
+    cw.write(binary);
+    cw.close();
+
+    // Read compressed via Response.arrayBuffer()
+    const compResp = new Response(cs.readable);
+    const compAB = await compResp.arrayBuffer();
+
+    // Decompress
+    const ds = new DecompressionStream("gzip");
+    const dw = ds.writable.getWriter();
+    dw.write(new Uint8Array(compAB));
+    dw.close();
+
+    // Read decompressed via Response.arrayBuffer()
+    const decompResp = new Response(ds.readable);
+    const decompAB = await decompResp.arrayBuffer();
+    const result = new Uint8Array(decompAB);
+
+    let match = result.length === 256;
+    for (let i = 0; i < 256 && match; i++) {
+      if (result[i] !== i) match = false;
+    }
+
+    return Response.json({ match, length: result.length });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Match  bool `json:"match"`
+		Length int  `json:"length"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.Match {
+		t.Error("binary data should survive compress->Response.arrayBuffer()->decompress->Response.arrayBuffer() round-trip")
+	}
+	if data.Length != 256 {
+		t.Errorf("decompressed length = %d, want 256", data.Length)
+	}
+}

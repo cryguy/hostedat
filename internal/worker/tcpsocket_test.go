@@ -910,3 +910,303 @@ func TestTCPSocket_ConnectObjectWithoutPort(t *testing.T) {
 		t.Fatalf("expected error about port, got: %s", result.String())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Regression tests for Bug 5: TCP socket reads hang
+//
+// The root cause was that __tcpRead returned "" immediately when no data was
+// buffered, causing the JS ReadableStream pull() to spin without yielding.
+// The fix adds a hasData channel to tcpSocketBuffer: readLoop signals it when
+// data arrives, and __tcpRead calls waitForData(5s) when take() returns empty.
+// ---------------------------------------------------------------------------
+
+// TestTCPSocketBuffer_WaitForData tests the Go-level waitForData method.
+// It verifies that waitForData unblocks promptly when the readLoop signals
+// new data via the hasData channel.
+func TestTCPSocketBuffer_WaitForData(t *testing.T) {
+	server, client := net.Pipe()
+	defer func() { _ = server.Close() }()
+	defer func() { _ = client.Close() }()
+
+	buf := &tcpSocketBuffer{
+		conn:    client,
+		hasData: make(chan struct{}, 1),
+	}
+	go buf.readLoop()
+
+	// Write data from server side after a short delay.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_, _ = server.Write([]byte("delayed data"))
+	}()
+
+	// waitForData should unblock once the readLoop receives the data.
+	start := time.Now()
+	buf.waitForData(3 * time.Second)
+	elapsed := time.Since(start)
+
+	// Should unblock well before the 3s timeout.
+	if elapsed > 2*time.Second {
+		t.Fatalf("waitForData took %v, expected prompt unblock", elapsed)
+	}
+
+	data, eof, _ := buf.take(1024)
+	if data == "" {
+		t.Fatal("expected data after waitForData, got empty")
+	}
+	if eof {
+		t.Fatal("unexpected EOF")
+	}
+}
+
+// TestTCPSocketBuffer_WaitForDataTimeout verifies that waitForData returns
+// after the timeout elapses when no data arrives.
+func TestTCPSocketBuffer_WaitForDataTimeout(t *testing.T) {
+	server, client := net.Pipe()
+	defer func() { _ = server.Close() }()
+	defer func() { _ = client.Close() }()
+
+	buf := &tcpSocketBuffer{
+		conn:    client,
+		hasData: make(chan struct{}, 1),
+	}
+	go buf.readLoop()
+
+	// Don't write any data — waitForData should timeout.
+	start := time.Now()
+	buf.waitForData(100 * time.Millisecond)
+	elapsed := time.Since(start)
+
+	if elapsed < 80*time.Millisecond {
+		t.Fatalf("waitForData returned too early: %v", elapsed)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("waitForData took too long: %v (expected ~100ms)", elapsed)
+	}
+
+	// Buffer should still be empty.
+	data, eof, _ := buf.take(1024)
+	if data != "" {
+		t.Fatalf("expected empty data, got %q", data)
+	}
+	if eof {
+		t.Fatal("unexpected EOF")
+	}
+}
+
+// TestTCPSocketBuffer_WaitForDataEOF verifies that waitForData unblocks
+// when the connection closes (EOF signal).
+func TestTCPSocketBuffer_WaitForDataEOF(t *testing.T) {
+	server, client := net.Pipe()
+	defer func() { _ = client.Close() }()
+
+	buf := &tcpSocketBuffer{
+		conn:    client,
+		hasData: make(chan struct{}, 1),
+	}
+	go buf.readLoop()
+
+	// Close the server side after a short delay to trigger EOF.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_ = server.Close()
+	}()
+
+	start := time.Now()
+	buf.waitForData(3 * time.Second)
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Fatalf("waitForData took %v on EOF, expected prompt unblock", elapsed)
+	}
+
+	_, eof, _ := buf.take(1024)
+	if !eof {
+		t.Fatal("expected EOF after server close")
+	}
+}
+
+// TestTCPSocket_ReadWithoutExplicitWait is the critical regression test.
+// It verifies that JS code can read TCP data WITHOUT using scheduler.wait().
+// Before the fix, this would hang or return empty because pull() saw no data
+// and returned immediately (busy-loop). After the fix, __tcpRead blocks via
+// waitForData until the readLoop signals that data has arrived.
+func TestTCPSocket_ReadWithoutExplicitWait(t *testing.T) {
+	disableTCPSSRF(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	// Server writes data after a small delay (simulating real-world latency),
+	// then closes the connection.
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+		_, _ = conn.Write([]byte("no-wait-needed"))
+		_ = conn.Close()
+	}()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// KEY: No scheduler.wait() anywhere — the read should block internally
+	// until data arrives via the hasData channel mechanism.
+	source := fmt.Sprintf(`export default {
+  async fetch(request, env) {
+    var socket = connect("127.0.0.1:%d");
+    var reader = socket.readable.getReader();
+    var result = await reader.read();
+    var text = "";
+    if (result.value) {
+      text = new TextDecoder().decode(result.value);
+    }
+    return Response.json({ text: text, done: result.done });
+  },
+};`, port)
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Text string `json:"text"`
+		Done bool   `json:"done"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Text != "no-wait-needed" {
+		t.Fatalf("expected %q, got %q", "no-wait-needed", data.Text)
+	}
+}
+
+// TestTCPSocket_ReadMultipleChunksWithoutWait verifies that multiple sequential
+// reads work without explicit scheduler.wait() calls. The server sends two
+// chunks with a delay between them; the JS side reads both via the blocking
+// __tcpRead mechanism.
+func TestTCPSocket_ReadMultipleChunksWithoutWait(t *testing.T) {
+	disableTCPSSRF(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		// Send two separate chunks with a gap between them.
+		_, _ = conn.Write([]byte("chunk1"))
+		time.Sleep(100 * time.Millisecond)
+		_, _ = conn.Write([]byte("chunk2"))
+		_ = conn.Close()
+	}()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Read all chunks until done, accumulating the text. No scheduler.wait().
+	source := fmt.Sprintf(`export default {
+  async fetch(request, env) {
+    var socket = connect("127.0.0.1:%d");
+    var reader = socket.readable.getReader();
+    var allText = "";
+    while (true) {
+      var result = await reader.read();
+      if (result.value) {
+        allText += new TextDecoder().decode(result.value);
+      }
+      if (result.done) break;
+    }
+    return Response.json({ text: allText });
+  },
+};`, port)
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !strings.Contains(data.Text, "chunk1") || !strings.Contains(data.Text, "chunk2") {
+		t.Fatalf("expected both chunks, got %q", data.Text)
+	}
+}
+
+// TestTCPSocket_EchoRoundTripWithoutWait verifies a full echo round-trip:
+// JS writes data, the server echoes it back, and JS reads the echo — all
+// without scheduler.wait(). This is the most realistic regression test.
+func TestTCPSocket_EchoRoundTripWithoutWait(t *testing.T) {
+	disableTCPSSRF(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	// Echo server: reads up to 256 bytes, writes them back, closes.
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		buf := make([]byte, 256)
+		n, err := conn.Read(buf)
+		if err != nil {
+			return
+		}
+		_, _ = conn.Write(buf[:n])
+	}()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Note: we must NOT close the writer before reading because the current
+	// implementation fully closes the TCP connection on writer.close() (no
+	// half-close support). The echo server responds as soon as it reads data,
+	// so closing the write side is unnecessary.
+	source := fmt.Sprintf(`export default {
+  async fetch(request, env) {
+    var socket = connect("127.0.0.1:%d");
+    var writer = socket.writable.getWriter();
+    await writer.write(new TextEncoder().encode("ping"));
+
+    var reader = socket.readable.getReader();
+    var result = await reader.read();
+    var text = "";
+    if (result.value) {
+      text = new TextDecoder().decode(result.value);
+    }
+    return Response.json({ echo: text });
+  },
+};`, port)
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Echo string `json:"echo"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Echo != "ping" {
+		t.Fatalf("expected echo %q, got %q", "ping", data.Echo)
+	}
+}
