@@ -260,6 +260,48 @@ func (sb *StorageBucket) BeforeCreate(_ *gorm.DB) error {
 	return nil
 }
 
+// D1Database represents a D1 database binding for a site.
+type D1Database struct {
+	ID         string    `gorm:"primaryKey;size:20" json:"id"`
+	SiteID     string    `gorm:"not null;uniqueIndex:idx_d1_databases_site_name,priority:1" json:"site_id"`
+	Name       string    `gorm:"not null;uniqueIndex:idx_d1_databases_site_name,priority:2" json:"name"`
+	DatabaseID string    `gorm:"uniqueIndex;not null" json:"database_id"`
+	CreatedAt  time.Time `json:"created_at"`
+
+	Site Site `gorm:"foreignKey:SiteID" json:"-"`
+}
+
+func (d *D1Database) BeforeCreate(_ *gorm.DB) error {
+	if d.ID == "" {
+		d.ID = generateID()
+	}
+	if d.DatabaseID == "" {
+		d.DatabaseID = generateID()
+	}
+	return nil
+}
+
+// DurableObjectNamespace represents a Durable Object namespace binding for a site.
+type DurableObjectNamespace struct {
+	ID          string    `gorm:"primaryKey;size:20" json:"id"`
+	SiteID      string    `gorm:"not null;uniqueIndex:idx_do_namespaces_site_name,priority:1" json:"site_id"`
+	Name        string    `gorm:"not null;uniqueIndex:idx_do_namespaces_site_name,priority:2" json:"name"`
+	NamespaceID string    `gorm:"uniqueIndex;not null" json:"namespace_id"`
+	CreatedAt   time.Time `json:"created_at"`
+
+	Site Site `gorm:"foreignKey:SiteID" json:"-"`
+}
+
+func (d *DurableObjectNamespace) BeforeCreate(_ *gorm.DB) error {
+	if d.ID == "" {
+		d.ID = generateID()
+	}
+	if d.NamespaceID == "" {
+		d.NamespaceID = generateID()
+	}
+	return nil
+}
+
 type S3Credential struct {
 	ID            string     `gorm:"primaryKey;size:20" json:"id"`
 	UserID        string     `gorm:"index;not null" json:"user_id"`

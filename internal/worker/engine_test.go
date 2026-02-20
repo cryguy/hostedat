@@ -297,6 +297,189 @@ func TestBuildEnvFromDB_WithAssets(t *testing.T) {
 	}
 }
 
+func TestBuildEnvFromDB_D1Bindings(t *testing.T) {
+	db := testDB(t)
+	siteID := "test-site-d1"
+
+	u := models.User{Email: "d1-test@test.local", PasswordHash: "hash"}
+	if err := db.Create(&u).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	s := models.Site{ID: siteID, UserID: u.ID, SubdomainSlug: "d1-site", Name: "D1 Site"}
+	if err := db.Create(&s).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+
+	if err := db.Create(&models.D1Database{SiteID: siteID, Name: "MY_DB", DatabaseID: "db-abc"}).Error; err != nil {
+		t.Fatalf("create D1 database MY_DB: %v", err)
+	}
+	if err := db.Create(&models.D1Database{SiteID: siteID, Name: "ANALYTICS", DatabaseID: "db-xyz"}).Error; err != nil {
+		t.Fatalf("create D1 database ANALYTICS: %v", err)
+	}
+
+	env := BuildEnvFromDB(db, siteID, nil)
+
+	wantMyDB := siteID + "_db-abc"
+	if env.D1Bindings["MY_DB"] != wantMyDB {
+		t.Errorf("D1Bindings[MY_DB] = %q, want %q", env.D1Bindings["MY_DB"], wantMyDB)
+	}
+	wantAnalytics := siteID + "_db-xyz"
+	if env.D1Bindings["ANALYTICS"] != wantAnalytics {
+		t.Errorf("D1Bindings[ANALYTICS] = %q, want %q", env.D1Bindings["ANALYTICS"], wantAnalytics)
+	}
+	if len(env.D1Bindings) != 2 {
+		t.Errorf("D1Bindings length = %d, want 2", len(env.D1Bindings))
+	}
+}
+
+func TestBuildEnvFromDB_DurableObjectBindings(t *testing.T) {
+	db := testDB(t)
+	siteID := "test-site-do"
+
+	u := models.User{Email: "do-test@test.local", PasswordHash: "hash"}
+	if err := db.Create(&u).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	s := models.Site{ID: siteID, UserID: u.ID, SubdomainSlug: "do-site", Name: "DO Site"}
+	if err := db.Create(&s).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+
+	if err := db.Create(&models.DurableObjectNamespace{SiteID: siteID, Name: "COUNTER", NamespaceID: "ns-counter"}).Error; err != nil {
+		t.Fatalf("create DO namespace COUNTER: %v", err)
+	}
+	if err := db.Create(&models.DurableObjectNamespace{SiteID: siteID, Name: "ROOM", NamespaceID: "ns-room"}).Error; err != nil {
+		t.Fatalf("create DO namespace ROOM: %v", err)
+	}
+
+	env := BuildEnvFromDB(db, siteID, nil)
+
+	wantCounter := siteID + ":ns-counter"
+	if env.DurableObjectBindings["COUNTER"] != wantCounter {
+		t.Errorf("DurableObjectBindings[COUNTER] = %q, want %q", env.DurableObjectBindings["COUNTER"], wantCounter)
+	}
+	wantRoom := siteID + ":ns-room"
+	if env.DurableObjectBindings["ROOM"] != wantRoom {
+		t.Errorf("DurableObjectBindings[ROOM] = %q, want %q", env.DurableObjectBindings["ROOM"], wantRoom)
+	}
+	if len(env.DurableObjectBindings) != 2 {
+		t.Errorf("DurableObjectBindings length = %d, want 2", len(env.DurableObjectBindings))
+	}
+}
+
+func TestBuildEnvFromDB_EmptyD1AndDO(t *testing.T) {
+	db := testDB(t)
+	siteID := "test-site-empty-d1do"
+
+	u := models.User{Email: "empty-d1do@test.local", PasswordHash: "hash"}
+	if err := db.Create(&u).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	s := models.Site{ID: siteID, UserID: u.ID, SubdomainSlug: "empty-d1do-site", Name: "Empty D1DO Site"}
+	if err := db.Create(&s).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+
+	env := BuildEnvFromDB(db, siteID, nil)
+
+	if env.D1Bindings == nil {
+		t.Error("D1Bindings should not be nil, expected empty map")
+	}
+	if len(env.D1Bindings) != 0 {
+		t.Errorf("D1Bindings length = %d, want 0", len(env.D1Bindings))
+	}
+	if env.DurableObjectBindings == nil {
+		t.Error("DurableObjectBindings should not be nil, expected empty map")
+	}
+	if len(env.DurableObjectBindings) != 0 {
+		t.Errorf("DurableObjectBindings length = %d, want 0", len(env.DurableObjectBindings))
+	}
+}
+
+func TestBuildEnvFromDB_SiteIsolation(t *testing.T) {
+	db := testDB(t)
+
+	// Create two users and two sites.
+	uA := models.User{Email: "iso-a@test.local", PasswordHash: "hash"}
+	if err := db.Create(&uA).Error; err != nil {
+		t.Fatalf("create user A: %v", err)
+	}
+	uB := models.User{Email: "iso-b@test.local", PasswordHash: "hash"}
+	if err := db.Create(&uB).Error; err != nil {
+		t.Fatalf("create user B: %v", err)
+	}
+
+	siteA := "site-iso-a"
+	siteB := "site-iso-b"
+	if err := db.Create(&models.Site{ID: siteA, UserID: uA.ID, SubdomainSlug: "iso-a", Name: "Site A"}).Error; err != nil {
+		t.Fatalf("create site A: %v", err)
+	}
+	if err := db.Create(&models.Site{ID: siteB, UserID: uB.ID, SubdomainSlug: "iso-b", Name: "Site B"}).Error; err != nil {
+		t.Fatalf("create site B: %v", err)
+	}
+
+	// Create D1 databases with same binding name but different sites.
+	if err := db.Create(&models.D1Database{SiteID: siteA, Name: "DB", DatabaseID: "db-alpha"}).Error; err != nil {
+		t.Fatalf("create D1 for site A: %v", err)
+	}
+	if err := db.Create(&models.D1Database{SiteID: siteB, Name: "DB", DatabaseID: "db-beta"}).Error; err != nil {
+		t.Fatalf("create D1 for site B: %v", err)
+	}
+
+	// Create DO namespaces with same binding name but different sites.
+	if err := db.Create(&models.DurableObjectNamespace{SiteID: siteA, Name: "DO", NamespaceID: "ns-alpha"}).Error; err != nil {
+		t.Fatalf("create DO for site A: %v", err)
+	}
+	if err := db.Create(&models.DurableObjectNamespace{SiteID: siteB, Name: "DO", NamespaceID: "ns-beta"}).Error; err != nil {
+		t.Fatalf("create DO for site B: %v", err)
+	}
+
+	envA := BuildEnvFromDB(db, siteA, nil)
+	envB := BuildEnvFromDB(db, siteB, nil)
+
+	// Each site should only get its own D1 bindings.
+	if len(envA.D1Bindings) != 1 {
+		t.Errorf("site A D1Bindings length = %d, want 1", len(envA.D1Bindings))
+	}
+	if len(envB.D1Bindings) != 1 {
+		t.Errorf("site B D1Bindings length = %d, want 1", len(envB.D1Bindings))
+	}
+
+	// D1 binding values should contain the siteID prefix for isolation.
+	wantD1A := siteA + "_db-alpha"
+	wantD1B := siteB + "_db-beta"
+	if envA.D1Bindings["DB"] != wantD1A {
+		t.Errorf("site A D1Bindings[DB] = %q, want %q", envA.D1Bindings["DB"], wantD1A)
+	}
+	if envB.D1Bindings["DB"] != wantD1B {
+		t.Errorf("site B D1Bindings[DB] = %q, want %q", envB.D1Bindings["DB"], wantD1B)
+	}
+	if envA.D1Bindings["DB"] == envB.D1Bindings["DB"] {
+		t.Error("site A and site B should have different D1 binding values")
+	}
+
+	// Each site should only get its own DO bindings.
+	if len(envA.DurableObjectBindings) != 1 {
+		t.Errorf("site A DurableObjectBindings length = %d, want 1", len(envA.DurableObjectBindings))
+	}
+	if len(envB.DurableObjectBindings) != 1 {
+		t.Errorf("site B DurableObjectBindings length = %d, want 1", len(envB.DurableObjectBindings))
+	}
+
+	// DO binding values should contain the siteID prefix for isolation.
+	wantDOA := siteA + ":ns-alpha"
+	wantDOB := siteB + ":ns-beta"
+	if envA.DurableObjectBindings["DO"] != wantDOA {
+		t.Errorf("site A DurableObjectBindings[DO] = %q, want %q", envA.DurableObjectBindings["DO"], wantDOA)
+	}
+	if envB.DurableObjectBindings["DO"] != wantDOB {
+		t.Errorf("site B DurableObjectBindings[DO] = %q, want %q", envB.DurableObjectBindings["DO"], wantDOB)
+	}
+	if envA.DurableObjectBindings["DO"] == envB.DurableObjectBindings["DO"] {
+		t.Error("site A and site B should have different DO binding values")
+	}
+}
+
 func TestEngine_EnsureSource_FromCache(t *testing.T) {
 	db := testDB(t)
 	e := newTestEngine(t, db)
@@ -3094,5 +3277,457 @@ func TestEngine_HTMLRewriterBasic(t *testing.T) {
 	}
 	if !data.NoOldTitle {
 		t.Error("rewritten HTML should not contain 'Old Title'")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// E2E Integration Tests: D1 and Durable Objects
+// These tests exercise the full pipeline: DB models → BuildEnvFromDB → engine execution → JS worker script → verify isolation
+// ---------------------------------------------------------------------------
+
+// TestE2E_D1_BuildEnvAndExecute creates a D1Database record in the test DB, uses BuildEnvFromDB to create the Env,
+// then executes a JS worker that creates a table, inserts data, and queries it via env.DB.
+func TestE2E_D1_BuildEnvAndExecute(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Set d1DataDir to a temp directory for this test.
+	tmpDir := t.TempDir()
+	e.config.DataDir = tmpDir
+
+	siteID := "e2e-d1-site"
+	u := models.User{Email: "e2e-d1@test.local", PasswordHash: "hash"}
+	if err := db.Create(&u).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	s := models.Site{ID: siteID, UserID: u.ID, SubdomainSlug: "e2e-d1", Name: "E2E D1 Site"}
+	if err := db.Create(&s).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+
+	// Create D1Database record.
+	d1db := models.D1Database{SiteID: siteID, Name: "DB", DatabaseID: "e2e-db-1"}
+	if err := db.Create(&d1db).Error; err != nil {
+		t.Fatalf("create D1 database: %v", err)
+	}
+
+	// Build Env from DB.
+	env := BuildEnvFromDB(db, siteID, nil)
+	if len(env.D1Bindings) != 1 {
+		t.Fatalf("D1Bindings length = %d, want 1", len(env.D1Bindings))
+	}
+
+	// Worker script that uses D1.
+	source := `export default {
+  async fetch(request, env) {
+    await env.DB.exec("CREATE TABLE e2e_users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)");
+    await env.DB.exec("INSERT INTO e2e_users (name, age) VALUES ('alice', 30)");
+    await env.DB.exec("INSERT INTO e2e_users (name, age) VALUES ('bob', 25)");
+
+    const result = await env.DB.prepare("SELECT name, age FROM e2e_users ORDER BY name").all();
+    return Response.json({
+      success: result.success,
+      count: result.results.length,
+      users: result.results,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, env, getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Success bool                     `json:"success"`
+		Count   int                      `json:"count"`
+		Users   []map[string]interface{} `json:"users"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if !data.Success {
+		t.Error("D1 query success should be true")
+	}
+	if data.Count != 2 {
+		t.Errorf("count = %d, want 2", data.Count)
+	}
+	if len(data.Users) != 2 {
+		t.Fatalf("users length = %d, want 2", len(data.Users))
+	}
+	if data.Users[0]["name"] != "alice" {
+		t.Errorf("users[0].name = %v, want alice", data.Users[0]["name"])
+	}
+	if data.Users[1]["name"] != "bob" {
+		t.Errorf("users[1].name = %v, want bob", data.Users[1]["name"])
+	}
+}
+
+// TestE2E_DO_BuildEnvAndExecute creates a DurableObjectNamespace record in the test DB, uses BuildEnvFromDB to create the Env,
+// then executes a JS worker that uses env.MY_DO.idFromName(), gets a stub, does storage.put/get.
+func TestE2E_DO_BuildEnvAndExecute(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	siteID := "e2e-do-site"
+	u := models.User{Email: "e2e-do@test.local", PasswordHash: "hash"}
+	if err := db.Create(&u).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	s := models.Site{ID: siteID, UserID: u.ID, SubdomainSlug: "e2e-do", Name: "E2E DO Site"}
+	if err := db.Create(&s).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+
+	// Create DurableObjectNamespace record.
+	doNs := models.DurableObjectNamespace{SiteID: siteID, Name: "MY_DO", NamespaceID: "e2e-ns-1"}
+	if err := db.Create(&doNs).Error; err != nil {
+		t.Fatalf("create DO namespace: %v", err)
+	}
+
+	// Build Env from DB.
+	env := BuildEnvFromDB(db, siteID, nil)
+	if len(env.DurableObjectBindings) != 1 {
+		t.Fatalf("DurableObjectBindings length = %d, want 1", len(env.DurableObjectBindings))
+	}
+
+	// Worker script that uses Durable Objects.
+	source := `export default {
+  async fetch(request, env) {
+    const id = env.MY_DO.idFromName("test-object");
+    const stub = env.MY_DO.get(id);
+    await stub.storage.put("greeting", "hello from DO");
+    await stub.storage.put("count", 42);
+
+    const greeting = await stub.storage.get("greeting");
+    const count = await stub.storage.get("count");
+
+    return Response.json({
+      greeting: greeting,
+      count: count,
+      idHex: id.toString(),
+    });
+  },
+};`
+
+	r := execJS(t, e, source, env, getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Greeting string `json:"greeting"`
+		Count    int    `json:"count"`
+		IDHex    string `json:"idHex"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if data.Greeting != "hello from DO" {
+		t.Errorf("greeting = %q, want 'hello from DO'", data.Greeting)
+	}
+	if data.Count != 42 {
+		t.Errorf("count = %d, want 42", data.Count)
+	}
+	if len(data.IDHex) != 64 {
+		t.Errorf("idHex length = %d, want 64 (hex of SHA-256)", len(data.IDHex))
+	}
+}
+
+// TestE2E_D1_CrossSiteIsolation creates two sites, each with a D1Database record (same binding name "DB", different database IDs).
+// It uses BuildEnvFromDB for each site, sets d1DataDir to the SAME temp directory for both (simulating shared storage),
+// executes a JS worker for site A that creates a table and inserts "secret-a",
+// executes a JS worker for site B that tries to read from the same table name,
+// and verifies site B gets an error (table doesn't exist) because it has a different database file.
+func TestE2E_D1_CrossSiteIsolation(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Set d1DataDir to a temp directory shared by both sites.
+	tmpDir := t.TempDir()
+	e.config.DataDir = tmpDir
+
+	// Create site A.
+	siteA := "e2e-d1-site-a"
+	uA := models.User{Email: "e2e-d1-a@test.local", PasswordHash: "hash"}
+	if err := db.Create(&uA).Error; err != nil {
+		t.Fatalf("create user A: %v", err)
+	}
+	sA := models.Site{ID: siteA, UserID: uA.ID, SubdomainSlug: "e2e-d1-a", Name: "E2E D1 Site A"}
+	if err := db.Create(&sA).Error; err != nil {
+		t.Fatalf("create site A: %v", err)
+	}
+	d1dbA := models.D1Database{SiteID: siteA, Name: "DB", DatabaseID: "db-alpha"}
+	if err := db.Create(&d1dbA).Error; err != nil {
+		t.Fatalf("create D1 database for site A: %v", err)
+	}
+
+	// Create site B.
+	siteB := "e2e-d1-site-b"
+	uB := models.User{Email: "e2e-d1-b@test.local", PasswordHash: "hash"}
+	if err := db.Create(&uB).Error; err != nil {
+		t.Fatalf("create user B: %v", err)
+	}
+	sB := models.Site{ID: siteB, UserID: uB.ID, SubdomainSlug: "e2e-d1-b", Name: "E2E D1 Site B"}
+	if err := db.Create(&sB).Error; err != nil {
+		t.Fatalf("create site B: %v", err)
+	}
+	d1dbB := models.D1Database{SiteID: siteB, Name: "DB", DatabaseID: "db-beta"}
+	if err := db.Create(&d1dbB).Error; err != nil {
+		t.Fatalf("create D1 database for site B: %v", err)
+	}
+
+	// Build Env from DB for both sites.
+	envA := BuildEnvFromDB(db, siteA, nil)
+	envB := BuildEnvFromDB(db, siteB, nil)
+
+	// Site A creates a table and inserts secret data.
+	sourceA := `export default {
+  async fetch(request, env) {
+    await env.DB.exec("CREATE TABLE secrets (id INTEGER PRIMARY KEY, value TEXT)");
+    await env.DB.exec("INSERT INTO secrets (value) VALUES ('secret-a')");
+    const result = await env.DB.prepare("SELECT value FROM secrets").all();
+    return Response.json({ value: result.results[0].value });
+  },
+};`
+
+	// Use unique siteID for execJS to avoid pool sharing.
+	siteIDExecA := siteA + "-exec"
+	if _, err := e.CompileAndCache(siteIDExecA, "deploy1", sourceA); err != nil {
+		t.Fatalf("compile site A: %v", err)
+	}
+	rA := e.Execute(siteIDExecA, "deploy1", envA, getReq("http://localhost/"))
+	assertOK(t, rA)
+
+	var dataA struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(rA.Response.Body, &dataA); err != nil {
+		t.Fatalf("unmarshal site A: %v", err)
+	}
+	if dataA.Value != "secret-a" {
+		t.Errorf("site A value = %q, want 'secret-a'", dataA.Value)
+	}
+
+	// Site B tries to read from the same table name (should fail due to isolation).
+	sourceB := `export default {
+  async fetch(request, env) {
+    try {
+      const result = await env.DB.prepare("SELECT value FROM secrets").all();
+      return Response.json({ error: false, value: result.results[0]?.value || null });
+    } catch (e) {
+      return Response.json({ error: true, message: e.message });
+    }
+  },
+};`
+
+	// Use unique siteID for execJS to avoid pool sharing.
+	siteIDExecB := siteB + "-exec"
+	if _, err := e.CompileAndCache(siteIDExecB, "deploy1", sourceB); err != nil {
+		t.Fatalf("compile site B: %v", err)
+	}
+	rB := e.Execute(siteIDExecB, "deploy1", envB, getReq("http://localhost/"))
+	assertOK(t, rB)
+
+	var dataB struct {
+		Error   bool   `json:"error"`
+		Message string `json:"message"`
+		Value   string `json:"value"`
+	}
+	if err := json.Unmarshal(rB.Response.Body, &dataB); err != nil {
+		t.Fatalf("unmarshal site B: %v", err)
+	}
+
+	// Site B should get an error because the table doesn't exist in its database file.
+	if !dataB.Error {
+		t.Errorf("site B should have gotten an error (table doesn't exist), but error = false, value = %q", dataB.Value)
+	}
+	if !strings.Contains(dataB.Message, "no such table") && !strings.Contains(dataB.Message, "secrets") {
+		t.Logf("site B error message: %q (expected 'no such table' or similar)", dataB.Message)
+	}
+}
+
+// TestE2E_DO_CrossSiteIsolation creates two sites, each with a DurableObjectNamespace record (same binding name "MY_DO", different namespace IDs).
+// It uses BuildEnvFromDB for each site, executes a JS worker for site A that stores "secret-a" in DO storage,
+// executes a JS worker for site B that tries to read the same key from the same object name,
+// and verifies site B gets null because the siteID-prefixed namespace is different.
+func TestE2E_DO_CrossSiteIsolation(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Create site A.
+	siteA := "e2e-do-site-a"
+	uA := models.User{Email: "e2e-do-a@test.local", PasswordHash: "hash"}
+	if err := db.Create(&uA).Error; err != nil {
+		t.Fatalf("create user A: %v", err)
+	}
+	sA := models.Site{ID: siteA, UserID: uA.ID, SubdomainSlug: "e2e-do-a", Name: "E2E DO Site A"}
+	if err := db.Create(&sA).Error; err != nil {
+		t.Fatalf("create site A: %v", err)
+	}
+	doNsA := models.DurableObjectNamespace{SiteID: siteA, Name: "MY_DO", NamespaceID: "ns-alpha"}
+	if err := db.Create(&doNsA).Error; err != nil {
+		t.Fatalf("create DO namespace for site A: %v", err)
+	}
+
+	// Create site B.
+	siteB := "e2e-do-site-b"
+	uB := models.User{Email: "e2e-do-b@test.local", PasswordHash: "hash"}
+	if err := db.Create(&uB).Error; err != nil {
+		t.Fatalf("create user B: %v", err)
+	}
+	sB := models.Site{ID: siteB, UserID: uB.ID, SubdomainSlug: "e2e-do-b", Name: "E2E DO Site B"}
+	if err := db.Create(&sB).Error; err != nil {
+		t.Fatalf("create site B: %v", err)
+	}
+	doNsB := models.DurableObjectNamespace{SiteID: siteB, Name: "MY_DO", NamespaceID: "ns-beta"}
+	if err := db.Create(&doNsB).Error; err != nil {
+		t.Fatalf("create DO namespace for site B: %v", err)
+	}
+
+	// Build Env from DB for both sites.
+	envA := BuildEnvFromDB(db, siteA, nil)
+	envB := BuildEnvFromDB(db, siteB, nil)
+
+	// Site A stores secret data in DO storage.
+	sourceA := `export default {
+  async fetch(request, env) {
+    const id = env.MY_DO.idFromName("shared-name");
+    const stub = env.MY_DO.get(id);
+    await stub.storage.put("secret", "secret-a");
+    const val = await stub.storage.get("secret");
+    return Response.json({ value: val });
+  },
+};`
+
+	// Use unique siteID for execJS to avoid pool sharing.
+	siteIDExecA := siteA + "-exec"
+	if _, err := e.CompileAndCache(siteIDExecA, "deploy1", sourceA); err != nil {
+		t.Fatalf("compile site A: %v", err)
+	}
+	rA := e.Execute(siteIDExecA, "deploy1", envA, getReq("http://localhost/"))
+	assertOK(t, rA)
+
+	var dataA struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(rA.Response.Body, &dataA); err != nil {
+		t.Fatalf("unmarshal site A: %v", err)
+	}
+	if dataA.Value != "secret-a" {
+		t.Errorf("site A value = %q, want 'secret-a'", dataA.Value)
+	}
+
+	// Site B tries to read from the same object name (should get null due to namespace isolation).
+	sourceB := `export default {
+  async fetch(request, env) {
+    const id = env.MY_DO.idFromName("shared-name");
+    const stub = env.MY_DO.get(id);
+    const val = await stub.storage.get("secret");
+    return Response.json({ value: val });
+  },
+};`
+
+	// Use unique siteID for execJS to avoid pool sharing.
+	siteIDExecB := siteB + "-exec"
+	if _, err := e.CompileAndCache(siteIDExecB, "deploy1", sourceB); err != nil {
+		t.Fatalf("compile site B: %v", err)
+	}
+	rB := e.Execute(siteIDExecB, "deploy1", envB, getReq("http://localhost/"))
+	assertOK(t, rB)
+
+	var dataB struct {
+		Value interface{} `json:"value"`
+	}
+	if err := json.Unmarshal(rB.Response.Body, &dataB); err != nil {
+		t.Fatalf("unmarshal site B: %v", err)
+	}
+
+	// Site B should get null because the namespace is isolated by siteID.
+	if dataB.Value != nil {
+		t.Errorf("site B value = %v, want null (namespace isolation)", dataB.Value)
+	}
+}
+
+// TestE2E_CombinedD1AndDO creates a site with both D1Database and DurableObjectNamespace records,
+// uses BuildEnvFromDB to get the Env, executes a JS worker that uses both D1 and DO in the same request,
+// and verifies both bindings work correctly together.
+func TestE2E_CombinedD1AndDO(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Set d1DataDir to a temp directory.
+	tmpDir := t.TempDir()
+	e.config.DataDir = tmpDir
+
+	siteID := "e2e-combined-site"
+	u := models.User{Email: "e2e-combined@test.local", PasswordHash: "hash"}
+	if err := db.Create(&u).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	s := models.Site{ID: siteID, UserID: u.ID, SubdomainSlug: "e2e-combined", Name: "E2E Combined Site"}
+	if err := db.Create(&s).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+
+	// Create both D1 and DO records.
+	d1db := models.D1Database{SiteID: siteID, Name: "DB", DatabaseID: "combined-db"}
+	if err := db.Create(&d1db).Error; err != nil {
+		t.Fatalf("create D1 database: %v", err)
+	}
+	doNs := models.DurableObjectNamespace{SiteID: siteID, Name: "MY_DO", NamespaceID: "combined-ns"}
+	if err := db.Create(&doNs).Error; err != nil {
+		t.Fatalf("create DO namespace: %v", err)
+	}
+
+	// Build Env from DB.
+	env := BuildEnvFromDB(db, siteID, nil)
+	if len(env.D1Bindings) != 1 {
+		t.Fatalf("D1Bindings length = %d, want 1", len(env.D1Bindings))
+	}
+	if len(env.DurableObjectBindings) != 1 {
+		t.Fatalf("DurableObjectBindings length = %d, want 1", len(env.DurableObjectBindings))
+	}
+
+	// Worker script that uses both D1 and DO.
+	source := `export default {
+  async fetch(request, env) {
+    // Use D1 to store a counter.
+    await env.DB.exec("CREATE TABLE counters (key TEXT PRIMARY KEY, value INTEGER)");
+    await env.DB.exec("INSERT INTO counters (key, value) VALUES ('requests', 1)");
+    const d1Result = await env.DB.prepare("SELECT value FROM counters WHERE key = ?").bind("requests").first();
+
+    // Use DO to store a timestamp.
+    const id = env.MY_DO.idFromName("combined-test");
+    const stub = env.MY_DO.get(id);
+    await stub.storage.put("timestamp", Date.now());
+    const doTimestamp = await stub.storage.get("timestamp");
+
+    return Response.json({
+      d1Value: d1Result.value,
+      doTimestamp: doTimestamp,
+      bothWork: d1Result.value === 1 && typeof doTimestamp === "number",
+    });
+  },
+};`
+
+	r := execJS(t, e, source, env, getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		D1Value     int  `json:"d1Value"`
+		DoTimestamp int  `json:"doTimestamp"`
+		BothWork    bool `json:"bothWork"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if data.D1Value != 1 {
+		t.Errorf("d1Value = %d, want 1", data.D1Value)
+	}
+	if data.DoTimestamp == 0 {
+		t.Error("doTimestamp should be non-zero")
+	}
+	if !data.BothWork {
+		t.Error("bothWork should be true (both D1 and DO should work)")
 	}
 }

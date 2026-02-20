@@ -947,6 +947,22 @@ func BuildEnvFromDB(db *gorm.DB, siteID string, assets AssetsFetcher) *Env {
 		env.StorageBindings[b.Name] = b.BucketName
 	}
 
+	// D1 database bindings — prefixed with siteID for isolation.
+	env.D1Bindings = make(map[string]string)
+	var d1Databases []models.D1Database
+	db.Where("site_id = ?", siteID).Find(&d1Databases)
+	for _, d := range d1Databases {
+		env.D1Bindings[d.Name] = siteID + "_" + d.DatabaseID
+	}
+
+	// Durable Object namespace bindings — prefixed with siteID for isolation.
+	env.DurableObjectBindings = make(map[string]string)
+	var doNamespaces []models.DurableObjectNamespace
+	db.Where("site_id = ?", siteID).Find(&doNamespaces)
+	for _, ns := range doNamespaces {
+		env.DurableObjectBindings[ns.Name] = siteID + ":" + ns.NamespaceID
+	}
+
 	return env
 }
 

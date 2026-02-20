@@ -56,6 +56,8 @@ func InitDB(cfg config.DBConfig) (*gorm.DB, error) {
 		&CronSchedule{},
 		&WorkerLog{},
 		&StorageBucket{},
+		&D1Database{},
+		&DurableObjectNamespace{},
 		&S3Credential{},
 		&RevokedToken{},
 		&CacheEntry{},

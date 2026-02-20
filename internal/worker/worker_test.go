@@ -49,6 +49,8 @@ func testDB(t *testing.T) *gorm.DB {
 		&models.KVEntry{},
 		&models.WorkerLog{},
 		&models.StorageBucket{},
+		&models.D1Database{},
+		&models.DurableObjectNamespace{},
 		&models.CronSchedule{},
 		&models.Deployment{},
 		&models.CacheEntry{},

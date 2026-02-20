@@ -162,6 +162,55 @@ func TestDurableBridge_GetMulti(t *testing.T) {
 	}
 }
 
+func TestDurableBridge_CrossSiteIsolation(t *testing.T) {
+	db := testDB(t)
+	_ = db.AutoMigrate(&DurableObjectEntry{})
+	b := &DurableObjectBridge{DB: db}
+
+	// Site A uses prefixed namespace "siteA:ns1", site B uses "siteB:ns1"
+	nsA := "siteA:ns1"
+	nsB := "siteB:ns1"
+	objID := "shared-obj-id"
+
+	// Put data in site A's namespace
+	if err := b.Put(nsA, objID, "secret", `"site-a-data"`); err != nil {
+		t.Fatalf("Put siteA: %v", err)
+	}
+
+	// Site B should NOT see site A's data
+	val, err := b.Get(nsB, objID, "secret")
+	if err != nil {
+		t.Fatalf("Get siteB: %v", err)
+	}
+	if val != "" {
+		t.Errorf("site B should not see site A's data, got %q", val)
+	}
+
+	// Put data in site B's namespace
+	if err := b.Put(nsB, objID, "secret", `"site-b-data"`); err != nil {
+		t.Fatalf("Put siteB: %v", err)
+	}
+
+	// Each site should see only its own data
+	valA, _ := b.Get(nsA, objID, "secret")
+	valB, _ := b.Get(nsB, objID, "secret")
+	if valA != `"site-a-data"` {
+		t.Errorf("site A data = %q, want \"site-a-data\"", valA)
+	}
+	if valB != `"site-b-data"` {
+		t.Errorf("site B data = %q, want \"site-b-data\"", valB)
+	}
+}
+
+func TestDurableID_NamespaceIsolation(t *testing.T) {
+	// Same object name in different site-prefixed namespaces should produce different IDs
+	idA := durableObjectID("siteA:ns1", "myobj")
+	idB := durableObjectID("siteB:ns1", "myobj")
+	if idA == idB {
+		t.Error("same name in different site-prefixed namespaces should produce different IDs")
+	}
+}
+
 func TestDurableID_Deterministic(t *testing.T) {
 	id1 := durableObjectID("ns", "myobj")
 	id2 := durableObjectID("ns", "myobj")

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -848,8 +849,120 @@ func TestD1_JSBindZeroArgs(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// ValidateDatabaseID tests
+// ---------------------------------------------------------------------------
+
+func TestValidateDatabaseID_Valid(t *testing.T) {
+	valid := []string{"mydb", "test-db-1", "abc123", "DB_Name", "a"}
+	for _, id := range valid {
+		if err := ValidateDatabaseID(id); err != nil {
+			t.Errorf("ValidateDatabaseID(%q) = %v, want nil", id, err)
+		}
+	}
+}
+
+func TestValidateDatabaseID_PathTraversal(t *testing.T) {
+	cases := []string{"..", "../etc", "..\\windows", "foo..bar", "a/../b"}
+	for _, id := range cases {
+		if err := ValidateDatabaseID(id); err == nil {
+			t.Errorf("ValidateDatabaseID(%q) = nil, want error", id)
+		}
+	}
+}
+
+func TestValidateDatabaseID_Slashes(t *testing.T) {
+	cases := []string{"a/b", "a\\b", "/leading", "trailing/", "\\back"}
+	for _, id := range cases {
+		if err := ValidateDatabaseID(id); err == nil {
+			t.Errorf("ValidateDatabaseID(%q) = nil, want error", id)
+		}
+	}
+}
+
+func TestValidateDatabaseID_Empty(t *testing.T) {
+	if err := ValidateDatabaseID(""); err == nil {
+		t.Error("ValidateDatabaseID(\"\") = nil, want error")
+	}
+}
+
+func TestValidateDatabaseID_NullByte(t *testing.T) {
+	cases := []string{"db\x00name", "\x00", "abc\x00"}
+	for _, id := range cases {
+		if err := ValidateDatabaseID(id); err == nil {
+			t.Errorf("ValidateDatabaseID(%q) = nil, want error", id)
+		}
+	}
+}
+
+func TestValidateDatabaseID_TooLong(t *testing.T) {
+	long := strings.Repeat("a", 129)
+	if err := ValidateDatabaseID(long); err == nil {
+		t.Error("ValidateDatabaseID(129-char string) = nil, want error")
+	}
+	// Exactly 128 should be fine.
+	exact := strings.Repeat("a", 128)
+	if err := ValidateDatabaseID(exact); err != nil {
+		t.Errorf("ValidateDatabaseID(128-char string) = %v, want nil", err)
+	}
+}
+
+func TestOpenD1Database_PathTraversalRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	cases := []string{"..", "../etc", "a/b", "a\\b", "", "db\x00name"}
+	for _, id := range cases {
+		_, err := OpenD1Database(tmpDir, id)
+		if err == nil {
+			t.Errorf("OpenD1Database(_, %q) = nil error, want rejection", id)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // OpenD1Database tests (file-based)
 // ---------------------------------------------------------------------------
+
+func TestD1_CrossSiteIsolation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Site A and Site B get separate databases even with same user-chosen name
+	bridgeA, err := OpenD1Database(tmpDir, "siteA_mydb")
+	if err != nil {
+		t.Fatalf("OpenD1Database siteA: %v", err)
+	}
+	defer bridgeA.Close()
+
+	bridgeB, err := OpenD1Database(tmpDir, "siteB_mydb")
+	if err != nil {
+		t.Fatalf("OpenD1Database siteB: %v", err)
+	}
+	defer bridgeB.Close()
+
+	// Insert data into site A
+	_, err = bridgeA.Exec("CREATE TABLE secrets (id INTEGER PRIMARY KEY, data TEXT)", nil)
+	if err != nil {
+		t.Fatalf("CREATE TABLE siteA: %v", err)
+	}
+	_, err = bridgeA.Exec("INSERT INTO secrets (data) VALUES (?)", []interface{}{"site-a-secret"})
+	if err != nil {
+		t.Fatalf("INSERT siteA: %v", err)
+	}
+
+	// Site B should NOT see site A's table
+	_, err = bridgeB.Exec("SELECT * FROM secrets", nil)
+	if err == nil {
+		t.Error("site B should NOT be able to access site A's tables")
+	}
+
+	// Verify separate files exist
+	fileA := filepath.Join(tmpDir, "d1", "siteA_mydb.sqlite3")
+	fileB := filepath.Join(tmpDir, "d1", "siteB_mydb.sqlite3")
+	if _, err := os.Stat(fileA); os.IsNotExist(err) {
+		t.Error("siteA database file should exist")
+	}
+	if _, err := os.Stat(fileB); os.IsNotExist(err) {
+		t.Error("siteB database file should exist")
+	}
+}
 
 func TestOpenD1Database_CreatesFileAndSetsWAL(t *testing.T) {
 	tmpDir := t.TempDir()

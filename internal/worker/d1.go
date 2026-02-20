@@ -22,9 +22,33 @@ type D1Bridge struct {
 	DatabaseID string
 }
 
+// ValidateDatabaseID rejects database IDs that contain path traversal
+// characters, null bytes, or are empty/too long.
+func ValidateDatabaseID(id string) error {
+	if id == "" {
+		return fmt.Errorf("database ID must not be empty")
+	}
+	if len(id) > 128 {
+		return fmt.Errorf("database ID too long")
+	}
+	if strings.Contains(id, "..") {
+		return fmt.Errorf("database ID contains path traversal")
+	}
+	if strings.ContainsAny(id, "/\\") {
+		return fmt.Errorf("database ID contains path separator")
+	}
+	if strings.ContainsRune(id, 0) {
+		return fmt.Errorf("database ID contains null byte")
+	}
+	return nil
+}
+
 // OpenD1Database opens (or creates) an isolated SQLite database for the given
 // database ID. The file is stored at {dataDir}/d1/{databaseID}.sqlite3.
 func OpenD1Database(dataDir, databaseID string) (*D1Bridge, error) {
+	if err := ValidateDatabaseID(databaseID); err != nil {
+		return nil, err
+	}
 	d1Dir := filepath.Join(dataDir, "d1")
 	if err := os.MkdirAll(d1Dir, 0755); err != nil {
 		return nil, fmt.Errorf("creating D1 directory: %w", err)
