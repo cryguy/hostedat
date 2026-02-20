@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/cryguy/hostedat/internal/models"
@@ -44,7 +45,7 @@ func (h *WorkerHandler) SetEnvVar(c echo.Context) error {
 	// Upsert: update if exists, create if not
 	var envVar models.WorkerEnvVar
 	result := h.DB.Where("site_id = ? AND name = ?", siteID, req.Name).First(&envVar)
-	if result.Error == gorm.ErrRecordNotFound {
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		// Create new
 		envVar = models.WorkerEnvVar{
 			SiteID: siteID,
@@ -57,13 +58,13 @@ func (h *WorkerHandler) SetEnvVar(c echo.Context) error {
 		}
 	} else if result.Error != nil {
 		return errorJSON(c, http.StatusInternalServerError, "database error")
-	} else {
-		// Update existing
-		envVar.Value = req.Value
-		envVar.Secret = req.Secret
-		if err := h.DB.Save(&envVar).Error; err != nil {
-			return errorJSON(c, http.StatusInternalServerError, "failed to update env var")
-		}
+	}
+
+	// Update existing
+	envVar.Value = req.Value
+	envVar.Secret = req.Secret
+	if err := h.DB.Save(&envVar).Error; err != nil {
+		return errorJSON(c, http.StatusInternalServerError, "failed to update env var")
 	}
 
 	return c.JSON(http.StatusOK, envVar)

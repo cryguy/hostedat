@@ -155,10 +155,10 @@ func (e *Engine) CompileAndCache(siteID string, deployKey string, source string)
 	return []byte(source), nil
 }
 
-// GetOrCreatePool returns the worker pool for the given site/deploy,
+// getOrCreatePool returns the worker pool for the given site/deploy,
 // creating it if necessary. Each worker in the pool has all Web APIs,
 // console, fetch, crypto, and the compiled worker script loaded.
-func (e *Engine) GetOrCreatePool(siteID string, deployKey string, env *Env) (*v8Pool, error) {
+func (e *Engine) getOrCreatePool(siteID string, deployKey string) (*v8Pool, error) {
 	key := poolKey{SiteID: siteID, DeployKey: deployKey}
 
 	// Check for a valid existing pool.
@@ -221,8 +221,8 @@ func (e *Engine) GetOrCreatePool(siteID string, deployKey string, env *Env) (*v8
 		// Console: log/info/warn/error/debug capture
 		setupConsole,
 		// Fetch: Go-backed fetch() with SSRF protection
-		func(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
-			return setupFetch(iso, ctx, el, cfg)
+		func(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
+			return setupFetch(iso, ctx, cfg)
 		},
 		// BYOB Reader: ReadableStreamBYOBReader, ReadableByteStreamController
 		setupBYOBReader,
@@ -273,7 +273,7 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 		return result
 	}
 
-	pool, err := e.GetOrCreatePool(siteID, deployKey, env)
+	pool, err := e.getOrCreatePool(siteID, deployKey)
 	if err != nil {
 		result.Error = err
 		result.Duration = time.Since(start)
@@ -464,7 +464,7 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 	// worker for the bridge loop instead of returning it to the pool.
 	if resp.HasWebSocket && resp.StatusCode == 101 {
 		// Store the server WebSocket reference for the bridge.
-		ctx.RunScript(`
+		_, _ = ctx.RunScript(`
 			if (globalThis.__ws_check_resp && globalThis.__ws_check_resp._peer) {
 				globalThis.__ws_active_server = globalThis.__ws_check_resp._peer;
 			}
@@ -511,7 +511,7 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 		return result
 	}
 
-	pool, err := e.GetOrCreatePool(siteID, deployKey, env)
+	pool, err := e.getOrCreatePool(siteID, deployKey)
 	if err != nil {
 		result.Error = err
 		result.Duration = time.Since(start)
@@ -564,7 +564,7 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 	// Set up per-request state.
 	reqID := newRequestState(e.config.MaxFetchRequests, env)
 	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
-	ctx.Global().Set("__requestID", reqIDVal)
+	_ = ctx.Global().Set("__requestID", reqIDVal)
 
 	// Build the scheduled event using the ScheduledEvent class.
 	scheduledTimeMs := float64(time.Now().UnixMilli())
@@ -697,7 +697,7 @@ func (e *Engine) ExecuteTail(siteID string, deployKey string, env *Env, events [
 		return result
 	}
 
-	pool, err := e.GetOrCreatePool(siteID, deployKey, env)
+	pool, err := e.getOrCreatePool(siteID, deployKey)
 	if err != nil {
 		result.Error = err
 		result.Duration = time.Since(start)
@@ -750,7 +750,7 @@ func (e *Engine) ExecuteTail(siteID string, deployKey string, env *Env, events [
 	// Set up per-request state.
 	reqID := newRequestState(e.config.MaxFetchRequests, env)
 	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
-	ctx.Global().Set("__requestID", reqIDVal)
+	_ = ctx.Global().Set("__requestID", reqIDVal)
 
 	// Serialize tail events to JSON and inject into JS context.
 	eventsJSON, err := json.Marshal(events)
@@ -988,7 +988,7 @@ func awaitValue(ctx *v8.Context, val *v8.Value, deadline time.Time) (*v8.Value, 
 	resultVal, _ := ctx.Global().Get("__awaited_result")
 
 	// Clean up globals.
-	ctx.RunScript("delete globalThis.__awaited_result; delete globalThis.__awaited_state;", "cleanup.js")
+	_, _ = ctx.RunScript("delete globalThis.__awaited_result; delete globalThis.__awaited_state;", "cleanup.js")
 
 	if stateVal.String() == "rejected" {
 		return nil, fmt.Errorf("promise rejected: %s", resultVal.String())

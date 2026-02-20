@@ -90,7 +90,7 @@ func TestCrypto_RSAOAEP_WithLabel(t *testing.T) {
 	assertOK(t, r)
 
 	var data struct {
-		Match           bool `json:"match"`
+		Match            bool `json:"match"`
 		WrongLabelFailed bool `json:"wrongLabelFailed"`
 	}
 	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
@@ -745,7 +745,9 @@ func TestCrypto_RSA_SPKIExportFromPrivateKey(t *testing.T) {
 		Valid bool   `json:"valid"`
 		Type  string `json:"type"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Valid {
 		t.Error("SPKI re-imported key should verify signatures")
 	}
@@ -785,7 +787,9 @@ func TestCrypto_RSA_PKCS8ExportFromPrivateKey(t *testing.T) {
 		Valid bool   `json:"valid"`
 		Type  string `json:"type"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Valid {
 		t.Error("PKCS8 re-imported key should sign correctly")
 	}
@@ -819,7 +823,9 @@ func TestCrypto_RSA_ImportBadSPKI(t *testing.T) {
 	var data struct {
 		BadDerFailed bool `json:"badDerFailed"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.BadDerFailed {
 		t.Error("importing bad SPKI DER should fail")
 	}
@@ -850,7 +856,9 @@ func TestCrypto_RSA_ImportBadPKCS8(t *testing.T) {
 	var data struct {
 		BadDerFailed bool `json:"badDerFailed"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.BadDerFailed {
 		t.Error("importing bad PKCS8 DER should fail")
 	}
@@ -881,7 +889,9 @@ func TestCrypto_RSA_OAEPWithSHA512(t *testing.T) {
 		Result string `json:"result"`
 		CTLen  int    `json:"ctLen"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Result != "sha512 test" {
 		t.Errorf("result = %q", data.Result)
 	}

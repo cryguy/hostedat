@@ -3,6 +3,7 @@ package worker
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -23,7 +24,7 @@ func (kv *KVBridge) Get(key string) (string, error) {
 	var entry models.KVEntry
 	err := kv.DB.Where("namespace_id = ? AND key = ?", kv.NamespaceID, key).First(&entry).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return "", nil
 		}
 		return "", err
@@ -48,7 +49,7 @@ func (kv *KVBridge) GetWithMetadata(key string) (*KVValueWithMetadata, error) {
 	var entry models.KVEntry
 	err := kv.DB.Where("namespace_id = ? AND key = ?", kv.NamespaceID, key).First(&entry).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -86,7 +87,7 @@ func (kv *KVBridge) Put(key, value string, metadata *string, ttl *int) error {
 			"expires_at": expiresAt,
 		}).Error
 	}
-	if err != gorm.ErrRecordNotFound {
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 
@@ -195,7 +196,7 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 
 	// get(key, options?) -> Promise<string|object|ArrayBuffer|ReadableStream|null>
 	// options.type: "text" (default), "json", "arrayBuffer", "stream"
-	kv.Set("get", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = kv.Set("get", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 		if len(args) == 0 {
@@ -208,7 +209,7 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 		// Parse optional type from second argument.
 		valType := "text"
 		if len(args) > 1 && args[1].IsObject() {
-			ctx.Global().Set("__tmp_kv_get_opts", args[1])
+			_ = ctx.Global().Set("__tmp_kv_get_opts", args[1])
 			optsResult, err := ctx.RunScript(`(function() {
 				var o = globalThis.__tmp_kv_get_opts;
 				delete globalThis.__tmp_kv_get_opts;
@@ -241,7 +242,7 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 			}
 		case "arrayBuffer":
 			strVal, _ := v8.NewValue(iso, val)
-			ctx.Global().Set("__tmp_kv_ab_val", strVal)
+			_ = ctx.Global().Set("__tmp_kv_ab_val", strVal)
 			jsVal, err := ctx.RunScript(`(function() {
 				var s = globalThis.__tmp_kv_ab_val;
 				delete globalThis.__tmp_kv_ab_val;
@@ -256,7 +257,7 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 			}
 		case "stream":
 			strVal, _ := v8.NewValue(iso, val)
-			ctx.Global().Set("__tmp_kv_stream_val", strVal)
+			_ = ctx.Global().Set("__tmp_kv_stream_val", strVal)
 			jsVal, err := ctx.RunScript(`(function() {
 				var s = globalThis.__tmp_kv_stream_val;
 				delete globalThis.__tmp_kv_stream_val;
@@ -283,7 +284,7 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 	}).GetFunction(ctx))
 
 	// getWithMetadata(key, options?) -> Promise<{value, metadata}>
-	kv.Set("getWithMetadata", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = kv.Set("getWithMetadata", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 		if len(args) == 0 {
@@ -296,7 +297,7 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 		// Parse optional type from second argument.
 		valType := "text"
 		if len(args) > 1 && args[1].IsObject() {
-			ctx.Global().Set("__tmp_kv_gwm_opts", args[1])
+			_ = ctx.Global().Set("__tmp_kv_gwm_opts", args[1])
 			optsResult, err := ctx.RunScript(`(function() {
 				var o = globalThis.__tmp_kv_gwm_opts;
 				delete globalThis.__tmp_kv_gwm_opts;
@@ -339,7 +340,7 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 			}
 		case "arrayBuffer":
 			strVal, _ := v8.NewValue(iso, result.Value)
-			ctx.Global().Set("__tmp_kv_gwm_ab", strVal)
+			_ = ctx.Global().Set("__tmp_kv_gwm_ab", strVal)
 			jsVal, err := ctx.RunScript(fmt.Sprintf(`(function() {
 				var s = globalThis.__tmp_kv_gwm_ab;
 				delete globalThis.__tmp_kv_gwm_ab;
@@ -354,7 +355,7 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 			}
 		case "stream":
 			strVal, _ := v8.NewValue(iso, result.Value)
-			ctx.Global().Set("__tmp_kv_gwm_stream", strVal)
+			_ = ctx.Global().Set("__tmp_kv_gwm_stream", strVal)
 			jsVal, err := ctx.RunScript(fmt.Sprintf(`(function() {
 				var s = globalThis.__tmp_kv_gwm_stream;
 				delete globalThis.__tmp_kv_gwm_stream;
@@ -387,7 +388,7 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 	}).GetFunction(ctx))
 
 	// put(key, value, options?) -> Promise<void>
-	kv.Set("put", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = kv.Set("put", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 		if len(args) < 2 {
@@ -402,7 +403,7 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 		var ttl *int
 		if len(args) > 2 && args[2].IsObject() {
 			// Extract options via JS to avoid complex property iteration.
-			ctx.Global().Set("__tmp_kv_opts", args[2])
+			_ = ctx.Global().Set("__tmp_kv_opts", args[2])
 			optsResult, err := ctx.RunScript(`(function() {
 				var o = globalThis.__tmp_kv_opts;
 				delete globalThis.__tmp_kv_opts;
@@ -433,7 +434,7 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 	}).GetFunction(ctx))
 
 	// delete(key) -> Promise<void>
-	kv.Set("delete", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = kv.Set("delete", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 		if len(args) == 0 {
@@ -452,7 +453,7 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 	}).GetFunction(ctx))
 
 	// list(options?) -> Promise<{keys: [{name, metadata?}], list_complete, cursor?}>
-	kv.Set("list", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = kv.Set("list", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 
@@ -460,7 +461,7 @@ func buildKVBinding(iso *v8.Isolate, ctx *v8.Context, bridge *KVBridge) (*v8.Val
 		var cursor string
 		limit := 1000
 		if len(args) > 0 && args[0].IsObject() {
-			ctx.Global().Set("__tmp_kv_list_opts", args[0])
+			_ = ctx.Global().Set("__tmp_kv_list_opts", args[0])
 			optsResult, err := ctx.RunScript(`(function() {
 				var o = globalThis.__tmp_kv_list_opts;
 				delete globalThis.__tmp_kv_list_opts;

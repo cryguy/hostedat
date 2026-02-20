@@ -73,7 +73,7 @@ globalThis.IdentityTransformStream = IdentityTransformStream;
 
 // setupTextStreams evaluates the text stream polyfills.
 // Must run after setupStreams and setupWebAPIs (for TextEncoder/TextDecoder).
-func setupTextStreams(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupTextStreams(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	if _, err := ctx.RunScript(textStreamsJS, "textstreams.js"); err != nil {
 		return fmt.Errorf("evaluating textstreams.js: %w", err)
 	}

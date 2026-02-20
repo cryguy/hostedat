@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/cryguy/hostedat/internal/storage"
-	minio "github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7"
 	v8 "github.com/tommie/v8go"
 	"gorm.io/gorm"
 )
@@ -203,14 +203,14 @@ func buildAssetsBinding(iso *v8.Isolate, ctx *v8.Context, fetcher AssetsFetcher)
 		return nil, fmt.Errorf("creating assets object: %w", err)
 	}
 
-	assets.Set("fetch", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = assets.Set("fetch", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) == 0 {
 			return throwError(iso, "ASSETS.fetch requires a request argument")
 		}
 
 		// Extract request data via JS.
-		ctx.Global().Set("__tmp_assets_req", args[0])
+		_ = ctx.Global().Set("__tmp_assets_req", args[0])
 		result, err := ctx.RunScript(`(function() {
 			var r = globalThis.__tmp_assets_req;
 			delete globalThis.__tmp_assets_req;
@@ -254,14 +254,14 @@ func buildAssetsBinding(iso *v8.Isolate, ctx *v8.Context, fetcher AssetsFetcher)
 		headersJSON, _ := json.Marshal(resp.Headers)
 		if resp.Body != nil {
 			bodyVal, _ := v8.NewValue(iso, string(resp.Body))
-			ctx.Global().Set("__tmp_assets_body", bodyVal)
+			_ = ctx.Global().Set("__tmp_assets_body", bodyVal)
 		} else {
-			ctx.Global().Set("__tmp_assets_body", v8.Null(iso))
+			_ = ctx.Global().Set("__tmp_assets_body", v8.Null(iso))
 		}
 		statusVal, _ := v8.NewValue(iso, int32(resp.StatusCode))
-		ctx.Global().Set("__tmp_assets_status", statusVal)
+		_ = ctx.Global().Set("__tmp_assets_status", statusVal)
 		hdrsVal, _ := v8.NewValue(iso, string(headersJSON))
-		ctx.Global().Set("__tmp_assets_headers", hdrsVal)
+		_ = ctx.Global().Set("__tmp_assets_headers", hdrsVal)
 
 		jsResp, err := ctx.RunScript(`(function() {
 			var body = globalThis.__tmp_assets_body;
@@ -294,7 +294,7 @@ func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, min
 	if env.Vars != nil {
 		for k, v := range env.Vars {
 			val, _ := v8.NewValue(iso, v)
-			envObj.Set(k, val)
+			_ = envObj.Set(k, val)
 		}
 	}
 
@@ -302,7 +302,7 @@ func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, min
 	if env.Secrets != nil {
 		for k, v := range env.Secrets {
 			val, _ := v8.NewValue(iso, v)
-			envObj.Set(k, val)
+			_ = envObj.Set(k, val)
 		}
 	}
 
@@ -314,7 +314,7 @@ func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, min
 			if err != nil {
 				return nil, fmt.Errorf("building KV binding %q: %w", name, err)
 			}
-			envObj.Set(name, kvVal)
+			_ = envObj.Set(name, kvVal)
 		}
 	}
 
@@ -337,7 +337,7 @@ func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, min
 				if err != nil {
 					return nil, fmt.Errorf("building storage binding %q: %w", name, err)
 				}
-				envObj.Set(name, storVal)
+				_ = envObj.Set(name, storVal)
 			}
 		}
 	}
@@ -350,7 +350,7 @@ func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, min
 			if err != nil {
 				return nil, fmt.Errorf("building queue binding %q: %w", name, err)
 			}
-			envObj.Set(name, qVal)
+			_ = envObj.Set(name, qVal)
 		}
 	}
 
@@ -362,11 +362,17 @@ func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, min
 			if err != nil {
 				return nil, fmt.Errorf("building service binding %q: %w", name, err)
 			}
-			envObj.Set(name, sbVal)
+			_ = envObj.Set(name, sbVal)
 		}
 	}
 
 	// D1 database bindings — each gets its own isolated SQLite database.
+	var d1Bridges []*D1Bridge
+	closeD1Bridges := func() {
+		for _, b := range d1Bridges {
+			_ = b.Close()
+		}
+	}
 	if env.D1Bindings != nil {
 		for name, dbID := range env.D1Bindings {
 			var bridge *D1Bridge
@@ -378,14 +384,16 @@ func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, min
 				bridge, err = NewD1BridgeMemory(dbID)
 			}
 			if err != nil {
+				closeD1Bridges()
 				return nil, fmt.Errorf("opening D1 database %q: %w", name, err)
 			}
+			d1Bridges = append(d1Bridges, bridge)
 			d1Val, err := buildD1Binding(iso, ctx, bridge)
 			if err != nil {
-				bridge.Close()
+				closeD1Bridges()
 				return nil, fmt.Errorf("building D1 binding %q: %w", name, err)
 			}
-			envObj.Set(name, d1Val)
+			_ = envObj.Set(name, d1Val)
 		}
 	}
 
@@ -393,9 +401,10 @@ func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, min
 	if env.Assets != nil {
 		assetsVal, err := buildAssetsBinding(iso, ctx, env.Assets)
 		if err != nil {
+			closeD1Bridges()
 			return nil, fmt.Errorf("building assets binding: %w", err)
 		}
-		envObj.Set("ASSETS", assetsVal)
+		_ = envObj.Set("ASSETS", assetsVal)
 	}
 
 	return envObj.Value, nil
@@ -418,17 +427,17 @@ func buildExecContext(iso *v8.Isolate, ctx *v8.Context) (*v8.Value, error) {
 	waitUntilFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) > 0 {
-			ctx.Global().Set("__tmp_wu_promise", args[0])
-			ctx.RunScript("globalThis.__waitUntilPromises.push(Promise.resolve(globalThis.__tmp_wu_promise)); delete globalThis.__tmp_wu_promise;", "waituntil_push.js")
+			_ = ctx.Global().Set("__tmp_wu_promise", args[0])
+			_, _ = ctx.RunScript("globalThis.__waitUntilPromises.push(Promise.resolve(globalThis.__tmp_wu_promise)); delete globalThis.__tmp_wu_promise;", "waituntil_push.js")
 		}
 		return v8.Undefined(iso)
 	})
-	execCtx.Set("waitUntil", waitUntilFT.GetFunction(ctx))
+	_ = execCtx.Set("waitUntil", waitUntilFT.GetFunction(ctx))
 
 	passThroughFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		return v8.Undefined(iso)
 	})
-	execCtx.Set("passThroughOnException", passThroughFT.GetFunction(ctx))
+	_ = execCtx.Set("passThroughOnException", passThroughFT.GetFunction(ctx))
 
 	return execCtx.Value, nil
 }
@@ -449,6 +458,6 @@ func drainWaitUntil(ctx *v8.Context, deadline time.Time) {
 		return
 	}
 	if wuVal != nil && wuVal.IsPromise() {
-		awaitValue(ctx, wuVal, deadline)
+		_, _ = awaitValue(ctx, wuVal, deadline)
 	}
 }

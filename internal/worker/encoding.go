@@ -105,7 +105,7 @@ const encodingJS = `
 `
 
 // setupEncoding evaluates the pure-JS atob/btoa implementations.
-func setupEncoding(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupEncoding(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	if _, err := ctx.RunScript(encodingJS, "encoding.js"); err != nil {
 		return fmt.Errorf("evaluating encoding.js: %w", err)
 	}

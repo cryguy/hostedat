@@ -1,7 +1,9 @@
 package api
 
 import (
+	"errors"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"net/http/httputil"
@@ -11,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/cryguy/hostedat/internal/models"
-	minio "github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7"
 	"gorm.io/gorm"
 )
 
@@ -73,7 +75,7 @@ func NewPublicS3Wrapper(s3Proxy http.Handler, db *gorm.DB, s3Client bucketClient
 		// Check if this bucket exists and is marked public.
 		var bucket models.StorageBucket
 		if err := db.Where("bucket_name = ? AND public = ?", bucketName, true).First(&bucket).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
 				http.Error(w, "access denied", http.StatusForbidden)
 				return
 			}
@@ -87,7 +89,7 @@ func NewPublicS3Wrapper(s3Proxy http.Handler, db *gorm.DB, s3Client bucketClient
 			http.Error(w, "failed to retrieve object", http.StatusInternalServerError)
 			return
 		}
-		defer obj.Close()
+		defer func() { _ = obj.Close() }()
 
 		info, err := obj.Stat()
 		if err != nil {
@@ -119,7 +121,9 @@ func NewPublicS3Wrapper(s3Proxy http.Handler, db *gorm.DB, s3Client bucketClient
 		}
 
 		w.WriteHeader(http.StatusOK)
-		io.Copy(w, obj)
+		if _, err := io.Copy(w, obj); err != nil {
+			log.Printf("s3proxy: error streaming object %s/%s: %v", bucketName, objectKey, err)
+		}
 	})
 }
 

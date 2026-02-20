@@ -18,13 +18,13 @@ type StorageBucket struct {
 }
 
 type StorageCredential struct {
-	ID              string    `json:"id"`
-	UserID          string    `json:"user_id"`
-	AccessKeyID     string    `json:"access_key_id"`
-	SecretAccessKey  string    `json:"secret_access_key,omitempty"`
-	Name            string    `json:"name"`
+	ID              string     `json:"id"`
+	UserID          string     `json:"user_id"`
+	AccessKeyID     string     `json:"access_key_id"`
+	SecretAccessKey string     `json:"secret_access_key,omitempty"`
+	Name            string     `json:"name"`
 	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	CreatedAt       time.Time  `json:"created_at"`
 }
 
 func (c *Client) ListBuckets(siteID string) ([]StorageBucket, error) {
@@ -120,7 +120,7 @@ func (c *Client) UploadToBucket(siteID, bucketID, key string, data []byte) error
 	if err != nil {
 		return fmt.Errorf("uploading: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))

@@ -14,7 +14,7 @@ import (
 	"github.com/cryguy/hostedat/internal/seaweedfs"
 	"github.com/cryguy/hostedat/internal/storage"
 	"github.com/labstack/echo/v4"
-	minio "github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7"
 	"gorm.io/gorm"
 )
 
@@ -29,7 +29,7 @@ var reservedSlugs = map[string]bool{
 type SiteHandler struct {
 	DB        *gorm.DB
 	Storage   *storage.Manager
-	S3Client  *minio.Client  // optional; nil when object storage is disabled
+	S3Client  *minio.Client     // optional; nil when object storage is disabled
 	IAMClient *seaweedfs.Client // optional; nil when object storage is disabled
 }
 
@@ -263,7 +263,7 @@ func reconcileIAMPoliciesForUser(db *gorm.DB, iamClient *seaweedfs.Client, userI
 		resources = append(resources, "arn:aws:s3:::"+b.BucketName+"/*")
 	}
 
-	statements := []map[string]interface{}{}
+	var statements []map[string]interface{}
 	if len(resources) > 0 {
 		statements = append(statements, map[string]interface{}{
 			"Effect":   "Allow",

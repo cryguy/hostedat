@@ -10,7 +10,7 @@ import (
 
 // setupConsole replaces globalThis.console with a Go-backed version
 // that captures output into the per-request log buffer.
-func setupConsole(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupConsole(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	console, err := newJSObject(iso, ctx)
 	if err != nil {
 		return fmt.Errorf("creating console object: %w", err)
@@ -35,9 +35,9 @@ func setupConsole(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 			addLog(reqID, lvl, msg)
 			return v8.Undefined(iso)
 		})
-		console.Set(lvl, ft.GetFunction(ctx))
+		_ = console.Set(lvl, ft.GetFunction(ctx))
 	}
 
-	ctx.Global().Set("console", console)
+	_ = ctx.Global().Set("console", console)
 	return nil
 }

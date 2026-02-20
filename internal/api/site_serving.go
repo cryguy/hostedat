@@ -165,7 +165,7 @@ func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteR
 		deployPath := store.GetDeploymentPath(site.ID, deployID)
 
 		// Load/cache rules
-		rules := loadRules(store, cache, site.ID, deployID, deployPath)
+		rules := loadRules(cache, site.ID, deployID, deployPath)
 
 		// 1. Apply matching headers (with denylist)
 		if rules != nil {
@@ -224,7 +224,7 @@ func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteR
 	}
 }
 
-func loadRules(store *storage.Manager, cache *storage.SiteRulesCache, siteID string, deployID string, deployPath string) *storage.SiteRules {
+func loadRules(cache *storage.SiteRulesCache, siteID string, deployID string, deployPath string) *storage.SiteRules {
 	if cached, ok := cache.Get(siteID, deployID); ok {
 		return cached
 	}
@@ -256,7 +256,11 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 	var body []byte
 	maxBody := int64(workerEngine.MaxResponseBytes())
 	if req.Body != nil {
-		body, _ = io.ReadAll(io.LimitReader(req.Body, maxBody+1))
+		var err error
+		body, err = io.ReadAll(io.LimitReader(req.Body, maxBody+1))
+		if err != nil {
+			return errorJSON(c, http.StatusBadRequest, "failed to read request body")
+		}
 		if int64(len(body)) > maxBody {
 			return errorJSON(c, http.StatusRequestEntityTooLarge, "request body too large")
 		}

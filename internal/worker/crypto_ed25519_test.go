@@ -441,7 +441,9 @@ func TestCrypto_Ed25519VerifyWithPrivateKey(t *testing.T) {
 	var data struct {
 		Valid bool `json:"valid"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Valid {
 		t.Error("verify with private key should extract public key and succeed")
 	}
@@ -471,12 +473,14 @@ func TestCrypto_Ed25519ExportPrivateRaw(t *testing.T) {
 	assertOK(t, r)
 
 	var data struct {
-		PrivLen  int  `json:"privLen"`
-		PubLen   int  `json:"pubLen"`
-		PrivBuf  bool `json:"privIsBuf"`
-		PubBuf   bool `json:"pubIsBuf"`
+		PrivLen int  `json:"privLen"`
+		PubLen  int  `json:"pubLen"`
+		PrivBuf bool `json:"privIsBuf"`
+		PubBuf  bool `json:"pubIsBuf"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.PrivLen != 32 {
 		t.Errorf("private key raw export length = %d, want 32 (seed)", data.PrivLen)
 	}
@@ -519,13 +523,15 @@ func TestCrypto_Ed25519ExportPrivateJWK(t *testing.T) {
 	assertOK(t, r)
 
 	var data struct {
-		Kty  string `json:"kty"`
-		Crv  string `json:"crv"`
-		HasX bool   `json:"hasX"`
-		HasD bool   `json:"hasD"`
-		Valid bool  `json:"valid"`
+		Kty   string `json:"kty"`
+		Crv   string `json:"crv"`
+		HasX  bool   `json:"hasX"`
+		HasD  bool   `json:"hasD"`
+		Valid bool   `json:"valid"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Kty != "OKP" {
 		t.Errorf("kty = %q, want OKP", data.Kty)
 	}
@@ -567,7 +573,9 @@ func TestCrypto_Ed25519ImportFullPrivateKey(t *testing.T) {
 	var data struct {
 		Valid bool `json:"valid"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Valid {
 		t.Error("Ed25519 sign/verify should work")
 	}

@@ -195,7 +195,7 @@ globalThis.ReadableByteStreamController = ReadableByteStreamController;
 
 // setupBYOBReader registers ReadableStreamBYOBReader and
 // ReadableByteStreamController, monkey-patching the existing ReadableStream.
-func setupBYOBReader(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupBYOBReader(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	if _, err := ctx.RunScript(byobReaderJS, "byob_reader.js"); err != nil {
 		return fmt.Errorf("evaluating byob_reader.js: %w", err)
 	}

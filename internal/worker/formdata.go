@@ -157,7 +157,7 @@ globalThis.FormData = FormData;
 `
 
 // setupFormData evaluates the FormData/Blob/File polyfills.
-func setupFormData(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupFormData(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	if _, err := ctx.RunScript(formdataJS, "formdata.js"); err != nil {
 		return fmt.Errorf("evaluating formdata.js: %w", err)
 	}

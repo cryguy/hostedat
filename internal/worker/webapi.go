@@ -331,7 +331,7 @@ USP.sort = function() {
 `
 
 // setupURLSearchParamsExt evaluates the URLSearchParams extension polyfill.
-func setupURLSearchParamsExt(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupURLSearchParamsExt(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	if _, err := ctx.RunScript(urlSearchParamsExtJS, "urlsearchparams_ext.js"); err != nil {
 		return fmt.Errorf("evaluating urlsearchparams_ext.js: %w", err)
 	}
@@ -340,7 +340,7 @@ func setupURLSearchParamsExt(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) er
 
 // setupWebAPIs registers Go-backed helpers and evaluates the JS class
 // definitions that form the Web API surface available to workers.
-func setupWebAPIs(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupWebAPIs(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	// Register Go-backed URL parser.
 	ft := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
@@ -366,7 +366,7 @@ func setupWebAPIs(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 		val, _ := v8.NewValue(iso, string(data))
 		return val
 	})
-	ctx.Global().Set("__parseURL", ft.GetFunction(ctx))
+	_ = ctx.Global().Set("__parseURL", ft.GetFunction(ctx))
 
 	// Evaluate the JS class definitions.
 	_, err := ctx.RunScript(webAPIsJS, "webapi.js")
@@ -452,16 +452,16 @@ func goRequestToJS(iso *v8.Isolate, ctx *v8.Context, req *WorkerRequest) (*v8.Va
 
 	// Set temporary globals for the constructor call.
 	urlVal, _ := v8.NewValue(iso, req.URL)
-	ctx.Global().Set("__tmp_url", urlVal)
+	_ = ctx.Global().Set("__tmp_url", urlVal)
 	methodVal, _ := v8.NewValue(iso, req.Method)
-	ctx.Global().Set("__tmp_method", methodVal)
+	_ = ctx.Global().Set("__tmp_method", methodVal)
 	headersStr, _ := v8.NewValue(iso, string(headersJSON))
-	ctx.Global().Set("__tmp_headers_json", headersStr)
+	_ = ctx.Global().Set("__tmp_headers_json", headersStr)
 
 	var bodyScript string
-	if req.Body != nil && len(req.Body) > 0 {
+	if len(req.Body) > 0 {
 		bodyVal, _ := v8.NewValue(iso, string(req.Body))
-		ctx.Global().Set("__tmp_body", bodyVal)
+		_ = ctx.Global().Set("__tmp_body", bodyVal)
 		bodyScript = "init.body = globalThis.__tmp_body;"
 	}
 
@@ -489,7 +489,7 @@ func jsResponseToGo(ctx *v8.Context, val *v8.Value) (*WorkerResponse, error) {
 	}
 
 	// Use JS to extract all response data as JSON in one call.
-	ctx.Global().Set("__tmp_resp", val)
+	_ = ctx.Global().Set("__tmp_resp", val)
 	result, err := ctx.RunScript(`(function() {
 		var r = globalThis.__tmp_resp;
 		delete globalThis.__tmp_resp;

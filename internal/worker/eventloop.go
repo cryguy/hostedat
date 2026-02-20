@@ -125,7 +125,7 @@ func (el *eventLoop) drain(iso *v8.Isolate, ctx *v8.Context, deadline time.Time)
 
 		// Call on the isolate's goroutine. Ignore errors from timer callbacks.
 		undefinedVal := v8.Undefined(iso)
-		cb.Call(undefinedVal, undefinedVal)
+		_, _ = cb.Call(undefinedVal, undefinedVal)
 		ctx.PerformMicrotaskCheckpoint()
 	}
 }

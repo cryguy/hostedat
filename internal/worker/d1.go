@@ -35,7 +35,7 @@ func OpenD1Database(dataDir, databaseID string) (*D1Bridge, error) {
 		return nil, fmt.Errorf("opening D1 database %q: %w", databaseID, err)
 	}
 	// Enable WAL mode for better concurrent access.
-	db.Exec("PRAGMA journal_mode=WAL")
+	_, _ = db.Exec("PRAGMA journal_mode=WAL")
 	return &D1Bridge{db: db, DatabaseID: databaseID}, nil
 }
 
@@ -84,7 +84,7 @@ func (d *D1Bridge) Exec(sqlStr string, bindings []interface{}) (*D1ExecResult, e
 		if err != nil {
 			return nil, fmt.Errorf("D1: query error: %w", err)
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		columns, err := rows.Columns()
 		if err != nil {
@@ -150,10 +150,10 @@ func (d *D1Bridge) Exec(sqlStr string, bindings []interface{}) (*D1ExecResult, e
 // and dump() methods backed by the given D1Bridge.
 func buildD1Binding(iso *v8.Isolate, ctx *v8.Context, bridge *D1Bridge) (*v8.Value, error) {
 	dbIDVal, _ := v8.NewValue(iso, bridge.DatabaseID)
-	ctx.Global().Set("__d1_db_id_"+bridge.DatabaseID, dbIDVal)
+	_ = ctx.Global().Set("__d1_db_id_"+bridge.DatabaseID, dbIDVal)
 
 	execFnName := "__d1_exec_" + bridge.DatabaseID
-	ctx.Global().Set(execFnName, v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set(execFnName, v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			errVal, _ := v8.NewValue(iso, `{"error":"__d1_exec requires sql and bindings arguments"}`)
@@ -366,6 +366,6 @@ func buildD1Binding(iso *v8.Isolate, ctx *v8.Context, bridge *D1Bridge) (*v8.Val
 
 // setupD1 is a no-op setup function for the D1 binding.
 // The actual bindings are created per-database in buildD1Binding.
-func setupD1(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupD1(_ *v8.Isolate, _ *v8.Context, _ *eventLoop) error {
 	return nil
 }

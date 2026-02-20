@@ -50,7 +50,7 @@ func (c *Client) doIAM(params url.Values) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("IAM request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -131,6 +131,6 @@ func (c *Client) Health() error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	return nil
 }

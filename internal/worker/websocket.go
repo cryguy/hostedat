@@ -111,7 +111,7 @@ globalThis.WebSocketPair = WebSocketPair;
 
 // setupWebSocket registers the WebSocket/WebSocketPair JS classes and the
 // Go-backed __wsSend/__wsClose functions that bridge to the HTTP WebSocket.
-func setupWebSocket(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupWebSocket(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	// __wsSend(data, isBinary) — sends a message to the HTTP WebSocket client.
 	// If isBinary is true, data is base64-encoded and sent as a binary message.
 	sendFn := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
@@ -187,7 +187,7 @@ func setupWebSocket(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 		defer state.wsMu.Unlock()
 		if !state.wsClosed {
 			state.wsClosed = true
-			state.wsConn.Close(code, reason)
+			_ = state.wsConn.Close(code, reason)
 		}
 		return nil
 	})
@@ -217,7 +217,7 @@ type WebSocketHandler struct {
 func (wsh *WebSocketHandler) Bridge(ctx context.Context, httpConn *websocket.Conn) {
 	defer func() {
 		// Dispatch close event to the server WebSocket.
-		wsh.worker.ctx.RunScript(`
+		_, _ = wsh.worker.ctx.RunScript(`
 			if (globalThis.__ws_active_server) {
 				globalThis.__ws_active_server._dispatch('close', {
 					code: 1000, reason: '', wasClean: true
@@ -281,8 +281,8 @@ func (wsh *WebSocketHandler) Bridge(ctx context.Context, httpConn *websocket.Con
 				// Binary message: base64-encode and convert to ArrayBuffer in JS.
 				b64 := base64.StdEncoding.EncodeToString(msg.data)
 				b64Val, _ := v8.NewValue(iso, b64)
-				v8ctx.Global().Set("__ws_incoming_data", b64Val)
-				v8ctx.RunScript(`
+				_ = v8ctx.Global().Set("__ws_incoming_data", b64Val)
+				_, _ = v8ctx.RunScript(`
 					(function() {
 						var b64 = globalThis.__ws_incoming_data;
 						delete globalThis.__ws_incoming_data;
@@ -296,8 +296,8 @@ func (wsh *WebSocketHandler) Bridge(ctx context.Context, httpConn *websocket.Con
 				// Text message: dispatch as string.
 				dataStr := string(msg.data)
 				dataVal, _ := v8.NewValue(iso, dataStr)
-				v8ctx.Global().Set("__ws_incoming_data", dataVal)
-				v8ctx.RunScript(`
+				_ = v8ctx.Global().Set("__ws_incoming_data", dataVal)
+				_, _ = v8ctx.RunScript(`
 					(function() {
 						var data = globalThis.__ws_incoming_data;
 						delete globalThis.__ws_incoming_data;

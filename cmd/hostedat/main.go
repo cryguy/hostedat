@@ -51,7 +51,7 @@ func main() {
 	root.AddCommand(versionCmd())
 
 	if err := root.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
 	}
 }
@@ -113,16 +113,16 @@ func sitesCmd() *cobra.Command {
 			}
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tNAME\tSUBDOMAIN\tVERSION\tCREATED")
+			_, _ = fmt.Fprintln(w, "ID\tNAME\tSUBDOMAIN\tVERSION\tCREATED")
 			for _, s := range sites {
 				ver := "-"
 				if s.ActiveVersion != nil {
 					ver = fmt.Sprintf("v%d", *s.ActiveVersion)
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 					s.ID, s.Name, s.SubdomainSlug, ver, s.CreatedAt.Format("2006-01-02"))
 			}
-			w.Flush()
+			_ = w.Flush()
 			return nil
 		},
 	}
@@ -224,7 +224,7 @@ func deployCmd() *cobra.Command {
 			if spaFlag && !site.SPAMode {
 				spaOn := true
 				if _, err := c.UpdateSite(site.ID, nil, &spaOn); err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: deployed OK but failed to enable SPA mode: %s\n", err)
+					_, _ = fmt.Fprintf(os.Stderr, "Warning: deployed OK but failed to enable SPA mode: %s\n", err)
 				} else {
 					fmt.Println("SPA mode enabled.")
 				}
@@ -270,7 +270,7 @@ func detectSPA(dir string) bool {
 
 	// Count .html files — SPAs typically have very few (index.html + maybe 404.html)
 	htmlCount := 0
-	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -319,16 +319,16 @@ func storageCmd() *cobra.Command {
 			}
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tBINDING\tBUCKET NAME\tPUBLIC\tCREATED")
+			_, _ = fmt.Fprintln(w, "ID\tBINDING\tBUCKET NAME\tPUBLIC\tCREATED")
 			for _, b := range buckets {
 				pub := "no"
 				if b.Public {
 					pub = "yes"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 					b.ID, b.Name, b.BucketName, pub, b.CreatedAt.Format("2006-01-02"))
 			}
-			w.Flush()
+			_ = w.Flush()
 			return nil
 		},
 	}
@@ -518,16 +518,16 @@ func storageCredentialsCmd() *cobra.Command {
 			}
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tNAME\tACCESS KEY ID\tLAST USED\tCREATED")
+			_, _ = fmt.Fprintln(w, "ID\tNAME\tACCESS KEY ID\tLAST USED\tCREATED")
 			for _, cr := range credentials {
 				lastUsed := "Never"
 				if cr.LastUsedAt != nil {
 					lastUsed = cr.LastUsedAt.Format("2006-01-02")
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 					cr.ID, cr.Name, cr.AccessKeyID, lastUsed, cr.CreatedAt.Format("2006-01-02"))
 			}
-			w.Flush()
+			_ = w.Flush()
 			return nil
 		},
 	}
@@ -649,7 +649,9 @@ func resolveServer() string {
 	if err == nil && cfg.Server != "" {
 		return cfg.Server
 	}
-	if defaultServer != "" {
+	// linter does not take into account the fact that we inject it via LDFLAGS
+	if //goland:noinspection GoBoolExpressions
+	defaultServer != "" {
 		return defaultServer
 	}
 	return ""

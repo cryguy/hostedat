@@ -189,7 +189,7 @@ func TestHasSigV4Signature_NoAuth(t *testing.T) {
 func TestS3Proxy_NoSigV4Required(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("proxied"))
+		_, _ = w.Write([]byte("proxied"))
 	}))
 	defer target.Close()
 

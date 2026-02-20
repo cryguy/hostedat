@@ -49,8 +49,8 @@ func TestCacheBridge_PutReplaces(t *testing.T) {
 	db := testDB(t)
 	bridge := &CacheBridge{DB: db}
 
-	bridge.Put("default", "https://example.com/page", 200, "{}", []byte("first"), nil)
-	bridge.Put("default", "https://example.com/page", 201, "{}", []byte("second"), nil)
+	_ = bridge.Put("default", "https://example.com/page", 200, "{}", []byte("first"), nil)
+	_ = bridge.Put("default", "https://example.com/page", 201, "{}", []byte("second"), nil)
 
 	entry, _ := bridge.Match("default", "https://example.com/page")
 	if entry == nil {
@@ -75,7 +75,7 @@ func TestCacheBridge_Delete(t *testing.T) {
 	db := testDB(t)
 	bridge := &CacheBridge{DB: db}
 
-	bridge.Put("default", "https://example.com/del", 200, "{}", []byte("data"), nil)
+	_ = bridge.Put("default", "https://example.com/del", 200, "{}", []byte("data"), nil)
 	deleted, err := bridge.Delete("default", "https://example.com/del")
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -109,7 +109,7 @@ func TestCacheBridge_TTLExpiration(t *testing.T) {
 
 	// Use TTL of 0 to create an already-expired entry.
 	ttl := -1 // negative value won't set ExpiresAt via Put
-	bridge.Put("default", "https://example.com/ttl", 200, "{}", []byte("expired"), &ttl)
+	_ = bridge.Put("default", "https://example.com/ttl", 200, "{}", []byte("expired"), &ttl)
 
 	// Manually set a past expiration.
 	db.Model(&models.CacheEntry{}).Where("url = ?", "https://example.com/ttl").
@@ -125,8 +125,8 @@ func TestCacheBridge_SeparateCacheNames(t *testing.T) {
 	db := testDB(t)
 	bridge := &CacheBridge{DB: db}
 
-	bridge.Put("cache-a", "https://example.com/url", 200, "{}", []byte("from-a"), nil)
-	bridge.Put("cache-b", "https://example.com/url", 200, "{}", []byte("from-b"), nil)
+	_ = bridge.Put("cache-a", "https://example.com/url", 200, "{}", []byte("from-a"), nil)
+	_ = bridge.Put("cache-b", "https://example.com/url", 200, "{}", []byte("from-b"), nil)
 
 	entryA, _ := bridge.Match("cache-a", "https://example.com/url")
 	entryB, _ := bridge.Match("cache-b", "https://example.com/url")
@@ -210,7 +210,9 @@ func TestCache_MatchMiss(t *testing.T) {
 	var data struct {
 		Hit bool `json:"hit"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Hit {
 		t.Error("should be a cache miss")
 	}
@@ -249,7 +251,9 @@ func TestCache_Delete(t *testing.T) {
 		Deleted bool `json:"deleted"`
 		Gone    bool `json:"gone"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Deleted {
 		t.Error("delete should return true")
 	}
@@ -290,7 +294,9 @@ func TestCache_OpenNamedCache(t *testing.T) {
 		InNamed   bool    `json:"inNamed"`
 		Body      *string `json:"body"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.InDefault {
 		t.Error("entry should not be in default cache")
 	}
@@ -326,7 +332,9 @@ func TestCache_PutWithRequest(t *testing.T) {
 		Hit  bool    `json:"hit"`
 		Body *string `json:"body"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Hit {
 		t.Error("should match using Request object")
 	}
@@ -357,7 +365,9 @@ func TestCache_MatchWithStringURL(t *testing.T) {
 		Hit  bool    `json:"hit"`
 		Body *string `json:"body"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Hit {
 		t.Error("should match with string URL")
 	}
@@ -381,7 +391,9 @@ func TestCache_CachesOpenReturnsSameInstance(t *testing.T) {
 	var data struct {
 		Same bool `json:"same"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Same {
 		t.Error("caches.open should return same instance for same name")
 	}
@@ -404,7 +416,9 @@ func TestCache_DeleteNonExistent(t *testing.T) {
 	var data struct {
 		Deleted bool `json:"deleted"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Deleted {
 		t.Error("deleting non-existent entry should return false")
 	}

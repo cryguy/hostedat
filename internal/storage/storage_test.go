@@ -107,12 +107,19 @@ func TestExtractZip_ZipSlipProtection(t *testing.T) {
 	// Manually create a zip with a path-traversal entry
 	buf := new(bytes.Buffer)
 	w := zip.NewWriter(buf)
-	f, _ := w.Create("../../../etc/passwd")
-	f.Write([]byte("evil"))
-	w.Close()
+	f, err := w.Create("../../../etc/passwd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte("evil")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	m := NewManager(t.TempDir())
-	err := m.ExtractZip("s1", "deploy1", bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	err = m.ExtractZip("s1", "deploy1", bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	if err == nil {
 		t.Fatal("expected zip slip error")
 	}
@@ -123,7 +130,7 @@ func TestExtractZip_ZipSlipProtection(t *testing.T) {
 
 func TestResolveFile_ExactFile(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "about.html"), []byte("about"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "about.html"), []byte("about"), 0644)
 
 	m := NewManager("")
 	path, ok := m.ResolveFile(dir, "/about.html")
@@ -138,8 +145,8 @@ func TestResolveFile_ExactFile(t *testing.T) {
 func TestResolveFile_IndexHtml(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "blog")
-	os.MkdirAll(sub, 0755)
-	os.WriteFile(filepath.Join(sub, "index.html"), []byte("blog index"), 0644)
+	_ = os.MkdirAll(sub, 0755)
+	_ = os.WriteFile(filepath.Join(sub, "index.html"), []byte("blog index"), 0644)
 
 	m := NewManager("")
 	path, ok := m.ResolveFile(dir, "/blog")
@@ -153,7 +160,7 @@ func TestResolveFile_IndexHtml(t *testing.T) {
 
 func TestResolveFile_DotHtml(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "about.html"), []byte("about"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "about.html"), []byte("about"), 0644)
 
 	m := NewManager("")
 	path, ok := m.ResolveFile(dir, "/about")
@@ -167,7 +174,7 @@ func TestResolveFile_DotHtml(t *testing.T) {
 
 func TestResolveFile_Root(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "index.html"), []byte("home"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "index.html"), []byte("home"), 0644)
 
 	m := NewManager("")
 	path, ok := m.ResolveFile(dir, "/")
@@ -191,11 +198,11 @@ func TestResolveFile_NotFound(t *testing.T) {
 func TestResolveFile_PathTraversal(t *testing.T) {
 	dir := t.TempDir()
 	// Create a file outside the deployment dir
-	os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("secret"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("secret"), 0644)
 
 	deployDir := filepath.Join(dir, "deploy")
-	os.MkdirAll(deployDir, 0755)
-	os.WriteFile(filepath.Join(deployDir, "index.html"), []byte("home"), 0644)
+	_ = os.MkdirAll(deployDir, 0755)
+	_ = os.WriteFile(filepath.Join(deployDir, "index.html"), []byte("home"), 0644)
 
 	m := NewManager("")
 	// Attempt path traversal
@@ -231,8 +238,12 @@ func TestExtractZip_RejectsSymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating symlink entry: %v", err)
 	}
-	fw.Write([]byte("../etc/passwd"))
-	w.Close()
+	if _, err := fw.Write([]byte("../etc/passwd")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	m := NewManager(t.TempDir())
 	err = m.ExtractZip("s1", "deploy1", bytes.NewReader(buf.Bytes()), int64(buf.Len()))
@@ -249,8 +260,8 @@ func TestDeleteSite(t *testing.T) {
 	m := NewManager(base)
 
 	siteDir := filepath.Join(base, "s1")
-	os.MkdirAll(filepath.Join(siteDir, "1"), 0755)
-	os.WriteFile(filepath.Join(siteDir, "1", "index.html"), []byte("hi"), 0644)
+	_ = os.MkdirAll(filepath.Join(siteDir, "1"), 0755)
+	_ = os.WriteFile(filepath.Join(siteDir, "1", "index.html"), []byte("hi"), 0644)
 
 	if err := m.DeleteSite("s1"); err != nil {
 		t.Fatalf("DeleteSite: %v", err)
@@ -267,8 +278,8 @@ func TestHasWorkerScript_Present(t *testing.T) {
 
 	// Create deployment dir with _worker.js
 	deployPath := store.GetDeploymentPath(siteID, deployKey)
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "_worker.js"), []byte("export default {}"), 0644)
+	_ = os.MkdirAll(deployPath, 0755)
+	_ = os.WriteFile(filepath.Join(deployPath, "_worker.js"), []byte("export default {}"), 0644)
 
 	if !store.HasWorkerScript(siteID, deployKey) {
 		t.Error("expected HasWorkerScript to return true")
@@ -289,9 +300,9 @@ func TestGetWorkerScript(t *testing.T) {
 	deployKey := "deploy1"
 
 	deployPath := store.GetDeploymentPath(siteID, deployKey)
-	os.MkdirAll(deployPath, 0755)
+	_ = os.MkdirAll(deployPath, 0755)
 	content := "export default { fetch() { return new Response('hi') } }"
-	os.WriteFile(filepath.Join(deployPath, "_worker.js"), []byte(content), 0644)
+	_ = os.WriteFile(filepath.Join(deployPath, "_worker.js"), []byte(content), 0644)
 
 	got, err := store.GetWorkerScript(siteID, deployKey)
 	if err != nil {

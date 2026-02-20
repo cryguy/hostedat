@@ -259,7 +259,9 @@ func TestAbort_EventOnceListener(t *testing.T) {
 	var data struct {
 		Count int `json:"count"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Count != 1 {
 		t.Errorf("once listener count = %d, want 1", data.Count)
 	}
@@ -292,7 +294,9 @@ func TestAbort_EventPreventDefault(t *testing.T) {
 		AfterPD  bool `json:"afterPD"`
 		NcPD     bool `json:"ncPD"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.BeforePD {
 		t.Error("defaultPrevented should be false before preventDefault()")
 	}
@@ -327,7 +331,9 @@ func TestAbort_SignalAbortDefaultReason(t *testing.T) {
 		IsDOMException bool   `json:"isDOMException"`
 		ReasonName     string `json:"reasonName"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Aborted {
 		t.Error("AbortSignal.abort() should be aborted")
 	}
@@ -364,7 +370,9 @@ func TestAbort_DoubleAbortIsNoop(t *testing.T) {
 		Count  int    `json:"count"`
 		Reason string `json:"reason"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Count != 1 {
 		t.Errorf("abort event should only fire once, count = %d", data.Count)
 	}
@@ -399,7 +407,9 @@ func TestAbort_DispatchEventReturnValue(t *testing.T) {
 		Result1 bool `json:"result1"`
 		Result2 bool `json:"result2"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Result1 {
 		t.Error("dispatchEvent should return true when not prevented")
 	}
@@ -434,7 +444,9 @@ func TestAbort_SignalTimeout(t *testing.T) {
 		AfterAborted  bool   `json:"afterAborted"`
 		ReasonName    string `json:"reasonName"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.BeforeAborted {
 		t.Error("signal should not be aborted before timeout fires")
 	}
@@ -466,7 +478,9 @@ func TestAbort_SignalTimeoutListenerFires(t *testing.T) {
 	var data struct {
 		Fired bool `json:"fired"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Fired {
 		t.Error("abort listener should fire after timeout")
 	}

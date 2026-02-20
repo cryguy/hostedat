@@ -14,7 +14,7 @@ func TestD1Bridge_CreateTableAndInsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewD1BridgeMemory: %v", err)
 	}
-	defer bridge.Close()
+	defer func() { _ = bridge.Close() }()
 
 	// Create table
 	_, err = bridge.Exec("CREATE TABLE d1_users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)", nil)
@@ -40,11 +40,11 @@ func TestD1Bridge_SelectQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewD1BridgeMemory: %v", err)
 	}
-	defer bridge.Close()
+	defer func() { _ = bridge.Close() }()
 
-	bridge.Exec("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)", nil)
-	bridge.Exec("INSERT INTO items (name) VALUES (?)", []interface{}{"apple"})
-	bridge.Exec("INSERT INTO items (name) VALUES (?)", []interface{}{"banana"})
+	_, _ = bridge.Exec("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)", nil)
+	_, _ = bridge.Exec("INSERT INTO items (name) VALUES (?)", []interface{}{"apple"})
+	_, _ = bridge.Exec("INSERT INTO items (name) VALUES (?)", []interface{}{"banana"})
 
 	result, err := bridge.Exec("SELECT id, name FROM items ORDER BY name", nil)
 	if err != nil {
@@ -69,11 +69,11 @@ func TestD1Bridge_SelectWithBindings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewD1BridgeMemory: %v", err)
 	}
-	defer bridge.Close()
+	defer func() { _ = bridge.Close() }()
 
-	bridge.Exec("CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT, price REAL)", nil)
-	bridge.Exec("INSERT INTO products (name, price) VALUES (?, ?)", []interface{}{"widget", 9.99})
-	bridge.Exec("INSERT INTO products (name, price) VALUES (?, ?)", []interface{}{"gadget", 19.99})
+	_, _ = bridge.Exec("CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT, price REAL)", nil)
+	_, _ = bridge.Exec("INSERT INTO products (name, price) VALUES (?, ?)", []interface{}{"widget", 9.99})
+	_, _ = bridge.Exec("INSERT INTO products (name, price) VALUES (?, ?)", []interface{}{"gadget", 19.99})
 
 	result, err := bridge.Exec("SELECT name, price FROM products WHERE price > ?", []interface{}{10.0})
 	if err != nil {
@@ -89,11 +89,11 @@ func TestD1Bridge_UpdateAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewD1BridgeMemory: %v", err)
 	}
-	defer bridge.Close()
+	defer func() { _ = bridge.Close() }()
 
-	bridge.Exec("CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT)", nil)
-	bridge.Exec("INSERT INTO kv (key, value) VALUES (?, ?)", []interface{}{"a", "1"})
-	bridge.Exec("INSERT INTO kv (key, value) VALUES (?, ?)", []interface{}{"b", "2"})
+	_, _ = bridge.Exec("CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT)", nil)
+	_, _ = bridge.Exec("INSERT INTO kv (key, value) VALUES (?, ?)", []interface{}{"a", "1"})
+	_, _ = bridge.Exec("INSERT INTO kv (key, value) VALUES (?, ?)", []interface{}{"b", "2"})
 
 	// Update
 	result, err := bridge.Exec("UPDATE kv SET value = ? WHERE key = ?", []interface{}{"updated", "a"})
@@ -128,9 +128,9 @@ func TestD1Bridge_EmptyResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewD1BridgeMemory: %v", err)
 	}
-	defer bridge.Close()
+	defer func() { _ = bridge.Close() }()
 
-	bridge.Exec("CREATE TABLE empty_tbl (id INTEGER PRIMARY KEY)", nil)
+	_, _ = bridge.Exec("CREATE TABLE empty_tbl (id INTEGER PRIMARY KEY)", nil)
 
 	result, err := bridge.Exec("SELECT * FROM empty_tbl", nil)
 	if err != nil {
@@ -146,7 +146,7 @@ func TestD1Bridge_SQLError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewD1BridgeMemory: %v", err)
 	}
-	defer bridge.Close()
+	defer func() { _ = bridge.Close() }()
 
 	_, err = bridge.Exec("SELECT * FROM nonexistent_table", nil)
 	if err == nil {
@@ -199,7 +199,9 @@ func TestD1_JSPrepareAndAll(t *testing.T) {
 		First   map[string]interface{} `json:"first"`
 		Second  map[string]interface{} `json:"second"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Count != 2 {
 		t.Errorf("count = %d, want 2", data.Count)
 	}
@@ -241,7 +243,9 @@ func TestD1_JSFirst(t *testing.T) {
 		Name    string                 `json:"name"`
 		Missing interface{}            `json:"missing"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Row["name"] != "gadget" {
 		t.Errorf("row.name = %v, want gadget", data.Row["name"])
 	}
@@ -286,7 +290,9 @@ func TestD1_JSRaw(t *testing.T) {
 		WithColsCount int           `json:"withColsCount"`
 		Header        []interface{} `json:"header"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.RawCount != 2 {
 		t.Errorf("rawCount = %d, want 2", data.RawCount)
 	}
@@ -321,7 +327,9 @@ func TestD1_JSRun(t *testing.T) {
 		Success bool `json:"success"`
 		HasMeta bool `json:"hasMeta"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Success {
 		t.Error("success should be true")
 	}
@@ -364,7 +372,9 @@ func TestD1_JSBatch(t *testing.T) {
 		SelectCount int      `json:"selectCount"`
 		Names       []string `json:"names"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.BatchLen != 4 {
 		t.Errorf("batchLen = %d, want 4", data.BatchLen)
 	}
@@ -407,7 +417,9 @@ func TestD1_JSExecMultiStatement(t *testing.T) {
 		RowCount  int      `json:"rowCount"`
 		Values    []string `json:"values"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.ExecCount != 3 {
 		t.Errorf("execCount = %d, want 3", data.ExecCount)
 	}
@@ -439,7 +451,9 @@ func TestD1_JSSQLError(t *testing.T) {
 		Caught bool   `json:"caught"`
 		Msg    string `json:"msg"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Caught {
 		t.Error("SQL error should be caught")
 	}
@@ -477,7 +491,9 @@ func TestD1_JSBindTypes(t *testing.T) {
 		Num  float64 `json:"num"`
 		Flag int     `json:"flag"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Txt != "hello" {
 		t.Errorf("txt = %q, want hello", data.Txt)
 	}
@@ -511,7 +527,9 @@ func TestD1_JSNullHandling(t *testing.T) {
 		Val    interface{} `json:"val"`
 		IsNull bool        `json:"isNull"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsNull {
 		t.Errorf("val should be null, got %v", data.Val)
 	}
@@ -549,7 +567,9 @@ func TestD1_JSMultipleDatabases(t *testing.T) {
 		V1 string `json:"v1"`
 		V2 string `json:"v2"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.V1 != "from-db1" {
 		t.Errorf("v1 = %q, want from-db1", data.V1)
 	}
@@ -588,7 +608,9 @@ func TestD1_JSPrepareReuse(t *testing.T) {
 		Count int      `json:"count"`
 		Names []string `json:"names"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Count != 3 {
 		t.Errorf("count = %d, want 3", data.Count)
 	}
@@ -619,7 +641,9 @@ func TestD1_JSMetaFields(t *testing.T) {
 		InsertMeta D1Meta `json:"insertMeta"`
 		SelectMeta D1Meta `json:"selectMeta"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.InsertMeta.ChangedDB {
 		t.Error("insert meta.changed_db should be true")
 	}
@@ -654,7 +678,9 @@ func TestD1_JSDumpRejected(t *testing.T) {
 		Caught bool   `json:"caught"`
 		Msg    string `json:"msg"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Caught {
 		t.Error("dump() should reject")
 	}
@@ -691,7 +717,9 @@ func TestD1_JSBatchFailingStatement(t *testing.T) {
 		Caught bool   `json:"caught"`
 		Msg    string `json:"msg"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Caught {
 		t.Error("batch with failing statement should reject")
 	}
@@ -722,7 +750,9 @@ func TestD1_JSFirstNonExistentColumn(t *testing.T) {
 		Val    interface{} `json:"val"`
 		IsNull bool        `json:"isNull"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsNull {
 		t.Errorf("first(\"nonexistent\") should return null, got %v", data.Val)
 	}
@@ -760,7 +790,9 @@ func TestD1_JSCTEQuery(t *testing.T) {
 		Success bool    `json:"success"`
 		Values  []int64 `json:"values"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Count != 3 {
 		t.Errorf("count = %d, want 3", data.Count)
 	}
@@ -799,7 +831,9 @@ func TestD1_JSBindZeroArgs(t *testing.T) {
 		Success bool   `json:"success"`
 		Name    string `json:"name"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Count != 1 {
 		t.Errorf("count = %d, want 1", data.Count)
 	}

@@ -74,7 +74,7 @@ func TestEventSource_ConstructorSetsURL(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(200)
-		fmt.Fprintf(w, "data: hello\n\n")
+		_, _ = fmt.Fprintf(w, "data: hello\n\n")
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
@@ -118,7 +118,7 @@ func TestEventSource_CloseSetsClosed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(200)
-		fmt.Fprintf(w, "data: hello\n\n")
+		_, _ = fmt.Fprintf(w, "data: hello\n\n")
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
@@ -156,9 +156,9 @@ func TestEventSource_ReceivesMessages(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(200)
-		fmt.Fprintf(w, "data: msg1\n\n")
-		fmt.Fprintf(w, "data: msg2\n\n")
-		fmt.Fprintf(w, "event: custom\ndata: msg3\n\n")
+		_, _ = fmt.Fprintf(w, "data: msg1\n\n")
+		_, _ = fmt.Fprintf(w, "data: msg2\n\n")
+		_, _ = fmt.Fprintf(w, "event: custom\ndata: msg3\n\n")
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
@@ -275,7 +275,7 @@ func TestEventSource_LastEventId(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(200)
-		fmt.Fprintf(w, "id: evt-42\ndata: with-id\n\n")
+		_, _ = fmt.Fprintf(w, "id: evt-42\ndata: with-id\n\n")
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
@@ -328,7 +328,7 @@ func TestEventSource_OnOpenSetter(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(200)
-		fmt.Fprintf(w, "data: hello\n\n")
+		_, _ = fmt.Fprintf(w, "data: hello\n\n")
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}

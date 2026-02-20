@@ -251,9 +251,9 @@ globalThis.connect = function(address, options) {
 `
 
 // setupTCPSocket registers Go-backed TCP helpers and evaluates the JS wrapper.
-func setupTCPSocket(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupTCPSocket(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	// __tcpConnect(requestID, hostname, port, secure) -> socketID string
-	ctx.Global().Set("__tcpConnect", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__tcpConnect", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 4 {
 			return throwError(iso, "tcpConnect: requires 4 arguments")
@@ -311,7 +311,7 @@ func setupTCPSocket(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __tcpRead(requestID, socketID, maxBytes) -> base64 string, "" if no data, null if EOF
-	ctx.Global().Set("__tcpRead", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__tcpRead", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 3 {
 			return throwError(iso, "tcpRead: requires 3 arguments")
@@ -345,7 +345,7 @@ func setupTCPSocket(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __tcpWrite(requestID, socketID, b64data) -> writes data to conn
-	ctx.Global().Set("__tcpWrite", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__tcpWrite", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 3 {
 			return throwError(iso, "tcpWrite: requires 3 arguments")
@@ -379,7 +379,7 @@ func setupTCPSocket(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __tcpClose(requestID, socketID) -> closes the connection
-	ctx.Global().Set("__tcpClose", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__tcpClose", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			return throwError(iso, "tcpClose: requires 2 arguments")
@@ -398,7 +398,7 @@ func setupTCPSocket(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 			return throwError(iso, "tcpClose: unknown socket ID")
 		}
 
-		conn.Close()
+		_ = conn.Close()
 		delete(state.tcpSockets, socketID)
 		delete(state.tcpSocketBuffers, socketID)
 
@@ -407,7 +407,7 @@ func setupTCPSocket(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __tcpStartTls(requestID, socketID, hostname) -> new socketID with TLS upgrade
-	ctx.Global().Set("__tcpStartTls", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__tcpStartTls", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 3 {
 			return throwError(iso, "tcpStartTls: requires 3 arguments")
@@ -436,7 +436,7 @@ func setupTCPSocket(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 			ServerName: hostname,
 		})
 		if err := tlsConn.Handshake(); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return throwError(iso, fmt.Sprintf("tcpStartTls: TLS handshake failed: %s", err.Error()))
 		}
 
@@ -507,7 +507,7 @@ func cleanupTCPSockets(state *requestState) {
 		return
 	}
 	for _, conn := range state.tcpSockets {
-		conn.Close()
+		_ = conn.Close()
 	}
 	state.tcpSockets = nil
 	state.tcpSocketBuffers = nil

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -21,7 +22,7 @@ func (cb *CacheBridge) Match(cacheName, url string) (*models.CacheEntry, error) 
 	var entry models.CacheEntry
 	err := cb.DB.Where("cache_name = ? AND url = ?", cacheName, url).First(&entry).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -195,7 +196,7 @@ globalThis.caches = new CacheStorage();
 `
 
 // setupCache registers the Cache API JS classes and Go-backed functions.
-func setupCache(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupCache(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	// We need a reference to the DB from the request state.
 	// The cache bridge is created per-call using the global DB reference.
 
@@ -223,7 +224,7 @@ func setupCache(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 
 		var headers map[string]string
 		if entry.Headers != "" {
-			json.Unmarshal([]byte(entry.Headers), &headers)
+			_ = json.Unmarshal([]byte(entry.Headers), &headers)
 		}
 		if headers == nil {
 			headers = make(map[string]string)
@@ -265,7 +266,7 @@ func setupCache(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 			ttl = &ttlVal
 		}
 
-		bridge.Put(cacheName, url, status, headersJSON, []byte(body), ttl)
+		_ = bridge.Put(cacheName, url, status, headersJSON, []byte(body), ttl)
 		return v8.Undefined(iso)
 	})
 	if err := ctx.Global().Set("__cache_put", putFn.GetFunction(ctx)); err != nil {
@@ -317,7 +318,7 @@ func getCacheBridge(ctx *v8.Context) *CacheBridge {
 	}
 
 	var reqID uint64
-	fmt.Sscanf(reqIDVal.String(), "%d", &reqID)
+	_, _ = fmt.Sscanf(reqIDVal.String(), "%d", &reqID)
 	state := getRequestState(reqID)
 	if state == nil || state.env == nil || state.env.db == nil {
 		return nil

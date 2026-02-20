@@ -83,25 +83,25 @@ func EnsureBinary(cfg config.ObjectStorageConfig) (string, error) {
 		return "", fmt.Errorf("creating temp download file: %w", err)
 	}
 	tmpDownloadPath := tmpDownload.Name()
-	defer os.Remove(tmpDownloadPath)
+	defer func() { _ = os.Remove(tmpDownloadPath) }()
 
 	resp, err := http.Get(dlURL)
 	if err != nil {
-		tmpDownload.Close()
+		_ = tmpDownload.Close()
 		return "", fmt.Errorf("downloading SeaweedFS: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		tmpDownload.Close()
+		_ = tmpDownload.Close()
 		return "", fmt.Errorf("downloading SeaweedFS: HTTP %d", resp.StatusCode)
 	}
 
 	if _, err := io.Copy(tmpDownload, resp.Body); err != nil {
-		tmpDownload.Close()
+		_ = tmpDownload.Close()
 		return "", fmt.Errorf("saving download: %w", err)
 	}
-	tmpDownload.Close()
+	_ = tmpDownload.Close()
 
 	// Extract binary to a temp file, then rename atomically.
 	tmpBinary, err := os.CreateTemp(filepath.Dir(target), "weed-binary-*")
@@ -109,8 +109,8 @@ func EnsureBinary(cfg config.ObjectStorageConfig) (string, error) {
 		return "", fmt.Errorf("creating temp binary file: %w", err)
 	}
 	tmpBinaryPath := tmpBinary.Name()
-	tmpBinary.Close()
-	defer os.Remove(tmpBinaryPath)
+	_ = tmpBinary.Close()
+	defer func() { _ = os.Remove(tmpBinaryPath) }()
 
 	if goos == "windows" {
 		err = extractZip(tmpDownloadPath, tmpBinaryPath)
@@ -143,13 +143,13 @@ func extractTarGz(archivePath, destPath string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	gr, err := gzip.NewReader(f)
 	if err != nil {
 		return err
 	}
-	defer gr.Close()
+	defer func() { _ = gr.Close() }()
 
 	tr := tar.NewReader(gr)
 	for {
@@ -166,7 +166,7 @@ func extractTarGz(archivePath, destPath string) error {
 				return err
 			}
 			if _, err := io.Copy(out, tr); err != nil {
-				out.Close()
+				_ = out.Close()
 				return err
 			}
 			return out.Close()
@@ -181,7 +181,7 @@ func extractZip(archivePath, destPath string) error {
 	if err != nil {
 		return err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
 	for _, f := range r.File {
 		if filepath.Base(f.Name) == "weed.exe" {
@@ -189,14 +189,14 @@ func extractZip(archivePath, destPath string) error {
 			if err != nil {
 				return err
 			}
-			defer rc.Close()
+			defer func() { _ = rc.Close() }()
 
 			out, err := os.Create(destPath)
 			if err != nil {
 				return err
 			}
 			if _, err := io.Copy(out, rc); err != nil {
-				out.Close()
+				_ = out.Close()
 				return err
 			}
 			return out.Close()

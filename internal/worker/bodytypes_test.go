@@ -403,7 +403,9 @@ func TestBodyTypes_ResponseJsonParsing(t *testing.T) {
 		Key string `json:"key"`
 		Num int    `json:"num"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Key != "value" {
 		t.Errorf("key = %q, want value", data.Key)
 	}
@@ -435,7 +437,9 @@ func TestBodyTypes_RequestJsonParsing(t *testing.T) {
 		Name string `json:"name"`
 		Age  int    `json:"age"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Name != "Alice" {
 		t.Errorf("name = %q, want Alice", data.Name)
 	}
@@ -465,7 +469,9 @@ func TestBodyTypes_ResponseArrayBufferFromArrayBuffer(t *testing.T) {
 		Decoded string `json:"decoded"`
 		IsAB    bool   `json:"isAB"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Decoded != "hello ab" {
 		t.Errorf("decoded = %q, want 'hello ab'", data.Decoded)
 	}
@@ -513,7 +519,9 @@ func TestBodyTypes_FormDataWithFileUpload(t *testing.T) {
 		FileContent string `json:"fileContent"`
 		Field       string `json:"field"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.FileName != "test.txt" {
 		t.Errorf("fileName = %q, want test.txt", data.FileName)
 	}
@@ -556,7 +564,9 @@ func TestBodyTypes_FormDataBodySerialization(t *testing.T) {
 		HasContent  bool `json:"hasContent"`
 		HasBoundary bool `json:"hasBoundary"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.HasKey {
 		t.Error("serialized FormData should contain key name")
 	}
@@ -597,7 +607,9 @@ func TestBodyTypes_NullBodyReturnsEmpty(t *testing.T) {
 		Text  string `json:"text"`
 		ABLen int    `json:"abLen"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Text != "" {
 		t.Errorf("null body text = %q, want empty", data.Text)
 	}

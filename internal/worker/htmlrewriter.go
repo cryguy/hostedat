@@ -74,7 +74,7 @@ globalThis.HTMLRewriter = HTMLRewriter;
 
 // setupHTMLRewriter registers the HTMLRewriter JS class and the Go-backed
 // __htmlRewrite function that performs streaming HTML transformation.
-func setupHTMLRewriter(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupHTMLRewriter(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	// Register __htmlRewrite(htmlString) — transforms HTML using registered handlers.
 	rewriteFn := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
@@ -480,11 +480,13 @@ func rewriteHTML(iso *v8.Isolate, ctx *v8.Context, htmlStr string) (string, erro
 			if !handled {
 				out.WriteString(token.String())
 			}
+		default:
+			panic("unhandled default case")
 		}
 	}
 
 	// Call document end handler.
-	endMutations := callDocEndHandler(iso, ctx)
+	endMutations := callDocEndHandler(ctx)
 	if endMutations != "" {
 		out.WriteString(endMutations)
 	}
@@ -527,11 +529,11 @@ type textMutations struct {
 func callElementHandler(iso *v8.Isolate, ctx *v8.Context, handlerIdx int, tagName string, attrs map[string]string) *elementMutations {
 	attrsJSON, _ := json.Marshal(attrs)
 	tagVal, _ := v8.NewValue(iso, tagName)
-	ctx.Global().Set("__el_tag", tagVal)
+	_ = ctx.Global().Set("__el_tag", tagVal)
 	attrsVal, _ := v8.NewValue(iso, string(attrsJSON))
-	ctx.Global().Set("__el_attrs", attrsVal)
+	_ = ctx.Global().Set("__el_attrs", attrsVal)
 	idxVal, _ := v8.NewValue(iso, int32(handlerIdx))
-	ctx.Global().Set("__el_handler_idx", idxVal)
+	_ = ctx.Global().Set("__el_handler_idx", idxVal)
 
 	result, err := ctx.RunScript(`
 		(function() {
@@ -627,11 +629,11 @@ func callElementHandler(iso *v8.Isolate, ctx *v8.Context, handlerIdx int, tagNam
 // callTextHandler invokes the JS text handler and returns mutations.
 func callTextHandler(iso *v8.Isolate, ctx *v8.Context, handlerIdx int, text string, last bool) *textMutations {
 	textVal, _ := v8.NewValue(iso, text)
-	ctx.Global().Set("__text_content", textVal)
+	_ = ctx.Global().Set("__text_content", textVal)
 	lastVal, _ := v8.NewValue(iso, last)
-	ctx.Global().Set("__text_last", lastVal)
+	_ = ctx.Global().Set("__text_last", lastVal)
 	idxVal, _ := v8.NewValue(iso, int32(handlerIdx))
-	ctx.Global().Set("__text_handler_idx", idxVal)
+	_ = ctx.Global().Set("__text_handler_idx", idxVal)
 
 	result, err := ctx.RunScript(`
 		(function() {
@@ -700,9 +702,9 @@ func callTextHandler(iso *v8.Isolate, ctx *v8.Context, handlerIdx int, text stri
 // callCommentHandler invokes the JS comment handler and returns mutations.
 func callCommentHandler(iso *v8.Isolate, ctx *v8.Context, handlerIdx int, comment string) *textMutations {
 	commentVal, _ := v8.NewValue(iso, comment)
-	ctx.Global().Set("__comment_content", commentVal)
+	_ = ctx.Global().Set("__comment_content", commentVal)
 	idxVal, _ := v8.NewValue(iso, int32(handlerIdx))
-	ctx.Global().Set("__comment_handler_idx", idxVal)
+	_ = ctx.Global().Set("__comment_handler_idx", idxVal)
 
 	result, err := ctx.RunScript(`
 		(function() {
@@ -767,7 +769,7 @@ func callCommentHandler(iso *v8.Isolate, ctx *v8.Context, handlerIdx int, commen
 // callDocTextHandler calls the document-level text handler if registered.
 func callDocTextHandler(iso *v8.Isolate, ctx *v8.Context, text string) *textMutations {
 	textVal, _ := v8.NewValue(iso, text)
-	ctx.Global().Set("__doc_text_content", textVal)
+	_ = ctx.Global().Set("__doc_text_content", textVal)
 
 	result, err := ctx.RunScript(`
 		(function() {
@@ -829,7 +831,7 @@ func callDocTextHandler(iso *v8.Isolate, ctx *v8.Context, text string) *textMuta
 }
 
 // callDocEndHandler calls the document end handler and returns any appended content.
-func callDocEndHandler(iso *v8.Isolate, ctx *v8.Context) string {
+func callDocEndHandler(ctx *v8.Context) string {
 	result, err := ctx.RunScript(`
 		(function() {
 			var handler = globalThis.__htmlrw_doc_handlers;

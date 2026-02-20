@@ -144,7 +144,9 @@ func TestWebAPI_ResponseRedirectDefault302(t *testing.T) {
 	var data struct {
 		Status int `json:"status"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Status != 302 {
 		t.Errorf("status = %d, want 302", data.Status)
 	}
@@ -180,7 +182,9 @@ func TestWebAPI_ResponseRedirectValidStatuses(t *testing.T) {
 			Actual int  `json:"actual"`
 		} `json:"results"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	for _, res := range data.Results {
 		if !res.Ok {
 			t.Errorf("Response.redirect with status %d should succeed", res.Status)
@@ -222,7 +226,9 @@ func TestWebAPI_ResponseRedirectInvalidStatusThrows(t *testing.T) {
 			Msg    string `json:"msg"`
 		} `json:"results"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	for _, res := range data.Results {
 		if !res.Threw {
 			t.Errorf("Response.redirect with status %d should throw RangeError", res.Status)
@@ -311,7 +317,9 @@ func TestWebAPI_ResponseClone(t *testing.T) {
 		Header string `json:"header"`
 		Ok     bool   `json:"ok"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Status != 201 {
 		t.Errorf("status = %d, want 201", data.Status)
 	}
@@ -409,7 +417,9 @@ func TestWebAPI_HeadersFromArray(t *testing.T) {
 		CT  string `json:"ct"`
 		Foo string `json:"foo"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.CT != "text/plain" {
 		t.Errorf("ct = %q", data.CT)
 	}
@@ -516,7 +526,9 @@ func TestWebAPI_ResponseNonOkStatus(t *testing.T) {
 		Ok200     bool `json:"ok200"`
 		Status404 int  `json:"status404"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Ok404 {
 		t.Error("404 should not be ok")
 	}
@@ -555,7 +567,9 @@ func TestWebAPI_ResponseArrayBufferBody(t *testing.T) {
 		Decoded string `json:"decoded"`
 		ByteLen int    `json:"byteLen"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Decoded != "hello world" {
 		t.Errorf("decoded = %q", data.Decoded)
 	}
@@ -603,7 +617,9 @@ func TestWebAPI_URLComponents(t *testing.T) {
 		Host     string `json:"host"`
 		Str      string `json:"str"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Protocol != "https:" {
 		t.Errorf("protocol = %q", data.Protocol)
 	}
@@ -646,7 +662,9 @@ func TestWebAPI_URLInvalidThrows(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("new URL with invalid input should throw")
 	}
@@ -682,7 +700,9 @@ func TestWebAPI_ResponseJsonCustomHeaders(t *testing.T) {
 		CT     string `json:"ct"`
 		Custom string `json:"custom"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Status != 201 {
 		t.Errorf("status = %d, want 201", data.Status)
 	}
@@ -717,7 +737,9 @@ func TestWebAPI_ResponseNullBody(t *testing.T) {
 		Status int  `json:"status"`
 		Empty  bool `json:"empty"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Status != 204 {
 		t.Errorf("status = %d", data.Status)
 	}
@@ -751,7 +773,9 @@ func TestWebAPI_URLSearchParamsToString(t *testing.T) {
 		Missing bool   `json:"missing"`
 		GetC    string `json:"getC"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Has {
 		t.Error("has('b') should be true")
 	}
@@ -798,7 +822,9 @@ func TestWebAPI_URLEdgeCases(t *testing.T) {
 		Hash3     string `json:"hash3"`
 		Search4   string `json:"search4"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Port != "8080" {
 		t.Errorf("port = %q, want 8080", data.Port)
 	}
@@ -855,7 +881,9 @@ func TestWebAPI_HeadersIteration(t *testing.T) {
 		KeyCount   int `json:"keyCount"`
 		ValueCount int `json:"valueCount"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.EntryCount != 3 {
 		t.Errorf("entries = %d, want 3", data.EntryCount)
 	}
@@ -890,7 +918,9 @@ func TestWebAPI_ResponseStatusText(t *testing.T) {
 		StatusText string `json:"statusText"`
 		OK         bool   `json:"ok"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Status != 200 {
 		t.Errorf("status = %d", data.Status)
 	}
@@ -926,7 +956,9 @@ func TestWebAPI_URLRelativeWithBase(t *testing.T) {
 		Pathname string `json:"pathname"`
 		Search   string `json:"search"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Hostname != "example.com" {
 		t.Errorf("hostname = %q", data.Hostname)
 	}
@@ -960,7 +992,9 @@ func TestWebAPI_URLInvalid(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("new URL('not a valid url') should throw")
 	}
@@ -990,7 +1024,9 @@ func TestWebAPI_URLSearchParamsDelete(t *testing.T) {
 		HasB bool   `json:"hasB"`
 		HasA bool   `json:"hasA"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.HasB {
 		t.Error("params should not have 'b' after delete")
 	}
@@ -1021,7 +1057,9 @@ func TestWebAPI_URLSearchParamsSort(t *testing.T) {
 	var data struct {
 		Keys []string `json:"keys"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if len(data.Keys) != 3 || data.Keys[0] != "a" || data.Keys[1] != "b" || data.Keys[2] != "c" {
 		t.Errorf("keys after sort = %v, want [a b c]", data.Keys)
 	}
@@ -1058,7 +1096,9 @@ func TestWebAPI_ResponseCloneWithHeaders(t *testing.T) {
 		Status     int    `json:"status"`
 		Header     string `json:"header"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.OrigText != "body text" {
 		t.Errorf("origText = %q", data.OrigText)
 	}
@@ -1101,7 +1141,9 @@ func TestWebAPI_RequestProperties(t *testing.T) {
 		Pathname   string   `json:"pathname"`
 		HeaderKeys []string `json:"headerKeys"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Method != "DELETE" {
 		t.Errorf("method = %q", data.Method)
 	}
@@ -1228,7 +1270,9 @@ func TestWebAPI_PostRequestWithBody(t *testing.T) {
 		Body   string `json:"body"`
 		CT     string `json:"ct"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Method != "POST" {
 		t.Errorf("method = %q", data.Method)
 	}
@@ -1263,7 +1307,9 @@ func TestWebAPI_CtxWaitUntil(t *testing.T) {
 	var data struct {
 		Called bool `json:"called"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Called {
 		t.Error("waitUntil promise should have resolved")
 	}
@@ -1315,7 +1361,9 @@ func TestWebAPI_TextEncoderDecoder(t *testing.T) {
 		ByteLen  int    `json:"byteLen"`
 		Encoding string `json:"encoding"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Decoded != "Hello World" {
 		t.Errorf("decoded = %q", data.Decoded)
 	}
@@ -1356,7 +1404,9 @@ func TestWebAPI_HeadersSetGetDelete(t *testing.T) {
 		BeforeDelete bool   `json:"beforeDelete"`
 		AfterDelete  bool   `json:"afterDelete"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.CT != "text/html" {
 		t.Errorf("content-type = %q", data.CT)
 	}

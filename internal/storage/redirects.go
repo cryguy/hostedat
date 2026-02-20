@@ -21,7 +21,7 @@ func ParseRedirects(filePath string) ([]RedirectRule, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var rules []RedirectRule
 	scanner := bufio.NewScanner(f)

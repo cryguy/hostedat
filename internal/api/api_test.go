@@ -58,7 +58,9 @@ func setupTestEnvWithMinVersion(t *testing.T, minVersion string) *testEnv {
 			Enabled: true,
 		},
 	}
-	models.SeedDefaults(db, cfg)
+	if err := models.SeedDefaults(db, cfg); err != nil {
+		t.Fatal(err)
+	}
 
 	store := storage.NewManager(t.TempDir())
 	cache := storage.NewSiteRulesCache()
@@ -104,9 +106,9 @@ func createTestZip(t *testing.T, files map[string]string) *bytes.Buffer {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.Write([]byte(content))
+		_, _ = f.Write([]byte(content))
 	}
-	w.Close()
+	_ = w.Close()
 	return buf
 }
 
@@ -197,7 +199,9 @@ func TestRegister_RegistrationDisabled(t *testing.T) {
 	env := setupTestEnv(t)
 	// Create an existing user so the first-user bootstrap bypass doesn't apply.
 	env.createTestUser(t, "existing@test.com", "password123", "superadmin")
-	models.SetSetting(env.db, "registration_enabled", "false")
+	if err := models.SetSetting(env.db, "registration_enabled", "false"); err != nil {
+		t.Fatal(err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register",
 		jsonBody(map[string]string{"email": "a@b.com", "password": "password123"}))
@@ -211,7 +215,9 @@ func TestRegister_RegistrationDisabled(t *testing.T) {
 
 func TestRegister_InviteFlow(t *testing.T) {
 	env := setupTestEnv(t)
-	models.SetSetting(env.db, "invite_required", "true")
+	if err := models.SetSetting(env.db, "invite_required", "true"); err != nil {
+		t.Fatal(err)
+	}
 
 	admin, _ := env.createTestUser(t, "admin@test.com", "password123", "superadmin")
 	invite := models.Invite{Code: "testcode", CreatedBy: admin.ID, Active: true}
@@ -466,7 +472,9 @@ func TestSite_List_OwnSitesOnly(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token1)
 	rec := env.doRequest(req)
 	var sites1 []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &sites1)
+	if err := json.Unmarshal(rec.Body.Bytes(), &sites1); err != nil {
+		t.Fatal(err)
+	}
 	if len(sites1) != 1 || sites1[0]["subdomain_slug"] != "user1site" {
 		t.Errorf("user1 sites: %v", sites1)
 	}
@@ -476,7 +484,9 @@ func TestSite_List_OwnSitesOnly(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token2)
 	rec = env.doRequest(req)
 	var sites2 []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &sites2)
+	if err := json.Unmarshal(rec.Body.Bytes(), &sites2); err != nil {
+		t.Fatal(err)
+	}
 	if len(sites2) != 1 || sites2[0]["subdomain_slug"] != "user2site" {
 		t.Errorf("user2 sites: %v", sites2)
 	}
@@ -522,9 +532,8 @@ func TestSite_UpdateSPAMode(t *testing.T) {
 	site := models.Site{UserID: user.ID, SubdomainSlug: "spa-test", Name: "SPA"}
 	env.db.Create(&site)
 
-	spa := true
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/sites/"+site.ID,
-		jsonBody(map[string]interface{}{"spa_mode": spa}))
+		jsonBody(map[string]interface{}{"spa_mode": true}))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := env.doRequest(req)
@@ -577,8 +586,12 @@ func multipartZip(t *testing.T, zipBuf *bytes.Buffer) (*bytes.Buffer, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	io.Copy(part, zipBuf)
-	writer.Close()
+	if _, err := io.Copy(part, zipBuf); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
 	return body, writer.FormDataContentType()
 }
 
@@ -687,7 +700,9 @@ func TestDeploy_ListDeployments(t *testing.T) {
 		Total       int                      `json:"total"`
 		Page        int                      `json:"page"`
 	}
-	json.Unmarshal(rec.Body.Bytes(), &result)
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
 	if len(result.Deployments) != 2 {
 		t.Errorf("got %d deployments, want 2", len(result.Deployments))
 	}
@@ -752,7 +767,9 @@ func TestAPIKey_List(t *testing.T) {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	var keys []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &keys)
+	if err := json.Unmarshal(rec.Body.Bytes(), &keys); err != nil {
+		t.Fatal(err)
+	}
 	if len(keys) != 1 {
 		t.Errorf("got %d keys, want 1", len(keys))
 	}
@@ -937,7 +954,9 @@ func TestAdmin_Invites(t *testing.T) {
 		t.Fatalf("list: status = %d", rec.Code)
 	}
 	var invites []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &invites)
+	if err := json.Unmarshal(rec.Body.Bytes(), &invites); err != nil {
+		t.Fatal(err)
+	}
 	if len(invites) != 1 {
 		t.Errorf("got %d invites, want 1", len(invites))
 	}
@@ -1325,8 +1344,8 @@ func TestDeploy_ErrorMessageNonLeakage(t *testing.T) {
 	body := new(bytes.Buffer)
 	writer := multipart.NewWriter(body)
 	part, _ := writer.CreateFormFile("file", "bad.zip")
-	part.Write([]byte("this is not a zip file"))
-	writer.Close()
+	_, _ = part.Write([]byte("this is not a zip file"))
+	_ = writer.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deploy", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -1356,8 +1375,10 @@ func TestServing_ContentType(t *testing.T) {
 	env.db.Save(&site)
 
 	deployPath := env.store.GetDeploymentPath(site.ID, "deploy1")
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "style.css"), []byte("body{}"), 0644)
+	if err := os.MkdirAll(deployPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(deployPath, "style.css"), []byte("body{}"), 0644)
 
 	req := httptest.NewRequest(http.MethodGet, "/style.css", nil)
 	req.Host = "ct-test.test.local"
@@ -1783,7 +1804,9 @@ func TestWorker_ListEnvVars_Success(t *testing.T) {
 	}
 
 	var vars []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &vars)
+	if err := json.Unmarshal(rec.Body.Bytes(), &vars); err != nil {
+		t.Fatal(err)
+	}
 	if len(vars) != 2 {
 		t.Errorf("got %d vars, want 2", len(vars))
 	}
@@ -1948,7 +1971,9 @@ func TestWorker_ListKVNamespaces_Success(t *testing.T) {
 	}
 
 	var namespaces []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &namespaces)
+	if err := json.Unmarshal(rec.Body.Bytes(), &namespaces); err != nil {
+		t.Fatal(err)
+	}
 	if len(namespaces) != 2 {
 		t.Errorf("got %d namespaces, want 2", len(namespaces))
 	}
@@ -2139,7 +2164,9 @@ func TestWorker_ListCronSchedules_Success(t *testing.T) {
 	}
 
 	var schedules []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &schedules)
+	if err := json.Unmarshal(rec.Body.Bytes(), &schedules); err != nil {
+		t.Fatal(err)
+	}
 	if len(schedules) != 2 {
 		t.Errorf("got %d schedules, want 2", len(schedules))
 	}
@@ -2209,7 +2236,9 @@ func TestWorker_GetLogs_Success(t *testing.T) {
 	}
 
 	var logs []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &logs)
+	if err := json.Unmarshal(rec.Body.Bytes(), &logs); err != nil {
+		t.Fatal(err)
+	}
 	if len(logs) != 5 {
 		t.Errorf("got %d logs, want 5", len(logs))
 	}
@@ -2575,8 +2604,12 @@ func TestCleanExpiredTokens(t *testing.T) {
 
 	expired := models.RevokedToken{TokenHash: "expired-hash", ExpiresAt: time.Now().Add(-1 * time.Hour)}
 	valid := models.RevokedToken{TokenHash: "valid-hash", ExpiresAt: time.Now().Add(1 * time.Hour)}
-	db.Create(&expired)
-	db.Create(&valid)
+	if result := db.Create(&expired); result.Error != nil {
+		t.Fatal(result.Error)
+	}
+	if result := db.Create(&valid); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	CleanExpiredTokens(db)
 
@@ -2638,7 +2671,9 @@ func setupTestEnvWithWorker(t *testing.T) *testEnv {
 			MaxScriptSizeKB:  512,
 		},
 	}
-	models.SeedDefaults(db, cfg)
+	if err := models.SeedDefaults(db, cfg); err != nil {
+		t.Fatal(err)
+	}
 
 	store := storage.NewManager(t.TempDir())
 	cache := storage.NewSiteRulesCache()
@@ -2662,7 +2697,7 @@ func setupTestEnvWithWorker(t *testing.T) *testEnv {
 	}
 }
 
-func (env *testEnv) deployWorkerSite(t *testing.T, siteID, deployID, slug, source string) {
+func (env *testEnv) deployWorkerSite(t *testing.T, siteID, deployID, _, source string) {
 	t.Helper()
 	deployPath := env.store.GetDeploymentPath(siteID, deployID)
 	if err := os.MkdirAll(deployPath, 0755); err != nil {

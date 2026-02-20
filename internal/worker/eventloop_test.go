@@ -189,7 +189,7 @@ func TestEventLoop_Drain_FiresCallback(t *testing.T) {
 	el := newEventLoop()
 
 	// Set a global that the callback will modify
-	ctx.RunScript("globalThis.__timer_fired = false", "init.js")
+	_, _ = ctx.RunScript("globalThis.__timer_fired = false", "init.js")
 
 	fn, _ := ctx.RunScript("(function() { globalThis.__timer_fired = true; })", "cb.js")
 	callback, _ := fn.AsFunction()
@@ -213,7 +213,7 @@ func TestEventLoop_Drain_IntervalRepeats(t *testing.T) {
 
 	el := newEventLoop()
 
-	ctx.RunScript("globalThis.__count = 0", "init.js")
+	_, _ = ctx.RunScript("globalThis.__count = 0", "init.js")
 	fn, _ := ctx.RunScript("(function() { globalThis.__count++; if (globalThis.__count >= 3) { /* stop */ } })", "cb.js")
 	callback, _ := fn.AsFunction()
 

@@ -48,7 +48,9 @@ func TestServiceBinding_HasFetch(t *testing.T) {
 	var data struct {
 		HasFetch bool `json:"hasFetch"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.HasFetch {
 		t.Error("env.TARGET.fetch should be a function")
 	}
@@ -99,7 +101,9 @@ func TestServiceBinding_FetchCallsTarget(t *testing.T) {
 			Hello string `json:"hello"`
 		} `json:"fromTarget"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.FromTarget.Hello != "world" {
 		t.Errorf("fromTarget.hello = %q, want %q", data.FromTarget.Hello, "world")
 	}
@@ -146,7 +150,9 @@ func TestServiceBinding_Construction(t *testing.T) {
 		HasTarget  bool   `json:"hasTarget"`
 		TargetType string `json:"targetType"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.HasTarget {
 		t.Error("env.TARGET should exist")
 	}

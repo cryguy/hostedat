@@ -143,7 +143,7 @@ Object.defineProperty(globalThis, 'navigator', {
 
 // setupGlobals registers structuredClone, performance.now(), navigator,
 // queueMicrotask, and the Event/EventTarget base classes.
-func setupGlobals(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupGlobals(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	// __sendBeacon: Go-backed fire-and-forget POST with SSRF protection.
 	beaconFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
@@ -178,13 +178,13 @@ func setupGlobals(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 			if err != nil {
 				return
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}()
 
 		val, _ := v8.NewValue(iso, true)
 		return val
 	})
-	ctx.Global().Set("__sendBeacon", beaconFT.GetFunction(ctx))
+	_ = ctx.Global().Set("__sendBeacon", beaconFT.GetFunction(ctx))
 
 	// Evaluate pure-JS polyfills.
 	if _, err := ctx.RunScript(globalsJS, "globals.js"); err != nil {
@@ -204,8 +204,8 @@ func setupGlobals(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 		val, _ := v8.NewValue(iso, ms)
 		return val
 	})
-	perf.Set("now", ft.GetFunction(ctx))
-	ctx.Global().Set("performance", perf)
+	_ = perf.Set("now", ft.GetFunction(ctx))
+	_ = ctx.Global().Set("performance", perf)
 
 	return nil
 }

@@ -56,7 +56,9 @@ func TestAssetsFetcher_FileNotFound(t *testing.T) {
 	deployKey := "deploy1"
 
 	deployPath := filepath.Join(dir, siteID, deployKey)
-	os.MkdirAll(deployPath, 0755)
+	if err := os.MkdirAll(deployPath, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	store := storage.NewManager(dir)
 	cache := storage.NewSiteRulesCache()
@@ -89,8 +91,10 @@ func TestAssetsFetcher_SPAMode(t *testing.T) {
 	deployKey := "deploy1"
 
 	deployPath := filepath.Join(dir, siteID, deployKey)
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<h1>SPA</h1>"), 0644)
+	if err := os.MkdirAll(deployPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<h1>SPA</h1>"), 0644)
 
 	store := storage.NewManager(dir)
 	cache := storage.NewSiteRulesCache()
@@ -124,8 +128,10 @@ func TestAssetsFetcher_Custom404(t *testing.T) {
 	deployKey := "deploy1"
 
 	deployPath := filepath.Join(dir, siteID, deployKey)
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "404.html"), []byte("<h1>Custom 404</h1>"), 0644)
+	if err := os.MkdirAll(deployPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(deployPath, "404.html"), []byte("<h1>Custom 404</h1>"), 0644)
 
 	store := storage.NewManager(dir)
 	cache := storage.NewSiteRulesCache()
@@ -158,11 +164,13 @@ func TestAssetsFetcher_RedirectRule(t *testing.T) {
 	deployKey := "deploy1"
 
 	deployPath := filepath.Join(dir, siteID, deployKey)
-	os.MkdirAll(deployPath, 0755)
+	if err := os.MkdirAll(deployPath, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create _redirects file with a 301 redirect
 	redirects := "/old /new 301\n"
-	os.WriteFile(filepath.Join(deployPath, "_redirects"), []byte(redirects), 0644)
+	_ = os.WriteFile(filepath.Join(deployPath, "_redirects"), []byte(redirects), 0644)
 
 	store := storage.NewManager(dir)
 	cache := storage.NewSiteRulesCache()
@@ -195,12 +203,14 @@ func TestAssetsFetcher_RewriteRule(t *testing.T) {
 	deployKey := "deploy1"
 
 	deployPath := filepath.Join(dir, siteID, deployKey)
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<h1>Rewritten</h1>"), 0644)
+	if err := os.MkdirAll(deployPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<h1>Rewritten</h1>"), 0644)
 
 	// Create _redirects with a rewrite rule (200)
 	redirects := "/api/* /index.html 200\n"
-	os.WriteFile(filepath.Join(deployPath, "_redirects"), []byte(redirects), 0644)
+	_ = os.WriteFile(filepath.Join(deployPath, "_redirects"), []byte(redirects), 0644)
 
 	store := storage.NewManager(dir)
 	cache := storage.NewSiteRulesCache()
@@ -342,7 +352,9 @@ func TestAssetsFetcher_BadURL(t *testing.T) {
 	deployKey := "deploy1"
 
 	deployPath := filepath.Join(dir, siteID, deployKey)
-	os.MkdirAll(deployPath, 0755)
+	if err := os.MkdirAll(deployPath, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	store := storage.NewManager(dir)
 	cache := storage.NewSiteRulesCache()
@@ -372,8 +384,10 @@ func TestAssetsFetcher_EmptyPath(t *testing.T) {
 	deployKey := "deploy1"
 
 	deployPath := filepath.Join(dir, siteID, deployKey)
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<h1>Root</h1>"), 0644)
+	if err := os.MkdirAll(deployPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<h1>Root</h1>"), 0644)
 
 	store := storage.NewManager(dir)
 	cache := storage.NewSiteRulesCache()
@@ -405,8 +419,10 @@ func TestAssetsFetcher_CacheHit(t *testing.T) {
 	deployKey := "deploy1"
 
 	deployPath := filepath.Join(dir, siteID, deployKey)
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<h1>Cached</h1>"), 0644)
+	if err := os.MkdirAll(deployPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<h1>Cached</h1>"), 0644)
 
 	store := storage.NewManager(dir)
 	cache := storage.NewSiteRulesCache()

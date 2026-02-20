@@ -270,7 +270,9 @@ func TestFormData_BlobArrayBuffer(t *testing.T) {
 		First  int `json:"first"`
 		Last   int `json:"last"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Length != 5 {
 		t.Errorf("length = %d, want 5", data.Length)
 	}
@@ -302,7 +304,9 @@ func TestFormData_Entries(t *testing.T) {
 	var data struct {
 		Entries []string `json:"entries"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if len(data.Entries) != 2 {
 		t.Errorf("entries length = %d, want 2", len(data.Entries))
 	}
@@ -331,7 +335,9 @@ func TestFormData_Keys(t *testing.T) {
 		Keys   []string `json:"keys"`
 		Values []string `json:"values"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if len(data.Keys) != 3 {
 		t.Errorf("keys = %v", data.Keys)
 	}
@@ -364,7 +370,9 @@ func TestFormData_BlobNoType(t *testing.T) {
 		Type string `json:"type"`
 		Size int    `json:"size"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Text != "data" {
 		t.Errorf("text = %q", data.Text)
 	}
@@ -396,7 +404,9 @@ func TestFormData_FileSlice(t *testing.T) {
 		Text string `json:"text"`
 		Size int    `json:"size"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Text != "3456" {
 		t.Errorf("sliced text = %q, want '3456'", data.Text)
 	}

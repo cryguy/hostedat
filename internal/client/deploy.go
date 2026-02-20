@@ -38,13 +38,15 @@ func (c *Client) Deploy(siteID, dirPath string) (*Deployment, error) {
 	if _, err := io.Copy(part, bytes.NewReader(zipData)); err != nil {
 		return nil, err
 	}
-	writer.Close()
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("finalizing multipart form: %w", err)
+	}
 
 	resp, err := c.do("POST", "/api/v1/sites/"+siteID+"/deploy", &body, writer.FormDataContentType())
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var deployment Deployment
 	if err := json.NewDecoder(resp.Body).Decode(&deployment); err != nil {
@@ -57,16 +59,16 @@ func (c *Client) Deploy(siteID, dirPath string) (*Deployment, error) {
 // deployments. These patterns protect against accidentally shipping secrets,
 // build caches, and version-control internals.
 var defaultExcludes = map[string]bool{
-	".git":         true,
-	".env":         true,
-	".env.local":   true,
+	".git":            true,
+	".env":            true,
+	".env.local":      true,
 	".env.production": true,
-	".DS_Store":    true,
-	"node_modules": true,
-	".svn":         true,
-	".hg":          true,
-	"__pycache__":  true,
-	".terraform":   true,
+	".DS_Store":       true,
+	"node_modules":    true,
+	".svn":            true,
+	".hg":             true,
+	"__pycache__":     true,
+	".terraform":      true,
 }
 
 func isExcluded(name string) bool {
@@ -128,7 +130,7 @@ func zipDirectory(dirPath string) ([]byte, error) {
 		if err != nil {
 			return err
 		}
-		defer src.Close()
+		defer func() { _ = src.Close() }()
 
 		_, err = io.Copy(f, src)
 		return err

@@ -198,9 +198,9 @@ func throwError(iso *v8.Isolate, msg string) *v8.Value {
 }
 
 // setupCrypto registers Go-backed crypto helpers and evaluates the JS wrapper.
-func setupCrypto(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupCrypto(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	// __cryptoGetRandomBytes(n) -> base64 string of n random bytes.
-	ctx.Global().Set("__cryptoGetRandomBytes", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoGetRandomBytes", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 1 {
 			return throwError(iso, errMissingArg("__cryptoGetRandomBytes", 1).Error())
@@ -218,7 +218,7 @@ func setupCrypto(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoRandomUUID() -> UUID v4 string.
-	ctx.Global().Set("__cryptoRandomUUID", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoRandomUUID", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		var uuid [16]byte
 		if _, err := rand.Read(uuid[:]); err != nil {
 			return throwError(iso, fmt.Sprintf("crypto/rand: %v", err))
@@ -232,7 +232,7 @@ func setupCrypto(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoDigest(algorithm, dataBase64) -> resultBase64
-	ctx.Global().Set("__cryptoDigest", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoDigest", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			return throwError(iso, errMissingArg("crypto.subtle.digest", 2).Error())
@@ -262,7 +262,7 @@ func setupCrypto(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoExportKey(keyID) -> base64
-	ctx.Global().Set("__cryptoExportKey", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoExportKey", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 1 {
 			return throwError(iso, errMissingArg("exportKey", 1).Error())

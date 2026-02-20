@@ -684,7 +684,7 @@ func TestKV_ExpirationTTL(t *testing.T) {
   },
 };`
 	siteID := "test-" + t.Name() + "-read"
-	e.CompileAndCache(siteID, "deploy1", readSource)
+	_, _ = e.CompileAndCache(siteID, "deploy1", readSource)
 	r2 := e.Execute(siteID, "deploy1", env, getReq("http://localhost/"))
 	assertOK(t, r2)
 
@@ -736,8 +736,12 @@ func TestKV_MultipleNamespaces(t *testing.T) {
 
 	ns1 := models.KVNamespace{ID: "ns1-" + t.Name(), SiteID: "site1", Name: "NS1"}
 	ns2 := models.KVNamespace{ID: "ns2-" + t.Name(), SiteID: "site1", Name: "NS2"}
-	db.Create(&ns1)
-	db.Create(&ns2)
+	if result := db.Create(&ns1); result.Error != nil {
+		t.Fatal(result.Error)
+	}
+	if result := db.Create(&ns2); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	env := &Env{
 		Vars:       make(map[string]string),
@@ -1146,7 +1150,9 @@ func TestScheduled_WritesToKV(t *testing.T) {
 	e := newTestEngine(t, db)
 
 	ns := models.KVNamespace{ID: "ns-sched-kv", SiteID: "site1", Name: "STORE"}
-	db.Create(&ns)
+	if result := db.Create(&ns); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	env := &Env{
 		Vars:       make(map[string]string),

@@ -167,7 +167,7 @@ func TestFetch_Redirect_Follow(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, "arrived")
+		_, _ = fmt.Fprint(w, "arrived")
 	}))
 	defer srv.Close()
 
@@ -226,7 +226,7 @@ func TestFetch_Redirect_Manual(t *testing.T) {
 			w.WriteHeader(http.StatusFound)
 			return
 		}
-		fmt.Fprint(w, "should not reach")
+		_, _ = fmt.Fprint(w, "should not reach")
 	}))
 	defer srv.Close()
 
@@ -327,7 +327,7 @@ func TestFetch_Redirect_Follow_NoRedirect(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, "direct")
+		_, _ = fmt.Fprint(w, "direct")
 	}))
 	defer srv.Close()
 
@@ -466,7 +466,7 @@ func TestFetch_Signal_NotAborted(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, "success")
+		_, _ = fmt.Fprint(w, "success")
 	}))
 	defer srv.Close()
 
@@ -552,7 +552,7 @@ func TestFetch_RateLimit(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, "ok")
+		_, _ = fmt.Fprint(w, "ok")
 	}))
 	defer srv.Close()
 
@@ -618,7 +618,7 @@ func TestFetch_Redirect_Manual_301(t *testing.T) {
 			w.WriteHeader(http.StatusMovedPermanently)
 			return
 		}
-		fmt.Fprint(w, "should not reach")
+		_, _ = fmt.Fprint(w, "should not reach")
 	}))
 	defer srv.Close()
 
@@ -671,7 +671,7 @@ func TestFetch_Redirect_Manual_307(t *testing.T) {
 			w.WriteHeader(http.StatusTemporaryRedirect)
 			return
 		}
-		fmt.Fprint(w, "should not reach")
+		_, _ = fmt.Fprint(w, "should not reach")
 	}))
 	defer srv.Close()
 
@@ -727,7 +727,7 @@ func TestFetch_BinaryBody(t *testing.T) {
 		}
 		receivedBody = body
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"received":%d}`, len(body))
+		_, _ = fmt.Fprintf(w, `{"received":%d}`, len(body))
 	}))
 	defer srv.Close()
 

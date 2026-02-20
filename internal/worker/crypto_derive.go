@@ -125,8 +125,8 @@ subtle.deriveKey = async function(algorithm, baseKey, derivedKeyAlgorithm, extra
 
 // setupCryptoDerive registers HKDF and PBKDF2 deriveBits/deriveKey.
 // Must run after setupCryptoExt.
-func setupCryptoDerive(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
-	ctx.Global().Set("__cryptoDeriveBits", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+func setupCryptoDerive(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
+	_ = ctx.Global().Set("__cryptoDeriveBits", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 7 {
 			return throwError(iso, "deriveBits requires 7 argument(s)")

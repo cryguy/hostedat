@@ -561,7 +561,7 @@ func TestInitDB_FailsWhenLegacyStorageBindingsContainDuplicates(t *testing.T) {
 	// TempDir cleanup — Windows holds file locks on open SQLite handles.
 	sqlDB, _ := db.DB()
 	if sqlDB != nil {
-		sqlDB.Close()
+		_ = sqlDB.Close()
 	}
 
 	_, err = InitDB(config.DBConfig{Driver: "sqlite", DSN: dbPath})

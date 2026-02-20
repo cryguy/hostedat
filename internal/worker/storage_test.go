@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/minio/minio-go/v7"
 	v8 "github.com/tommie/v8go"
-	minio "github.com/minio/minio-go/v7"
 )
 
 // newV8TestContext creates an isolate+context with encoding support (atob/btoa)
@@ -37,7 +37,7 @@ func TestStorageBinding_Put_UnsupportedTypeRejected(t *testing.T) {
 		t.Fatalf("buildStorageBinding: %v", err)
 	}
 
-	ctx.Global().Set("__bucket", bucketVal)
+	_ = ctx.Global().Set("__bucket", bucketVal)
 	result, err := ctx.RunScript("__bucket.put('k', {})", "test_put.js")
 	if err != nil {
 		t.Fatalf("RunScript put: %v", err)
@@ -62,7 +62,7 @@ func TestStorageBinding_ArrayBuffer_ReturnsData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildR2ObjectBody: %v", err)
 	}
-	ctx.Global().Set("__obj", obj.Value)
+	_ = ctx.Global().Set("__obj", obj.Value)
 
 	result, err := ctx.RunScript("__obj.arrayBuffer()", "test_ab.js")
 	if err != nil {
@@ -85,7 +85,7 @@ func TestStorageBinding_ArrayBuffer_ReturnsData(t *testing.T) {
 	}
 
 	// Verify the ArrayBuffer has the right byte length.
-	ctx.Global().Set("__result", resolved)
+	_ = ctx.Global().Set("__result", resolved)
 	blVal, err := ctx.RunScript("__result.byteLength", "check_bl.js")
 	if err != nil {
 		t.Fatalf("checking byteLength: %v", err)
@@ -124,7 +124,7 @@ func TestStorageBinding_ArrayBuffer_BinaryBlob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildR2ObjectBody: %v", err)
 	}
-	ctx.Global().Set("__obj", obj.Value)
+	_ = ctx.Global().Set("__obj", obj.Value)
 
 	result, err := ctx.RunScript("__obj.arrayBuffer()", "test_ab.js")
 	if err != nil {
@@ -138,7 +138,7 @@ func TestStorageBinding_ArrayBuffer_BinaryBlob(t *testing.T) {
 	}
 
 	// Verify byte length matches the original blob.
-	ctx.Global().Set("__testBuf", resolved)
+	_ = ctx.Global().Set("__testBuf", resolved)
 	blVal, err := ctx.RunScript("__testBuf.byteLength", "check_bl.js")
 	if err != nil {
 		t.Fatalf("checking byteLength: %v", err)
@@ -173,7 +173,7 @@ func TestStorageBinding_ArrayBuffer_EmptyBlob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildR2ObjectBody: %v", err)
 	}
-	ctx.Global().Set("__obj", obj.Value)
+	_ = ctx.Global().Set("__obj", obj.Value)
 
 	result, err := ctx.RunScript("__obj.arrayBuffer()", "test_ab.js")
 	if err != nil {
@@ -186,7 +186,7 @@ func TestStorageBinding_ArrayBuffer_EmptyBlob(t *testing.T) {
 		t.Fatalf("await arrayBuffer: %v", err)
 	}
 
-	ctx.Global().Set("__result", resolved)
+	_ = ctx.Global().Set("__result", resolved)
 	blVal, err := ctx.RunScript("__result.byteLength", "check_bl.js")
 	if err != nil {
 		t.Fatalf("checking byteLength: %v", err)
@@ -214,7 +214,7 @@ func TestStorageBinding_ArrayBuffer_AllByteValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildR2ObjectBody: %v", err)
 	}
-	ctx.Global().Set("__obj", obj.Value)
+	_ = ctx.Global().Set("__obj", obj.Value)
 
 	result, err := ctx.RunScript("__obj.arrayBuffer()", "test_ab.js")
 	if err != nil {
@@ -227,7 +227,7 @@ func TestStorageBinding_ArrayBuffer_AllByteValues(t *testing.T) {
 		t.Fatalf("await arrayBuffer: %v", err)
 	}
 
-	ctx.Global().Set("__testBuf", resolved)
+	_ = ctx.Global().Set("__testBuf", resolved)
 	blVal, err := ctx.RunScript("__testBuf.byteLength", "check_bl.js")
 	if err != nil {
 		t.Fatalf("checking byteLength: %v", err)
@@ -263,7 +263,7 @@ func TestStorageBinding_ArrayBuffer_ThenTextRejects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildR2ObjectBody: %v", err)
 	}
-	ctx.Global().Set("__obj", obj.Value)
+	_ = ctx.Global().Set("__obj", obj.Value)
 	deadline := time.Now().Add(5 * time.Second)
 
 	// Consume via arrayBuffer().
@@ -308,7 +308,7 @@ func TestStorageBinding_Text_ThenArrayBufferRejects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildR2ObjectBody: %v", err)
 	}
-	ctx.Global().Set("__obj", obj.Value)
+	_ = ctx.Global().Set("__obj", obj.Value)
 	deadline := time.Now().Add(5 * time.Second)
 
 	// Consume via text().
@@ -343,7 +343,7 @@ func TestStorageBinding_BodyUsed_TransitionsAfterRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildR2ObjectBody: %v", err)
 	}
-	ctx.Global().Set("__obj", obj.Value)
+	_ = ctx.Global().Set("__obj", obj.Value)
 	deadline := time.Now().Add(5 * time.Second)
 
 	// Initial bodyUsed should be false.
@@ -400,7 +400,7 @@ func TestStorageBinding_JSON_InvalidJSONRejects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildR2ObjectBody: %v", err)
 	}
-	ctx.Global().Set("__obj", obj.Value)
+	_ = ctx.Global().Set("__obj", obj.Value)
 
 	result, err := ctx.RunScript("__obj.json()", "test_json.js")
 	if err != nil {
@@ -499,7 +499,7 @@ func TestStorageBinding_JSON_ValidJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildR2ObjectBody: %v", err)
 	}
-	ctx.Global().Set("__obj", obj.Value)
+	_ = ctx.Global().Set("__obj", obj.Value)
 
 	result, err := ctx.RunScript("__obj.json()", "test_json.js")
 	if err != nil {
@@ -512,7 +512,7 @@ func TestStorageBinding_JSON_ValidJSON(t *testing.T) {
 		t.Fatalf("await json: %v", err)
 	}
 
-	ctx.Global().Set("__result", resolved)
+	_ = ctx.Global().Set("__result", resolved)
 	nameVal, err := ctx.RunScript("__result.name", "check_name.js")
 	if err != nil {
 		t.Fatalf("checking name: %v", err)
@@ -542,7 +542,7 @@ func TestBuildR2Object(t *testing.T) {
 		t.Fatalf("buildR2Object: %v", err)
 	}
 
-	ctx.Global().Set("__obj", obj.Value)
+	_ = ctx.Global().Set("__obj", obj.Value)
 
 	keyVal, _ := ctx.RunScript("__obj.key", "k.js")
 	if keyVal.String() != "test-key" {

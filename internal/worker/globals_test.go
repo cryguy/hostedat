@@ -220,7 +220,9 @@ func TestGlobals_StructuredCloneRejectsUndefined(t *testing.T) {
 		Threw bool   `json:"threw"`
 		Name  string `json:"name"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("structuredClone(undefined) should throw")
 	}
@@ -249,7 +251,9 @@ func TestGlobals_StructuredClonePrimitives(t *testing.T) {
 		Str  string `json:"str"`
 		Bool bool   `json:"bool"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Num != 42 {
 		t.Errorf("num = %d, want 42", data.Num)
 	}
@@ -332,7 +336,9 @@ func TestGlobals_StructuredCloneClonesSet(t *testing.T) {
 		Has1  bool `json:"has1"`
 		Has4  bool `json:"has4"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsSet {
 		t.Error("cloned value should be a Set")
 	}
@@ -368,7 +374,9 @@ func TestGlobals_StructuredCloneRejectsWeakMap(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("structuredClone(WeakMap) should throw DataCloneError")
 	}
@@ -395,7 +403,9 @@ func TestGlobals_StructuredCloneRejectsWeakSet(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("structuredClone(WeakSet) should throw DataCloneError")
 	}
@@ -422,7 +432,9 @@ func TestGlobals_StructuredCloneRejectsSymbol(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("structuredClone(Symbol) should throw DataCloneError")
 	}
@@ -451,7 +463,9 @@ func TestGlobals_StructuredCloneCircularThrows(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("structuredClone with circular reference should throw DataCloneError")
 	}
@@ -482,7 +496,9 @@ func TestGlobals_StructuredCloneDate(t *testing.T) {
 		Time   int64 `json:"time"`
 		Equal  bool  `json:"equal"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsDate {
 		t.Error("cloned value should be a Date")
 	}
@@ -517,7 +533,9 @@ func TestGlobals_StructuredCloneRegExp(t *testing.T) {
 		Flags    string `json:"flags"`
 		Equal    bool   `json:"equal"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsRegExp {
 		t.Error("cloned value should be a RegExp")
 	}
@@ -557,7 +575,9 @@ func TestGlobals_StructuredCloneTypedArray(t *testing.T) {
 		First       int  `json:"first"`
 		Independent bool `json:"independent"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsUint8 {
 		t.Error("cloned value should be a Uint8Array")
 	}
@@ -602,7 +622,9 @@ func TestGlobals_StructuredCloneArrayBuffer(t *testing.T) {
 		First       int  `json:"first"`
 		Independent bool `json:"independent"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsAB {
 		t.Error("cloned value should be an ArrayBuffer")
 	}
@@ -639,7 +661,9 @@ func TestGlobals_StructuredCloneRejectsPromise(t *testing.T) {
 		Threw bool   `json:"threw"`
 		Name  string `json:"name"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("structuredClone(Promise) should throw DataCloneError")
 	}
@@ -675,7 +699,9 @@ func TestGlobals_StructuredCloneNestedMapSet(t *testing.T) {
 		SetSize int  `json:"setSize"`
 		Has2    bool `json:"has2"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.MapSize != 1 {
 		t.Errorf("map size = %d, want 1", data.MapSize)
 	}
@@ -711,7 +737,9 @@ func TestGlobals_NavigatorSendBeacon(t *testing.T) {
 		HasFn  bool `json:"hasFn"`
 		Result bool `json:"result"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.HasFn {
 		t.Error("navigator.sendBeacon should be a function")
 	}
@@ -738,7 +766,9 @@ func TestGlobals_NavigatorSendBeaconPublicURL(t *testing.T) {
 	var data struct {
 		Result bool `json:"result"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Result {
 		t.Error("sendBeacon to public URL should return true")
 	}
@@ -761,7 +791,9 @@ func TestGlobals_NavigatorSendBeaconNoData(t *testing.T) {
 	var data struct {
 		Result bool `json:"result"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Result {
 		t.Error("sendBeacon without data should return true")
 	}
@@ -800,7 +832,9 @@ func TestGlobals_StructuredCloneDataView(t *testing.T) {
 		Value       int  `json:"value"`
 		Independent bool `json:"independent"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsDataView {
 		t.Error("cloned value should be a DataView")
 	}
@@ -844,7 +878,9 @@ func TestGlobals_StructuredCloneInt32Array(t *testing.T) {
 		Third       int  `json:"third"`
 		Independent bool `json:"independent"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsInt32 {
 		t.Error("cloned value should be an Int32Array")
 	}
@@ -889,7 +925,9 @@ func TestGlobals_StructuredCloneFloat64Array(t *testing.T) {
 		First       float64 `json:"first"`
 		Independent bool    `json:"independent"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsFloat64 {
 		t.Error("cloned value should be a Float64Array")
 	}

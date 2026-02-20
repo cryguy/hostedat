@@ -3,6 +3,7 @@ package worker
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/hmac"
@@ -157,9 +158,9 @@ func importCryptoKeyFull(reqID uint64, entry *cryptoKeyEntry) int64 {
 
 // setupCryptoExt registers extended crypto Go functions and evaluates the JS
 // patches for JWK, ECDSA, generateKey, and AES-CBC. Must run after setupCrypto.
-func setupCryptoExt(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupCryptoExt(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	// Override __cryptoImportKey to accept namedCurve and handle ECDSA raw keys.
-	ctx.Global().Set("__cryptoImportKey", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoImportKey", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 3 {
 			return throwError(iso, "importKey requires at least 3 argument(s)")
@@ -184,10 +185,24 @@ func setupCryptoExt(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 			if curve == nil {
 				return throwError(iso, fmt.Sprintf("importKey: unsupported curve %q", namedCurve))
 			}
-			x, y := elliptic.Unmarshal(curve, keyData)
-			if x == nil {
+			var ecdhCurve ecdh.Curve
+			switch namedCurve {
+			case "P-256":
+				ecdhCurve = ecdh.P256()
+			case "P-384":
+				ecdhCurve = ecdh.P384()
+			default:
+				return throwError(iso, fmt.Sprintf("importKey: unsupported curve %q", namedCurve))
+			}
+			ecdhKey, err := ecdhCurve.NewPublicKey(keyData)
+			if err != nil {
 				return throwError(iso, "importKey: invalid EC public key")
 			}
+			// Convert ecdh.PublicKey to ecdsa.PublicKey via raw bytes.
+			rawBytes := ecdhKey.Bytes() // uncompressed: 0x04 || X || Y
+			coordLen := (len(rawBytes) - 1) / 2
+			x := new(big.Int).SetBytes(rawBytes[1 : 1+coordLen])
+			y := new(big.Int).SetBytes(rawBytes[1+coordLen:])
 			pubKey := &ecdsa.PublicKey{Curve: curve, X: x, Y: y}
 			id := importCryptoKeyFull(reqID, &cryptoKeyEntry{
 				algoName:   "ECDSA",
@@ -209,7 +224,7 @@ func setupCryptoExt(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoImportKeyJWK(algoName, hashAlgo, jwkJSON, namedCurve) -> JSON result
-	ctx.Global().Set("__cryptoImportKeyJWK", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoImportKeyJWK", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 4 {
 			return throwError(iso, "importKeyJWK requires at least 4 argument(s)")
@@ -309,7 +324,7 @@ func setupCryptoExt(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoExportKeyJWK(keyID, algoName, hashAlgo, namedCurve) -> JSON JWK
-	ctx.Global().Set("__cryptoExportKeyJWK", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoExportKeyJWK", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 4 {
 			return throwError(iso, "exportKeyJWK requires at least 4 argument(s)")
@@ -378,7 +393,7 @@ func setupCryptoExt(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoGenerateKey(algoName, hashAlgo, namedCurve) -> JSON result
-	ctx.Global().Set("__cryptoGenerateKey", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoGenerateKey", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 3 {
 			return throwError(iso, "generateKey requires at least 3 argument(s)")
@@ -452,7 +467,7 @@ func setupCryptoExt(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// Override __cryptoSign to support ECDSA + extra hash arg.
-	ctx.Global().Set("__cryptoSign", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoSign", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 3 {
 			return throwError(iso, "sign requires at least 3 argument(s)")
@@ -522,7 +537,7 @@ func setupCryptoExt(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// Override __cryptoVerify to support ECDSA + extra hash arg.
-	ctx.Global().Set("__cryptoVerify", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoVerify", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 4 {
 			return throwError(iso, "verify requires at least 4 argument(s)")
@@ -601,7 +616,7 @@ func setupCryptoExt(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// Override __cryptoEncrypt to add AES-CBC.
-	ctx.Global().Set("__cryptoEncrypt", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoEncrypt", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 4 {
 			return throwError(iso, "encrypt requires at least 4 argument(s)")
@@ -672,7 +687,7 @@ func setupCryptoExt(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// Override __cryptoDecrypt to add AES-CBC.
-	ctx.Global().Set("__cryptoDecrypt", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoDecrypt", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 4 {
 			return throwError(iso, "decrypt requires at least 4 argument(s)")

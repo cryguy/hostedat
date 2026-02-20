@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -19,7 +20,8 @@ func CustomErrorHandler(err error, c echo.Context) {
 		return
 	}
 
-	he, ok := err.(*echo.HTTPError)
+	var he *echo.HTTPError
+	ok := errors.As(err, &he)
 	if ok {
 		msg, _ := he.Message.(string)
 		if msg == "" {

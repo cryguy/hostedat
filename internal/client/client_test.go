@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -38,7 +39,7 @@ func TestClient_VersionHeader(t *testing.T) {
 			t.Errorf("expected X-Hostedat-Version: 1.0.0, got %s", version)
 		}
 		w.WriteHeader(200)
-		json.NewEncoder(w).Encode([]Site{})
+		_ = json.NewEncoder(w).Encode([]Site{})
 	}))
 	defer srv.Close()
 
@@ -57,7 +58,7 @@ func TestClient_AuthHeader(t *testing.T) {
 			t.Errorf("expected Authorization: Bearer test-token, got %s", auth)
 		}
 		w.WriteHeader(200)
-		json.NewEncoder(w).Encode([]Site{})
+		_ = json.NewEncoder(w).Encode([]Site{})
 	}))
 	defer srv.Close()
 
@@ -71,7 +72,7 @@ func TestClient_AuthHeader(t *testing.T) {
 func TestClient_ErrorResponse_JSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid request"})
 	}))
 	defer srv.Close()
 
@@ -80,7 +81,8 @@ func TestClient_ErrorResponse_JSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	apiErr, ok := err.(*APIError)
+	var apiErr *APIError
+	ok := errors.As(err, &apiErr)
 	if !ok {
 		t.Fatalf("expected *APIError, got %T", err)
 	}
@@ -95,7 +97,7 @@ func TestClient_ErrorResponse_JSON(t *testing.T) {
 func TestClient_ErrorResponse_NonJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
-		w.Write([]byte("internal server error"))
+		_, _ = w.Write([]byte("internal server error"))
 	}))
 	defer srv.Close()
 
@@ -104,7 +106,8 @@ func TestClient_ErrorResponse_NonJSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	apiErr, ok := err.(*APIError)
+	var apiErr *APIError
+	ok := errors.As(err, &apiErr)
 	if !ok {
 		t.Fatalf("expected *APIError, got %T", err)
 	}
@@ -130,7 +133,7 @@ func TestClient_doJSON_NilReqBody(t *testing.T) {
 			t.Errorf("expected GET, got %s", r.Method)
 		}
 		w.WriteHeader(200)
-		json.NewEncoder(w).Encode([]Site{{ID: "abc", Name: "Test"}})
+		_ = json.NewEncoder(w).Encode([]Site{{ID: "abc", Name: "Test"}})
 	}))
 	defer srv.Close()
 
@@ -172,7 +175,7 @@ func TestClient_ListSites(t *testing.T) {
 			t.Errorf("expected /api/v1/sites, got %s", r.URL.Path)
 		}
 		w.WriteHeader(200)
-		json.NewEncoder(w).Encode([]Site{
+		_ = json.NewEncoder(w).Encode([]Site{
 			{ID: "abc", Name: "Test 1", SubdomainSlug: "test1"},
 			{ID: "def", Name: "Test 2", SubdomainSlug: "test2"},
 		})
@@ -211,7 +214,7 @@ func TestClient_CreateSite_WithSubdomain(t *testing.T) {
 			t.Errorf("expected subdomain_slug 'my-site', got %s", req["subdomain_slug"])
 		}
 		w.WriteHeader(201)
-		json.NewEncoder(w).Encode(Site{ID: "abc", Name: "My Site", SubdomainSlug: "my-site"})
+		_ = json.NewEncoder(w).Encode(Site{ID: "abc", Name: "My Site", SubdomainSlug: "my-site"})
 	}))
 	defer srv.Close()
 
@@ -238,7 +241,7 @@ func TestClient_CreateSite_WithoutSubdomain(t *testing.T) {
 			t.Error("expected subdomain_slug to be absent")
 		}
 		w.WriteHeader(201)
-		json.NewEncoder(w).Encode(Site{ID: "abc", Name: "My Site", SubdomainSlug: "generated"})
+		_ = json.NewEncoder(w).Encode(Site{ID: "abc", Name: "My Site", SubdomainSlug: "generated"})
 	}))
 	defer srv.Close()
 
@@ -273,7 +276,7 @@ func TestClient_DeleteSite(t *testing.T) {
 
 func TestClient_ResolveSite_ByID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]Site{
+		_ = json.NewEncoder(w).Encode([]Site{
 			{ID: "abc", Name: "Test 1", SubdomainSlug: "test1"},
 			{ID: "def", Name: "Test 2", SubdomainSlug: "test2"},
 		})
@@ -292,7 +295,7 @@ func TestClient_ResolveSite_ByID(t *testing.T) {
 
 func TestClient_ResolveSite_BySlug(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]Site{
+		_ = json.NewEncoder(w).Encode([]Site{
 			{ID: "abc", Name: "Test 1", SubdomainSlug: "test1"},
 			{ID: "def", Name: "Test 2", SubdomainSlug: "test2"},
 		})
@@ -311,7 +314,7 @@ func TestClient_ResolveSite_BySlug(t *testing.T) {
 
 func TestClient_ResolveSite_ByName(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]Site{
+		_ = json.NewEncoder(w).Encode([]Site{
 			{ID: "abc", Name: "Test 1", SubdomainSlug: "test1"},
 			{ID: "def", Name: "Test 2", SubdomainSlug: "test2"},
 		})
@@ -330,7 +333,7 @@ func TestClient_ResolveSite_ByName(t *testing.T) {
 
 func TestClient_ResolveSite_NoMatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]Site{
+		_ = json.NewEncoder(w).Encode([]Site{
 			{ID: "abc", Name: "Test 1", SubdomainSlug: "test1"},
 		})
 	}))
@@ -348,7 +351,7 @@ func TestClient_ResolveSite_NoMatch(t *testing.T) {
 
 func TestClient_ResolveSite_Ambiguous(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]Site{
+		_ = json.NewEncoder(w).Encode([]Site{
 			{ID: "abc", Name: "Test", SubdomainSlug: "test1"},
 			{ID: "def", Name: "Test", SubdomainSlug: "test2"},
 		})
@@ -371,7 +374,7 @@ func TestClient_ResolveSite_Ambiguous(t *testing.T) {
 
 func TestClient_ResolveSiteID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]Site{
+		_ = json.NewEncoder(w).Encode([]Site{
 			{ID: "abc", Name: "Test", SubdomainSlug: "test"},
 		})
 	}))
@@ -406,7 +409,7 @@ func TestClient_UpdateSite_NameOnly(t *testing.T) {
 			t.Error("expected spa_mode to be absent")
 		}
 		w.WriteHeader(200)
-		json.NewEncoder(w).Encode(Site{ID: "abc", Name: "Updated"})
+		_ = json.NewEncoder(w).Encode(Site{ID: "abc", Name: "Updated"})
 	}))
 	defer srv.Close()
 
@@ -434,7 +437,7 @@ func TestClient_UpdateSite_SPAModeOnly(t *testing.T) {
 			t.Errorf("expected spa_mode true, got %v", req["spa_mode"])
 		}
 		w.WriteHeader(200)
-		json.NewEncoder(w).Encode(Site{ID: "abc", SPAMode: true})
+		_ = json.NewEncoder(w).Encode(Site{ID: "abc", SPAMode: true})
 	}))
 	defer srv.Close()
 
@@ -462,7 +465,7 @@ func TestClient_UpdateSite_Both(t *testing.T) {
 			t.Errorf("expected spa_mode false, got %v", req["spa_mode"])
 		}
 		w.WriteHeader(200)
-		json.NewEncoder(w).Encode(Site{ID: "abc", Name: "Updated", SPAMode: false})
+		_ = json.NewEncoder(w).Encode(Site{ID: "abc", Name: "Updated", SPAMode: false})
 	}))
 	defer srv.Close()
 
@@ -489,7 +492,7 @@ func TestClient_Deploy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	if err := os.WriteFile(filepath.Join(tmpDir, "index.html"), []byte("<h1>Test</h1>"), 0644); err != nil {
 		t.Fatalf("failed to write index.html: %v", err)
@@ -520,10 +523,13 @@ func TestClient_Deploy(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get form file: %v", err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		// Verify it's a valid zip with expected files
-		zipBytes, _ := io.ReadAll(file)
+		zipBytes, readErr := io.ReadAll(file)
+		if readErr != nil {
+			t.Fatalf("failed to read zip bytes: %v", readErr)
+		}
 		zipReader, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
 		if err != nil {
 			t.Fatalf("failed to read zip: %v", err)
@@ -547,7 +553,7 @@ func TestClient_Deploy(t *testing.T) {
 		}
 
 		w.WriteHeader(201)
-		json.NewEncoder(w).Encode(Deployment{ID: "dep1", SiteID: "abc", Version: 1})
+		_ = json.NewEncoder(w).Encode(Deployment{ID: "dep1", SiteID: "abc", Version: 1})
 	}))
 	defer srv.Close()
 
@@ -566,7 +572,7 @@ func TestZipDirectory_Valid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	if err := os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("content1"), 0644); err != nil {
 		t.Fatalf("failed to write file1.txt: %v", err)
@@ -620,8 +626,8 @@ func TestZipDirectory_NotADirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Close()
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+	_ = tmpFile.Close()
 
 	_, err = zipDirectory(tmpFile.Name())
 	if err == nil {
@@ -650,7 +656,7 @@ func TestClient_CreateAPIKey(t *testing.T) {
 			t.Errorf("expected name 'test-key', got %s", req["name"])
 		}
 		w.WriteHeader(201)
-		json.NewEncoder(w).Encode(APIKeyResponse{
+		_ = json.NewEncoder(w).Encode(APIKeyResponse{
 			ID:   "key1",
 			Name: "test-key",
 			Key:  "sk_test_123",
@@ -681,7 +687,7 @@ func TestCreateAPIKey_ErrorResponse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tt.statusCode)
-				w.Write([]byte(tt.body))
+				_, _ = w.Write([]byte(tt.body))
 			}))
 			defer srv.Close()
 
@@ -690,7 +696,8 @@ func TestCreateAPIKey_ErrorResponse(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
-			apiErr, ok := err.(*APIError)
+			var apiErr *APIError
+			ok := errors.As(err, &apiErr)
 			if !ok {
 				t.Fatalf("expected *APIError, got %T", err)
 			}
@@ -712,9 +719,12 @@ func TestDeploy_EmptyDirectory(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get form file: %v", err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
-		zipBytes, _ := io.ReadAll(file)
+		zipBytes, readErr := io.ReadAll(file)
+		if readErr != nil {
+			t.Fatalf("failed to read zip bytes: %v", readErr)
+		}
 		zipReader, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
 		if err != nil {
 			t.Fatalf("failed to read zip: %v", err)
@@ -724,7 +734,7 @@ func TestDeploy_EmptyDirectory(t *testing.T) {
 		}
 
 		w.WriteHeader(201)
-		json.NewEncoder(w).Encode(Deployment{ID: "dep1", SiteID: "abc"})
+		_ = json.NewEncoder(w).Encode(Deployment{ID: "dep1", SiteID: "abc"})
 	}))
 	defer srv.Close()
 
@@ -772,9 +782,12 @@ func TestDeploy_NestedDirectories(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get form file: %v", err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
-		zipBytes, _ := io.ReadAll(file)
+		zipBytes, readErr := io.ReadAll(file)
+		if readErr != nil {
+			t.Fatalf("failed to read zip bytes: %v", readErr)
+		}
 		zipReader, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
 		if err != nil {
 			t.Fatalf("failed to read zip: %v", err)
@@ -799,7 +812,7 @@ func TestDeploy_NestedDirectories(t *testing.T) {
 		}
 
 		w.WriteHeader(201)
-		json.NewEncoder(w).Encode(Deployment{ID: "dep1", SiteID: "abc", Version: 1})
+		_ = json.NewEncoder(w).Encode(Deployment{ID: "dep1", SiteID: "abc", Version: 1})
 	}))
 	defer srv.Close()
 

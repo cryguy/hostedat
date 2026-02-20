@@ -174,7 +174,7 @@ globalThis.URLPattern = URLPattern;
 })();
 `
 
-func setupURLPattern(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupURLPattern(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	if _, err := ctx.RunScript(urlPatternJS, "urlpattern.js"); err != nil {
 		return fmt.Errorf("evaluating urlpattern.js: %w", err)
 	}

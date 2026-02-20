@@ -88,7 +88,7 @@ globalThis.PromiseRejectionEvent = PromiseRejectionEvent;
 
 // setupUnhandledRejection registers PromiseRejectionEvent and best-effort
 // unhandled rejection tracking on globalThis.
-func setupUnhandledRejection(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupUnhandledRejection(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	if _, err := ctx.RunScript(unhandledRejectionJS, "unhandledrejection.js"); err != nil {
 		return fmt.Errorf("evaluating unhandledrejection.js: %w", err)
 	}

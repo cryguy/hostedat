@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/minio/minio-go/v7"
 	v8 "github.com/tommie/v8go"
-	minio "github.com/minio/minio-go/v7"
 )
 
 // StorageBridge backs a single R2-compatible bucket binding.
@@ -35,7 +35,7 @@ func buildStorageBinding(iso *v8.Isolate, ctx *v8.Context, bridge *StorageBridge
 	}
 
 	// get(key) -> Promise<R2ObjectBody|null>
-	bucket.Set("get", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = bucket.Set("get", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 		if len(args) == 0 {
@@ -50,7 +50,7 @@ func buildStorageBinding(iso *v8.Isolate, ctx *v8.Context, bridge *StorageBridge
 			resolver.Resolve(v8.Null(iso))
 			return resolver.GetPromise().Value
 		}
-		defer obj.Close()
+		defer func() { _ = obj.Close() }()
 
 		stat, err := obj.Stat()
 		if err != nil {
@@ -76,7 +76,7 @@ func buildStorageBinding(iso *v8.Isolate, ctx *v8.Context, bridge *StorageBridge
 	}).GetFunction(ctx))
 
 	// put(key, value, opts?) -> Promise<R2Object>
-	bucket.Set("put", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = bucket.Set("put", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 		if len(args) < 2 {
@@ -87,7 +87,7 @@ func buildStorageBinding(iso *v8.Isolate, ctx *v8.Context, bridge *StorageBridge
 		key := args[0].String()
 
 		// Coerce body to bytes via JS (handles string, ArrayBuffer, TypedArray, Blob).
-		ctx.Global().Set("__tmp_put_body", args[1])
+		_ = ctx.Global().Set("__tmp_put_body", args[1])
 		coerceResult, jsErr := ctx.RunScript(`(function() {
 			var v = globalThis.__tmp_put_body;
 			delete globalThis.__tmp_put_body;
@@ -152,7 +152,7 @@ func buildStorageBinding(iso *v8.Isolate, ctx *v8.Context, bridge *StorageBridge
 		customMeta := map[string]string{}
 
 		if len(args) > 2 && args[2].IsObject() {
-			ctx.Global().Set("__tmp_put_opts", args[2])
+			_ = ctx.Global().Set("__tmp_put_opts", args[2])
 			optsResult, err := ctx.RunScript(`(function() {
 				var o = globalThis.__tmp_put_opts;
 				delete globalThis.__tmp_put_opts;
@@ -227,7 +227,7 @@ func buildStorageBinding(iso *v8.Isolate, ctx *v8.Context, bridge *StorageBridge
 	}).GetFunction(ctx))
 
 	// delete(key|keys) -> Promise<void>
-	bucket.Set("delete", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = bucket.Set("delete", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 		if len(args) == 0 {
@@ -237,7 +237,7 @@ func buildStorageBinding(iso *v8.Isolate, ctx *v8.Context, bridge *StorageBridge
 		}
 
 		// Support single key (string) or array of keys via JS extraction.
-		ctx.Global().Set("__tmp_del_arg", args[0])
+		_ = ctx.Global().Set("__tmp_del_arg", args[0])
 		keysResult, err := ctx.RunScript(`(function() {
 			var v = globalThis.__tmp_del_arg;
 			delete globalThis.__tmp_del_arg;
@@ -266,7 +266,7 @@ func buildStorageBinding(iso *v8.Isolate, ctx *v8.Context, bridge *StorageBridge
 	}).GetFunction(ctx))
 
 	// head(key) -> Promise<R2Object|null>
-	bucket.Set("head", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = bucket.Set("head", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 		if len(args) == 0 {
@@ -293,7 +293,7 @@ func buildStorageBinding(iso *v8.Isolate, ctx *v8.Context, bridge *StorageBridge
 	}).GetFunction(ctx))
 
 	// list(opts?) -> Promise<R2Objects>
-	bucket.Set("list", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = bucket.Set("list", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 
@@ -301,7 +301,7 @@ func buildStorageBinding(iso *v8.Isolate, ctx *v8.Context, bridge *StorageBridge
 		limit := 1000
 
 		if len(args) > 0 && args[0].IsObject() {
-			ctx.Global().Set("__tmp_list_opts", args[0])
+			_ = ctx.Global().Set("__tmp_list_opts", args[0])
 			optsResult, err := ctx.RunScript(`(function() {
 				var o = globalThis.__tmp_list_opts;
 				delete globalThis.__tmp_list_opts;
@@ -387,7 +387,7 @@ func buildStorageBinding(iso *v8.Isolate, ctx *v8.Context, bridge *StorageBridge
 
 	// createSignedUrl(key, opts?) -> Promise<string>
 	if bridge.Client != nil || bridge.PresignClient != nil {
-		bucket.Set("createSignedUrl", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		_ = bucket.Set("createSignedUrl", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 			resolver, _ := v8.NewPromiseResolver(ctx)
 			args := info.Args()
 			if len(args) == 0 {
@@ -399,7 +399,7 @@ func buildStorageBinding(iso *v8.Isolate, ctx *v8.Context, bridge *StorageBridge
 
 			expiry := 3600 // default 1 hour
 			if len(args) > 1 && args[1].IsObject() {
-				ctx.Global().Set("__tmp_sign_opts", args[1])
+				_ = ctx.Global().Set("__tmp_sign_opts", args[1])
 				optsResult, err := ctx.RunScript(`(function() {
 					var o = globalThis.__tmp_sign_opts;
 					delete globalThis.__tmp_sign_opts;
@@ -452,7 +452,7 @@ func buildStorageBinding(iso *v8.Isolate, ctx *v8.Context, bridge *StorageBridge
 
 	// publicUrl(key) -> string (synchronous)
 	if bridge.PublicS3URL != "" {
-		bucket.Set("publicUrl", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		_ = bucket.Set("publicUrl", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 			args := info.Args()
 			if len(args) == 0 {
 				return throwError(iso, "BUCKET.publicUrl requires a key argument")
@@ -512,34 +512,34 @@ func buildR2Object(iso *v8.Isolate, ctx *v8.Context, key string, size int64, eta
 	}
 
 	keyVal, _ := v8.NewValue(iso, key)
-	obj.Set("key", keyVal)
+	_ = obj.Set("key", keyVal)
 	sizeVal, _ := v8.NewValue(iso, float64(size))
-	obj.Set("size", sizeVal)
+	_ = obj.Set("size", sizeVal)
 	etagVal, _ := v8.NewValue(iso, etag)
-	obj.Set("etag", etagVal)
+	_ = obj.Set("etag", etagVal)
 	httpEtagVal, _ := v8.NewValue(iso, "\""+etag+"\"")
-	obj.Set("httpEtag", httpEtagVal)
+	_ = obj.Set("httpEtag", httpEtagVal)
 	versionVal, _ := v8.NewValue(iso, etag)
-	obj.Set("version", versionVal)
+	_ = obj.Set("version", versionVal)
 	scVal, _ := v8.NewValue(iso, "STANDARD")
-	obj.Set("storageClass", scVal)
+	_ = obj.Set("storageClass", scVal)
 
 	httpMeta, _ := newJSObject(iso, ctx)
 	if contentType != "" {
 		ctVal, _ := v8.NewValue(iso, contentType)
-		httpMeta.Set("contentType", ctVal)
+		_ = httpMeta.Set("contentType", ctVal)
 	}
-	obj.Set("httpMetadata", httpMeta)
+	_ = obj.Set("httpMetadata", httpMeta)
 
 	cm, _ := newJSObject(iso, ctx)
 	for k, v := range customMeta {
 		vVal, _ := v8.NewValue(iso, v)
-		cm.Set(k, vVal)
+		_ = cm.Set(k, vVal)
 	}
-	obj.Set("customMetadata", cm)
+	_ = obj.Set("customMetadata", cm)
 
 	checksums, _ := newJSObject(iso, ctx)
-	obj.Set("checksums", checksums)
+	_ = obj.Set("checksums", checksums)
 
 	return obj, nil
 }
@@ -552,13 +552,13 @@ func buildR2ObjectBody(iso *v8.Isolate, ctx *v8.Context, key string, data []byte
 	}
 
 	uploadedVal, _ := v8.NewValue(iso, float64(stat.LastModified.UnixMilli()))
-	obj.Set("uploaded", uploadedVal)
+	_ = obj.Set("uploaded", uploadedVal)
 
 	bodyUsed := false
 	bodyData := string(data)
 
 	// text() -> Promise<string>
-	obj.Set("text", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = obj.Set("text", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		if bodyUsed {
 			errVal, _ := v8.NewValue(iso, "body already consumed")
@@ -567,14 +567,14 @@ func buildR2ObjectBody(iso *v8.Isolate, ctx *v8.Context, key string, data []byte
 		}
 		bodyUsed = true
 		boolVal, _ := v8.NewValue(iso, true)
-		obj.Set("bodyUsed", boolVal)
+		_ = obj.Set("bodyUsed", boolVal)
 		textVal, _ := v8.NewValue(iso, bodyData)
 		resolver.Resolve(textVal)
 		return resolver.GetPromise().Value
 	}).GetFunction(ctx))
 
 	// arrayBuffer() -> Promise<ArrayBuffer>
-	obj.Set("arrayBuffer", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = obj.Set("arrayBuffer", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		if bodyUsed {
 			errVal, _ := v8.NewValue(iso, "body already consumed")
@@ -583,11 +583,11 @@ func buildR2ObjectBody(iso *v8.Isolate, ctx *v8.Context, key string, data []byte
 		}
 		bodyUsed = true
 		boolVal, _ := v8.NewValue(iso, true)
-		obj.Set("bodyUsed", boolVal)
+		_ = obj.Set("bodyUsed", boolVal)
 		// Create ArrayBuffer via JS from base64.
 		b64 := base64.StdEncoding.EncodeToString(data)
 		b64Val, _ := v8.NewValue(iso, b64)
-		ctx.Global().Set("__tmp_ab_b64", b64Val)
+		_ = ctx.Global().Set("__tmp_ab_b64", b64Val)
 		abResult, err := ctx.RunScript(`(function() {
 			var b64 = globalThis.__tmp_ab_b64;
 			delete globalThis.__tmp_ab_b64;
@@ -607,7 +607,7 @@ func buildR2ObjectBody(iso *v8.Isolate, ctx *v8.Context, key string, data []byte
 	}).GetFunction(ctx))
 
 	// json() -> Promise<any>
-	obj.Set("json", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = obj.Set("json", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		if bodyUsed {
 			errVal, _ := v8.NewValue(iso, "body already consumed")
@@ -616,7 +616,7 @@ func buildR2ObjectBody(iso *v8.Isolate, ctx *v8.Context, key string, data []byte
 		}
 		bodyUsed = true
 		boolVal, _ := v8.NewValue(iso, true)
-		obj.Set("bodyUsed", boolVal)
+		_ = obj.Set("bodyUsed", boolVal)
 		if !json.Valid([]byte(bodyData)) {
 			errVal, _ := v8.NewValue(iso, "invalid JSON")
 			resolver.Reject(errVal)
@@ -633,7 +633,7 @@ func buildR2ObjectBody(iso *v8.Isolate, ctx *v8.Context, key string, data []byte
 	}).GetFunction(ctx))
 
 	falseVal, _ := v8.NewValue(iso, false)
-	obj.Set("bodyUsed", falseVal)
+	_ = obj.Set("bodyUsed", falseVal)
 
 	return obj, nil
 }

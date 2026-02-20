@@ -147,9 +147,9 @@ const eventSourceJS = `
 
 // setupEventSource registers Go-backed helpers for EventSource SSE and
 // evaluates the JS wrapper.
-func setupEventSource(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupEventSource(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	// __eventSourceConnect(requestID, url) -> sourceID
-	ctx.Global().Set("__eventSourceConnect", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__eventSourceConnect", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			return throwError(iso, errMissingArg("__eventSourceConnect", 2).Error())
@@ -240,7 +240,7 @@ func setupEventSource(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __eventSourcePoll(requestID, sourceID) -> JSON array of events
-	ctx.Global().Set("__eventSourcePoll", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__eventSourcePoll", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			return throwError(iso, errMissingArg("__eventSourcePoll", 2).Error())
@@ -276,7 +276,7 @@ func setupEventSource(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __eventSourceClose(requestID, sourceID)
-	ctx.Global().Set("__eventSourceClose", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__eventSourceClose", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			return throwError(iso, errMissingArg("__eventSourceClose", 2).Error())
@@ -314,7 +314,7 @@ func setupEventSource(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 // parseSSEStream reads SSE events from an HTTP response and queues them.
 func parseSSEStream(es *eventSourceState, resp *http.Response) {
 	defer func() {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		es.mu.Lock()
 		es.closed = true
 		es.mu.Unlock()
@@ -403,7 +403,7 @@ func closeEventSource(es *eventSourceState) {
 		es.cancelFunc()
 	}
 	if es.body != nil {
-		es.body.Close()
+		_ = es.body.Close()
 	}
 }
 

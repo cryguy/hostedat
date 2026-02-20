@@ -305,7 +305,9 @@ func TestStreams_WritableStreamLocked(t *testing.T) {
 		Threw  bool `json:"threw"`
 		Locked bool `json:"locked"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("second getWriter should throw")
 	}
@@ -340,7 +342,9 @@ func TestStreams_WriterReleaseLock(t *testing.T) {
 		Locked2 bool `json:"locked2"`
 		Locked3 bool `json:"locked3"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Locked1 {
 		t.Error("should be locked after getWriter")
 	}
@@ -372,7 +376,9 @@ func TestStreams_ReaderReleaseLock(t *testing.T) {
 	var data struct {
 		Locked bool `json:"locked"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Locked {
 		t.Error("stream should be locked after second getReader")
 	}
@@ -485,7 +491,9 @@ func TestStreams_ReadableStreamWithPull(t *testing.T) {
 		Result    string `json:"result"`
 		PullCount int    `json:"pullCount"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Result != "chunk1,chunk2,chunk3," {
 		t.Errorf("result = %q", data.Result)
 	}
@@ -513,7 +521,9 @@ func TestStreams_WriterClosedPromise(t *testing.T) {
 	var data struct {
 		Same bool `json:"same"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Same {
 		t.Error("writer.closed should return the same promise")
 	}
@@ -550,7 +560,9 @@ func TestStreams_ReadableStreamError(t *testing.T) {
 		Caught bool   `json:"caught"`
 		Msg    string `json:"msg"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Caught {
 		t.Error("reading from errored stream should throw")
 	}
@@ -596,7 +608,9 @@ func TestStreams_TransformStreamWithTransformAndFlush(t *testing.T) {
 	var data struct {
 		Result string `json:"result"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Result != "[x],[y],done:2," {
 		t.Errorf("result = %q, want '[x],[y],done:2,'", data.Result)
 	}
@@ -679,7 +693,9 @@ func TestReadableStreamFrom(t *testing.T) {
 		var data struct {
 			Caught bool `json:"caught"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatal(err)
+		}
 		if !data.Caught {
 			t.Error("ReadableStream.from(null) should throw")
 		}
@@ -703,7 +719,9 @@ func TestReadableStreamFrom(t *testing.T) {
 		var data struct {
 			Caught bool `json:"caught"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatal(err)
+		}
 		if !data.Caught {
 			t.Error("ReadableStream.from(42) should throw")
 		}
@@ -832,7 +850,9 @@ func TestFixedLengthStream(t *testing.T) {
 		var data struct {
 			Done bool `json:"done"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatal(err)
+		}
 		if !data.Done {
 			t.Error("zero-length stream should close immediately")
 		}
@@ -856,7 +876,9 @@ func TestFixedLengthStream(t *testing.T) {
 		var data struct {
 			Caught bool `json:"caught"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatal(err)
+		}
 		if !data.Caught {
 			t.Error("FixedLengthStream(-1) should throw")
 		}
@@ -881,7 +903,9 @@ func TestReadableStreamFrom_EmptyIterable(t *testing.T) {
 	var data struct {
 		Done bool `json:"done"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Done {
 		t.Error("empty iterable should produce a stream that is immediately done")
 	}
@@ -911,7 +935,9 @@ func TestReadableStreamFrom_SetIterable(t *testing.T) {
 	var data struct {
 		Chunks []string `json:"chunks"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if len(data.Chunks) != 3 || data.Chunks[0] != "a" || data.Chunks[1] != "b" || data.Chunks[2] != "c" {
 		t.Errorf("chunks = %v, want [a b c]", data.Chunks)
 	}
@@ -953,7 +979,9 @@ func TestReadableStreamFrom_IteratorThrows(t *testing.T) {
 		FirstValue string `json:"firstValue"`
 		Caught     bool   `json:"caught"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.FirstValue != "first" {
 		t.Errorf("firstValue = %q, want 'first'", data.FirstValue)
 	}
@@ -1026,7 +1054,9 @@ func TestFixedLengthStream_BinaryData(t *testing.T) {
 		ChunkLengths []int `json:"chunkLengths"`
 		Total        int   `json:"total"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Total != 8 {
 		t.Errorf("total = %d, want 8", data.Total)
 	}
@@ -1060,7 +1090,9 @@ func TestFixedLengthStream_BoundaryOverflow(t *testing.T) {
 	var data struct {
 		Caught bool `json:"caught"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Caught {
 		t.Error("writing past exact boundary should error")
 	}
@@ -1129,7 +1161,9 @@ func TestStreams_PipeTo(t *testing.T) {
 		var data struct {
 			Caught bool `json:"caught"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatal(err)
+		}
 		if !data.Caught {
 			t.Error("pipeTo on locked stream should reject")
 		}
@@ -1158,7 +1192,9 @@ func TestStreams_PipeTo(t *testing.T) {
 		var data struct {
 			WritableClosed bool `json:"writableClosed"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatal(err)
+		}
 		if data.WritableClosed {
 			t.Error("writable should not be closed when preventClose is true")
 		}
@@ -1223,7 +1259,9 @@ func TestStreams_PipeThrough(t *testing.T) {
 		var data struct {
 			Caught bool `json:"caught"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatal(err)
+		}
 		if !data.Caught {
 			t.Error("pipeThrough on locked stream should throw")
 		}
@@ -1305,7 +1343,9 @@ func TestStreams_Tee(t *testing.T) {
 			Length       int  `json:"length"`
 			AreDifferent bool `json:"areDifferent"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatal(err)
+		}
 		if !data.IsArray {
 			t.Error("tee should return an array")
 		}
@@ -1337,7 +1377,9 @@ func TestStreams_Tee(t *testing.T) {
 		var data struct {
 			Caught bool `json:"caught"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatal(err)
+		}
 		if !data.Caught {
 			t.Error("tee on locked stream should throw")
 		}
@@ -1439,7 +1481,9 @@ func TestBody_NullForNullBody(t *testing.T) {
 		ReqBodyNull  bool `json:"reqBodyNull"`
 		RespBodyNull bool `json:"respBodyNull"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.ReqBodyNull {
 		t.Error("Request.body should be null for no body")
 	}
@@ -1466,7 +1510,9 @@ func TestBody_Idempotent(t *testing.T) {
 	var data struct {
 		Same bool `json:"same"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Same {
 		t.Error("Request.body should return the same ReadableStream on multiple accesses")
 	}
@@ -1501,7 +1547,9 @@ func TestBodyUsed_Tracking(t *testing.T) {
 		AfterLock    bool `json:"afterLock"`
 		AfterRead    bool `json:"afterRead"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.BeforeAccess {
 		t.Error("bodyUsed should be false before accessing body")
 	}
@@ -1584,7 +1632,9 @@ func TestFetch_BinaryRequestBodyExtraction(t *testing.T) {
 			Result string `json:"result"`
 			Length int    `json:"length"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatal(err)
+		}
 		if data.Result != "Hello" {
 			t.Errorf("result = %q, want 'Hello'", data.Result)
 		}
@@ -1628,7 +1678,9 @@ func TestFetch_BinaryRequestBodyExtraction(t *testing.T) {
 			Length int   `json:"length"`
 			Bytes  []int `json:"bytes"`
 		}
-		json.Unmarshal(r.Response.Body, &data)
+		if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+			t.Fatal(err)
+		}
 		if data.Length != 5 {
 			t.Errorf("length = %d, want 5", data.Length)
 		}
@@ -1660,7 +1712,9 @@ func TestStreams_WritableStreamReady(t *testing.T) {
 	var data struct {
 		ReadyUndefined bool `json:"readyUndefined"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.ReadyUndefined {
 		t.Error("writer.ready should resolve to undefined")
 	}

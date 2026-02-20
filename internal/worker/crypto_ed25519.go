@@ -90,9 +90,9 @@ subtle.generateKey = async function(algorithm, extractable, usages) {
 
 // setupCryptoEd25519 registers Ed25519 sign/verify/import/export/generate.
 // Must run after setupCryptoExt.
-func setupCryptoEd25519(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupCryptoEd25519(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	// __cryptoSignEd25519(keyID, dataB64) -> sigB64
-	ctx.Global().Set("__cryptoSignEd25519", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoSignEd25519", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			return throwError(iso, "signEd25519 requires 2 argument(s)")
@@ -122,7 +122,7 @@ func setupCryptoEd25519(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoVerifyEd25519(keyID, sigB64, dataB64) -> bool
-	ctx.Global().Set("__cryptoVerifyEd25519", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoVerifyEd25519", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 3 {
 			return throwError(iso, "verifyEd25519 requires 3 argument(s)")
@@ -161,7 +161,7 @@ func setupCryptoEd25519(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoGenerateKeyEd25519() -> JSON { privateKeyId, publicKeyId }
-	ctx.Global().Set("__cryptoGenerateKeyEd25519", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoGenerateKeyEd25519", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		reqID := getReqIDFromJS(ctx)
 		if getRequestState(reqID) == nil {
 			val, _ := v8.NewValue(iso, `{"error":"no active request state"}`)
@@ -186,7 +186,7 @@ func setupCryptoEd25519(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoImportKeyEd25519(format, dataStr) -> JSON { keyId, keyType }
-	ctx.Global().Set("__cryptoImportKeyEd25519", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoImportKeyEd25519", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			return throwError(iso, "importKeyEd25519 requires 2 argument(s)")
@@ -283,7 +283,7 @@ func setupCryptoEd25519(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoExportKeyEd25519(keyID, format) -> base64 or JSON string
-	ctx.Global().Set("__cryptoExportKeyEd25519", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoExportKeyEd25519", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			return throwError(iso, "exportKeyEd25519 requires 2 argument(s)")
@@ -301,7 +301,7 @@ func setupCryptoEd25519(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 		case "raw":
 			switch k := entry.ecKey.(type) {
 			case ed25519.PublicKey:
-				val, _ := v8.NewValue(iso, base64.StdEncoding.EncodeToString([]byte(k)))
+				val, _ := v8.NewValue(iso, base64.StdEncoding.EncodeToString(k))
 				return val
 			case ed25519.PrivateKey:
 				// Export the seed (first 32 bytes) for raw private key export
@@ -318,10 +318,10 @@ func setupCryptoEd25519(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 			}
 			switch k := entry.ecKey.(type) {
 			case ed25519.PublicKey:
-				jwk["x"] = base64.RawURLEncoding.EncodeToString([]byte(k))
+				jwk["x"] = base64.RawURLEncoding.EncodeToString(k)
 			case ed25519.PrivateKey:
 				pubKey := k.Public().(ed25519.PublicKey)
-				jwk["x"] = base64.RawURLEncoding.EncodeToString([]byte(pubKey))
+				jwk["x"] = base64.RawURLEncoding.EncodeToString(pubKey)
 				jwk["d"] = base64.RawURLEncoding.EncodeToString(k.Seed())
 			default:
 				return throwError(iso, "exportKeyEd25519: not an Ed25519 key")

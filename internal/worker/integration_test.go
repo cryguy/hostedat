@@ -679,7 +679,7 @@ func TestIntegration_HonoStyleRouter(t *testing.T) {
 		}
 
 		if !data.AllPassed {
-			failed := []string{}
+			var failed []string
 			for name, passed := range data.Checks {
 				if !passed {
 					failed = append(failed, name)

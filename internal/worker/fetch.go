@@ -38,7 +38,7 @@ type fetchResult struct {
 // The HTTP request runs in a goroutine so that an AbortSignal can cancel it
 // while the Go callback is waiting for the result. V8 is not accessed from
 // the goroutine — only the context.CancelFunc is called, which is safe.
-func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.WorkerConfig) error {
+func setupFetch(iso *v8.Isolate, ctx *v8.Context, cfg config.WorkerConfig) error {
 	// __fetchAbort(reqID, fetchID) — called from JS abort listener to cancel
 	// an in-flight HTTP request. Safe to call from the JS thread at any time.
 	abortFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
@@ -51,7 +51,7 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 		callFetchCancel(reqID, fetchID)
 		return nil
 	})
-	ctx.Global().Set("__fetchAbort", abortFT.GetFunction(ctx))
+	_ = ctx.Global().Set("__fetchAbort", abortFT.GetFunction(ctx))
 
 	fetchFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
@@ -76,9 +76,9 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 		}
 
 		// Set arguments as temp globals and extract via JS.
-		ctx.Global().Set("__tmp_fetch_arg0", args[0])
+		_ = ctx.Global().Set("__tmp_fetch_arg0", args[0])
 		if len(args) > 1 {
-			ctx.Global().Set("__tmp_fetch_arg1", args[1])
+			_ = ctx.Global().Set("__tmp_fetch_arg1", args[1])
 		}
 
 		extractResult, err := ctx.RunScript(`(function() {
@@ -222,8 +222,8 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 		// We stored the signal in __tmp_fetch_signal during extraction.
 		if fetchID != "" {
 			fetchIDVal, _ := v8.NewValue(iso, fetchID)
-			ctx.Global().Set("__tmp_fetch_id", fetchIDVal)
-			ctx.RunScript(`(function() {
+			_ = ctx.Global().Set("__tmp_fetch_id", fetchIDVal)
+			_, _ = ctx.RunScript(`(function() {
 				var sig = globalThis.__tmp_fetch_signal;
 				var fid = globalThis.__tmp_fetch_id;
 				delete globalThis.__tmp_fetch_signal;
@@ -246,7 +246,7 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 		if err != nil {
 			fetchCancel()
 			removeFetchCancel(reqID, fetchID)
-			ctx.RunScript(`if (typeof globalThis.__tmp_fetch_cleanup === 'function') { globalThis.__tmp_fetch_cleanup(); delete globalThis.__tmp_fetch_cleanup; }`, "fetch_cleanup.js")
+			_, _ = ctx.RunScript(`if (typeof globalThis.__tmp_fetch_cleanup === 'function') { globalThis.__tmp_fetch_cleanup(); delete globalThis.__tmp_fetch_cleanup; }`, "fetch_cleanup.js")
 			ctx.Global().Delete("__tmp_fetch_signal")
 			errVal, _ := v8.NewValue(iso, fmt.Sprintf("fetch: %s", err.Error()))
 			resolver.Reject(errVal)
@@ -304,7 +304,7 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 		abortedBySignal := fetchCtx.Err() != nil
 		removeFetchCancel(reqID, fetchID)
 		fetchCancel()
-		ctx.RunScript(`if (typeof globalThis.__tmp_fetch_cleanup === 'function') { globalThis.__tmp_fetch_cleanup(); delete globalThis.__tmp_fetch_cleanup; }`, "fetch_cleanup.js")
+		_, _ = ctx.RunScript(`if (typeof globalThis.__tmp_fetch_cleanup === 'function') { globalThis.__tmp_fetch_cleanup(); delete globalThis.__tmp_fetch_cleanup; }`, "fetch_cleanup.js")
 
 		resp, err := result.resp, result.err
 		if err != nil {
@@ -330,7 +330,7 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 			resolver.Reject(errVal)
 			return resolver.GetPromise().Value
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		limitedReader := io.LimitReader(resp.Body, maxBytes+1)
 		respBody, err := io.ReadAll(limitedReader)
@@ -360,17 +360,17 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 		// Base64-encode the response body to preserve binary data integrity.
 		bodyB64 := base64.StdEncoding.EncodeToString(respBody)
 		bodyVal, _ := v8.NewValue(iso, bodyB64)
-		ctx.Global().Set("__tmp_fetch_resp_body", bodyVal)
+		_ = ctx.Global().Set("__tmp_fetch_resp_body", bodyVal)
 		statusVal, _ := v8.NewValue(iso, int32(resp.StatusCode))
-		ctx.Global().Set("__tmp_fetch_resp_status", statusVal)
+		_ = ctx.Global().Set("__tmp_fetch_resp_status", statusVal)
 		statusTextVal, _ := v8.NewValue(iso, resp.Status)
-		ctx.Global().Set("__tmp_fetch_resp_statusText", statusTextVal)
+		_ = ctx.Global().Set("__tmp_fetch_resp_statusText", statusTextVal)
 		headersJSONVal, _ := v8.NewValue(iso, string(headersJSON))
-		ctx.Global().Set("__tmp_fetch_resp_headers", headersJSONVal)
+		_ = ctx.Global().Set("__tmp_fetch_resp_headers", headersJSONVal)
 		fetchURLVal, _ := v8.NewValue(iso, finalURL)
-		ctx.Global().Set("__tmp_fetch_resp_url", fetchURLVal)
+		_ = ctx.Global().Set("__tmp_fetch_resp_url", fetchURLVal)
 		redirectedVal, _ := v8.NewValue(iso, redirected)
-		ctx.Global().Set("__tmp_fetch_resp_redirected", redirectedVal)
+		_ = ctx.Global().Set("__tmp_fetch_resp_redirected", redirectedVal)
 
 		jsResp, err := ctx.RunScript(`(function() {
 			var b64Body = globalThis.__tmp_fetch_resp_body;
@@ -413,7 +413,7 @@ func setupFetch(iso *v8.Isolate, ctx *v8.Context, el *eventLoop, cfg config.Work
 		return resolver.GetPromise().Value
 	})
 
-	ctx.Global().Set("fetch", fetchFT.GetFunction(ctx))
+	_ = ctx.Global().Set("fetch", fetchFT.GetFunction(ctx))
 	return nil
 }
 

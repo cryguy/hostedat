@@ -15,7 +15,7 @@ import (
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/seaweedfs"
 	"github.com/labstack/echo/v4"
-	minio "github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7"
 	"gorm.io/gorm"
 )
 
@@ -479,7 +479,9 @@ func TestUpdateBucket_TogglePublic(t *testing.T) {
 	}
 
 	var updated models.StorageBucket
-	json.Unmarshal(rec.Body.Bytes(), &updated)
+	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
 	if !updated.Public {
 		t.Fatal("expected bucket to be public after toggle")
 	}
@@ -521,7 +523,9 @@ func TestUploadURL_Success(t *testing.T) {
 	}
 
 	resp := map[string]interface{}{}
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
 	if resp["upload_url"] == nil || resp["upload_url"] == "" {
 		t.Fatal("expected upload_url in response")
 	}
@@ -570,7 +574,9 @@ func TestUploadURL_ExpiresInClamped(t *testing.T) {
 	}
 
 	resp := map[string]interface{}{}
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
 	if resp["expires_in"] != float64(604800) {
 		t.Errorf("expires_in = %v, want 604800 (clamped)", resp["expires_in"])
 	}
@@ -595,7 +601,9 @@ func TestListS3Credentials_ReturnsUserCredentials(t *testing.T) {
 	}
 
 	var creds []models.S3Credential
-	json.Unmarshal(rec.Body.Bytes(), &creds)
+	if err := json.Unmarshal(rec.Body.Bytes(), &creds); err != nil {
+		t.Fatal(err)
+	}
 	if len(creds) != 2 {
 		t.Fatalf("got %d credentials, want 2", len(creds))
 	}
@@ -614,7 +622,9 @@ func TestListS3Credentials_Empty(t *testing.T) {
 	}
 
 	var creds []models.S3Credential
-	json.Unmarshal(rec.Body.Bytes(), &creds)
+	if err := json.Unmarshal(rec.Body.Bytes(), &creds); err != nil {
+		t.Fatal(err)
+	}
 	if len(creds) != 0 {
 		t.Fatalf("got %d credentials, want 0", len(creds))
 	}

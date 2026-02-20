@@ -89,7 +89,7 @@ globalThis.MessageChannel = MessageChannel;
 `
 
 // setupMessageChannel registers MessageChannel and MessagePort globals.
-func setupMessageChannel(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupMessageChannel(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	if _, err := ctx.RunScript(messageChannelJS, "messagechannel.js"); err != nil {
 		return fmt.Errorf("evaluating messagechannel.js: %w", err)
 	}

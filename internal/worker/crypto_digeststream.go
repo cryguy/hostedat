@@ -116,9 +116,9 @@ func newDigestHash(algo string) (hash.Hash, error) {
 
 // setupDigestStream registers Go-backed helpers for DigestStream and evaluates
 // the JS wrapper.
-func setupDigestStream(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupDigestStream(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	// __cryptoDigestStreamCreate(requestID, algorithm) -> streamID string
-	ctx.Global().Set("__cryptoDigestStreamCreate", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoDigestStreamCreate", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			return throwError(iso, errMissingArg("__cryptoDigestStreamCreate", 2).Error())
@@ -148,7 +148,7 @@ func setupDigestStream(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoDigestStreamWrite(requestID, streamID, base64data)
-	ctx.Global().Set("__cryptoDigestStreamWrite", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoDigestStreamWrite", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 3 {
 			return throwError(iso, errMissingArg("__cryptoDigestStreamWrite", 3).Error())
@@ -179,7 +179,7 @@ func setupDigestStream(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoDigestStreamFinish(requestID, streamID) -> base64 hash
-	ctx.Global().Set("__cryptoDigestStreamFinish", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoDigestStreamFinish", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			return throwError(iso, errMissingArg("__cryptoDigestStreamFinish", 2).Error())

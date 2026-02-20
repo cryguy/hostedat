@@ -59,7 +59,7 @@ func TestTCPSocketSSRFBlocksLoopback(t *testing.T) {
 	// Set up a request state so the JS side has __requestID.
 	reqID := newRequestState(10, defaultEnv())
 	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
-	ctx.Global().Set("__requestID", reqIDVal)
+	_ = ctx.Global().Set("__requestID", reqIDVal)
 	defer clearRequestState(reqID)
 
 	result, err := ctx.RunScript(`(function() {
@@ -85,7 +85,7 @@ func TestTCPSocketSSRFBlocksLocalhost(t *testing.T) {
 
 	reqID := newRequestState(10, defaultEnv())
 	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
-	ctx.Global().Set("__requestID", reqIDVal)
+	_ = ctx.Global().Set("__requestID", reqIDVal)
 	defer clearRequestState(reqID)
 
 	result, err := ctx.RunScript(`(function() {
@@ -111,7 +111,7 @@ func TestTCPSocketSSRFBlocksPrivateRanges(t *testing.T) {
 
 	reqID := newRequestState(10, defaultEnv())
 	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
-	ctx.Global().Set("__requestID", reqIDVal)
+	_ = ctx.Global().Set("__requestID", reqIDVal)
 	defer clearRequestState(reqID)
 
 	privateIPs := []string{"10.0.0.1:80", "172.16.0.1:80", "192.168.1.1:80"}
@@ -140,7 +140,7 @@ func TestTCPSocketAddressParsing(t *testing.T) {
 
 	reqID := newRequestState(10, defaultEnv())
 	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
-	ctx.Global().Set("__requestID", reqIDVal)
+	_ = ctx.Global().Set("__requestID", reqIDVal)
 	defer clearRequestState(reqID)
 
 	// Both formats should fail with SSRF for private IPs.
@@ -170,7 +170,7 @@ func TestTCPSocketInvalidAddress(t *testing.T) {
 
 	reqID := newRequestState(10, defaultEnv())
 	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
-	ctx.Global().Set("__requestID", reqIDVal)
+	_ = ctx.Global().Set("__requestID", reqIDVal)
 	defer clearRequestState(reqID)
 
 	result, err := ctx.RunScript(`(function() {
@@ -199,7 +199,7 @@ func TestTCPSocketObjectHasProperties(t *testing.T) {
 
 	reqID := newRequestState(10, defaultEnv())
 	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
-	ctx.Global().Set("__requestID", reqIDVal)
+	_ = ctx.Global().Set("__requestID", reqIDVal)
 	defer clearRequestState(reqID)
 
 	// Use SSRF error to verify the function parses args before blocking.
@@ -255,14 +255,14 @@ func TestTCPCheckSSRFDirect(t *testing.T) {
 // TestTCPSocketBufferTake tests the tcpSocketBuffer.take method directly.
 func TestTCPSocketBufferTake(t *testing.T) {
 	server, client := net.Pipe()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	buf := &tcpSocketBuffer{conn: client}
 	go buf.readLoop()
 
 	// Write some data from the server side.
 	testData := []byte("hello TCP")
-	server.Write(testData)
+	_, _ = server.Write(testData)
 
 	// Poll for data availability with short sleeps.
 	var data string
@@ -283,7 +283,7 @@ func TestTCPSocketBufferTake(t *testing.T) {
 	}
 
 	// Close server side and verify EOF.
-	server.Close()
+	_ = server.Close()
 	for i := 0; i < 50; i++ {
 		_, eof, _ = buf.take(1024)
 		if eof {
@@ -300,7 +300,7 @@ func TestTCPSocketBufferTake(t *testing.T) {
 // when clearRequestState is called.
 func TestTCPCleanupOnRequestClear(t *testing.T) {
 	server, client := net.Pipe()
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 
 	reqID := newRequestState(10, defaultEnv())
 	state := getRequestState(reqID)
@@ -347,7 +347,7 @@ func TestTCPSocket_ConnectAndWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	received := make(chan string, 1)
 	go func() {
@@ -356,7 +356,7 @@ func TestTCPSocket_ConnectAndWrite(t *testing.T) {
 			received <- ""
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		buf := make([]byte, 256)
 		n, _ := conn.Read(buf)
 		received <- string(buf[:n])
@@ -407,15 +407,15 @@ func TestTCPSocket_ConnectAndRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		conn.Write([]byte("server says hi"))
-		conn.Close()
+		_, _ = conn.Write([]byte("server says hi"))
+		_ = conn.Close()
 	}()
 
 	port := ln.Addr().(*net.TCPAddr).Port
@@ -459,7 +459,7 @@ func TestTCPSocket_SocketObjectShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	go func() {
 		for {
@@ -467,7 +467,7 @@ func TestTCPSocket_SocketObjectShape(t *testing.T) {
 			if err != nil {
 				return
 			}
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
 

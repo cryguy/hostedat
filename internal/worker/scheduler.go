@@ -19,7 +19,7 @@ globalThis.scheduler = {
 `
 
 // setupScheduler registers the scheduler global with wait().
-func setupScheduler(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupScheduler(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	if _, err := ctx.RunScript(schedulerJS, "scheduler.js"); err != nil {
 		return fmt.Errorf("evaluating scheduler.js: %w", err)
 	}

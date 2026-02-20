@@ -32,7 +32,7 @@ type User struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
-func (u *User) BeforeCreate(tx *gorm.DB) error {
+func (u *User) BeforeCreate(_ *gorm.DB) error {
 	if u.ID == "" {
 		u.ID = generateID()
 	}
@@ -57,7 +57,7 @@ type Site struct {
 	Deployments []Deployment `gorm:"foreignKey:SiteID" json:"deployments,omitempty"`
 }
 
-func (s *Site) BeforeCreate(tx *gorm.DB) error {
+func (s *Site) BeforeCreate(_ *gorm.DB) error {
 	if s.ID == "" {
 		s.ID = generateID()
 	}
@@ -75,7 +75,7 @@ type Deployment struct {
 	Site Site `gorm:"foreignKey:SiteID" json:"-"`
 }
 
-func (d *Deployment) BeforeCreate(tx *gorm.DB) error {
+func (d *Deployment) BeforeCreate(_ *gorm.DB) error {
 	if d.ID == "" {
 		d.ID = generateID()
 	}
@@ -96,7 +96,7 @@ type APIKey struct {
 	User User `gorm:"foreignKey:UserID" json:"-"`
 }
 
-func (k *APIKey) BeforeCreate(tx *gorm.DB) error {
+func (k *APIKey) BeforeCreate(_ *gorm.DB) error {
 	if k.ID == "" {
 		k.ID = generateID()
 	}
@@ -116,7 +116,7 @@ type Invite struct {
 	Creator User `gorm:"foreignKey:CreatedBy" json:"-"`
 }
 
-func (i *Invite) BeforeCreate(tx *gorm.DB) error {
+func (i *Invite) BeforeCreate(_ *gorm.DB) error {
 	if i.ID == "" {
 		i.ID = generateID()
 	}
@@ -133,7 +133,7 @@ type AuthCode struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
-func (a *AuthCode) BeforeCreate(tx *gorm.DB) error {
+func (a *AuthCode) BeforeCreate(_ *gorm.DB) error {
 	if a.ID == "" {
 		a.ID = generateID()
 	}
@@ -164,7 +164,7 @@ type WorkerEnvVar struct {
 	Site Site `gorm:"foreignKey:SiteID" json:"-"`
 }
 
-func (w *WorkerEnvVar) BeforeCreate(tx *gorm.DB) error {
+func (w *WorkerEnvVar) BeforeCreate(_ *gorm.DB) error {
 	if w.ID == "" {
 		w.ID = generateID()
 	}
@@ -180,7 +180,7 @@ type KVNamespace struct {
 	Site Site `gorm:"foreignKey:SiteID" json:"-"`
 }
 
-func (k *KVNamespace) BeforeCreate(tx *gorm.DB) error {
+func (k *KVNamespace) BeforeCreate(_ *gorm.DB) error {
 	if k.ID == "" {
 		k.ID = generateID()
 	}
@@ -198,7 +198,7 @@ type KVEntry struct {
 	Namespace KVNamespace `gorm:"foreignKey:NamespaceID" json:"-"`
 }
 
-func (k *KVEntry) BeforeCreate(tx *gorm.DB) error {
+func (k *KVEntry) BeforeCreate(_ *gorm.DB) error {
 	if k.ID == "" {
 		k.ID = generateID()
 	}
@@ -216,7 +216,7 @@ type CronSchedule struct {
 	Site Site `gorm:"foreignKey:SiteID" json:"-"`
 }
 
-func (cs *CronSchedule) BeforeCreate(tx *gorm.DB) error {
+func (cs *CronSchedule) BeforeCreate(_ *gorm.DB) error {
 	if cs.ID == "" {
 		cs.ID = generateID()
 	}
@@ -233,7 +233,7 @@ type WorkerLog struct {
 	Site Site `gorm:"foreignKey:SiteID" json:"-"`
 }
 
-func (wl *WorkerLog) BeforeCreate(tx *gorm.DB) error {
+func (wl *WorkerLog) BeforeCreate(_ *gorm.DB) error {
 	if wl.ID == "" {
 		wl.ID = generateID()
 	}
@@ -253,7 +253,7 @@ type StorageBucket struct {
 	Site Site `gorm:"foreignKey:SiteID" json:"-"`
 }
 
-func (sb *StorageBucket) BeforeCreate(tx *gorm.DB) error {
+func (sb *StorageBucket) BeforeCreate(_ *gorm.DB) error {
 	if sb.ID == "" {
 		sb.ID = generateID()
 	}
@@ -272,7 +272,7 @@ type S3Credential struct {
 	User User `gorm:"foreignKey:UserID" json:"-"`
 }
 
-func (sc *S3Credential) BeforeCreate(tx *gorm.DB) error {
+func (sc *S3Credential) BeforeCreate(_ *gorm.DB) error {
 	if sc.ID == "" {
 		sc.ID = generateID()
 	}

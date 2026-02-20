@@ -14,12 +14,12 @@ import (
 
 // Pinned versions of unenv and its dependencies.
 const (
-	unenvVersion          = "1.10.0"
-	patheVersion          = "2.0.3"
-	consolaVersion        = "3.4.2"
-	defuVersion           = "6.1.4"
+	unenvVersion           = "1.10.0"
+	patheVersion           = "2.0.3"
+	consolaVersion         = "3.4.2"
+	defuVersion            = "6.1.4"
 	nodeFetchNativeVersion = "1.6.6"
-	mimeVersion           = "3.0.0"
+	mimeVersion            = "3.0.0"
 )
 
 // polyfillPackages maps package names to their registry tarball URLs.
@@ -67,7 +67,7 @@ func EnsureUnenv(dataDir string) (string, error) {
 			return "", fmt.Errorf("creating temp dir: %w", err)
 		}
 	}
-	defer os.RemoveAll(tmpDir) // clean up on any failure path
+	defer func() { _ = os.RemoveAll(tmpDir) }() // clean up on any failure path
 
 	tmpNodeModules := filepath.Join(tmpDir, "node_modules")
 	if err := os.MkdirAll(tmpNodeModules, 0755); err != nil {
@@ -106,7 +106,7 @@ func downloadAndExtract(url, destDir string) error {
 	if err != nil {
 		return fmt.Errorf("fetching %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("fetching %s: HTTP %d", url, resp.StatusCode)
@@ -116,7 +116,7 @@ func downloadAndExtract(url, destDir string) error {
 	if err != nil {
 		return fmt.Errorf("decompressing: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 
 	tr := tar.NewReader(gz)
 	for {
@@ -158,10 +158,12 @@ func downloadAndExtract(url, destDir string) error {
 				return err
 			}
 			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
+				_ = f.Close()
 				return err
 			}
-			f.Close()
+			if err := f.Close(); err != nil {
+				return err
+			}
 		}
 	}
 

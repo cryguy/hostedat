@@ -148,12 +148,12 @@ func newCompressWriter(buf *bytes.Buffer, format string) (io.WriteCloser, error)
 
 // setupCompression registers Go-backed streaming compress/decompress functions
 // and evaluates the JS classes. Must run after setupStreams and setupCrypto.
-func setupCompression(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupCompression(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 
 	// --- Legacy bulk functions (kept for backward compat with direct callers) ---
 
 	// __compress(format, dataB64) -> compressedB64
-	ctx.Global().Set("__compress", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__compress", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			return throwError(iso, "compress requires 2 argument(s)")
@@ -183,7 +183,7 @@ func setupCompression(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __decompress(format, dataB64) -> decompressedB64
-	ctx.Global().Set("__decompress", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__decompress", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			return throwError(iso, "decompress requires 2 argument(s)")
@@ -207,14 +207,14 @@ func setupCompression(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 			if err != nil {
 				return throwError(iso, fmt.Sprintf("decompress: %s", err.Error()))
 			}
-			r.Close()
+			_ = r.Close()
 		case "deflate", "deflate-raw":
 			r := flate.NewReader(bytes.NewReader(data))
 			result, err = io.ReadAll(r)
 			if err != nil {
 				return throwError(iso, fmt.Sprintf("decompress: %s", err.Error()))
 			}
-			r.Close()
+			_ = r.Close()
 		default:
 			return throwError(iso, fmt.Sprintf("decompress: unsupported format %q", format))
 		}
@@ -226,7 +226,7 @@ func setupCompression(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	// --- Streaming compression functions ---
 
 	// __compressInit(requestID, format) -> streamID
-	ctx.Global().Set("__compressInit", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__compressInit", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			return throwError(iso, errMissingArg("__compressInit", 2).Error())
@@ -258,7 +258,7 @@ func setupCompression(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __compressChunk(requestID, streamID, base64data) -> base64 compressed output
-	ctx.Global().Set("__compressChunk", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__compressChunk", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 3 {
 			return throwError(iso, errMissingArg("__compressChunk", 3).Error())
@@ -292,7 +292,7 @@ func setupCompression(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __compressFlush(requestID, streamID) -> base64 remaining compressed data
-	ctx.Global().Set("__compressFlush", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__compressFlush", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			return throwError(iso, errMissingArg("__compressFlush", 2).Error())
@@ -323,7 +323,7 @@ func setupCompression(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	// --- Streaming decompression functions ---
 
 	// __decompressInit(requestID, format) -> streamID
-	ctx.Global().Set("__decompressInit", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__decompressInit", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			return throwError(iso, errMissingArg("__decompressInit", 2).Error())
@@ -348,7 +348,7 @@ func setupCompression(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 		// and accumulates decompressed output in cs.decompOut.
 		go func() {
 			defer close(cs.decompDone)
-			defer pr.Close()
+			defer func() { _ = pr.Close() }()
 
 			var reader io.ReadCloser
 			switch format {
@@ -369,7 +369,7 @@ func setupCompression(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 				cs.decompMu.Unlock()
 				return
 			}
-			defer reader.Close()
+			defer func() { _ = reader.Close() }()
 
 			buf := make([]byte, 32*1024)
 			for {
@@ -404,7 +404,7 @@ func setupCompression(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	// __decompressChunk(requestID, streamID, base64data) -> base64 decompressed output
 	// Feeds compressed data to the decompressor goroutine via io.Pipe and
 	// returns any decompressed output that is already available.
-	ctx.Global().Set("__decompressChunk", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__decompressChunk", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 3 {
 			return throwError(iso, errMissingArg("__decompressChunk", 3).Error())
@@ -457,7 +457,7 @@ func setupCompression(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __decompressFlush(requestID, streamID) -> base64 remaining decompressed data
-	ctx.Global().Set("__decompressFlush", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__decompressFlush", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 2 {
 			return throwError(iso, errMissingArg("__decompressFlush", 2).Error())
@@ -476,7 +476,7 @@ func setupCompression(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 
 		// Close the pipe writer to signal EOF to the decompressor goroutine,
 		// then wait for it to finish processing all remaining data.
-		cs.decompPW.Close()
+		_ = cs.decompPW.Close()
 		<-cs.decompDone
 
 		cs.decompMu.Lock()

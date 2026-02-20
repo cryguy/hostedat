@@ -40,7 +40,7 @@ func buildServiceBinding(iso *v8.Isolate, ctx *v8.Context, bridge *ServiceBindin
 	}
 
 	// fetch(urlOrRequest, init?) -> Promise<Response>
-	sbObj.Set("fetch", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = sbObj.Set("fetch", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 		if len(args) == 0 {
@@ -50,10 +50,10 @@ func buildServiceBinding(iso *v8.Isolate, ctx *v8.Context, bridge *ServiceBindin
 		}
 
 		// Extract request details via JS.
-		ctx.Global().Set("__tmp_sb_arg", args[0])
+		_ = ctx.Global().Set("__tmp_sb_arg", args[0])
 		var initArg string
 		if len(args) > 1 && args[1].IsObject() {
-			ctx.Global().Set("__tmp_sb_init", args[1])
+			_ = ctx.Global().Set("__tmp_sb_init", args[1])
 			initArg = "globalThis.__tmp_sb_init"
 		} else {
 			initArg = "null"
@@ -164,9 +164,4 @@ func buildServiceBinding(iso *v8.Isolate, ctx *v8.Context, bridge *ServiceBindin
 	}).GetFunction(ctx))
 
 	return sbObj.Value, nil
-}
-
-// setupServiceBindings is a placeholder setup function (currently a no-op).
-func setupServiceBindings(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
-	return nil
 }

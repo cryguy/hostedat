@@ -539,7 +539,9 @@ func TestCompression_DirectCompressMissingArgs(t *testing.T) {
 		Threw bool   `json:"threw"`
 		Msg   string `json:"msg"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("__compress with 1 arg should throw")
 	}
@@ -567,7 +569,9 @@ func TestCompression_DirectCompressBadBase64(t *testing.T) {
 		Threw bool   `json:"threw"`
 		Msg   string `json:"msg"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("__compress with bad base64 should throw")
 	}
@@ -594,7 +598,9 @@ func TestCompression_DirectDecompressMissingArgs(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("__decompress with no args should throw")
 	}
@@ -621,7 +627,9 @@ func TestCompression_DirectDecompressBadBase64(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("__decompress with bad base64 should throw")
 	}
@@ -649,7 +657,9 @@ func TestCompression_DirectDecompressCorruptData(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("__decompress with corrupt gzip data should throw")
 	}
@@ -676,7 +686,9 @@ func TestCompression_DirectCompressUnsupportedFormat(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("__compress with unsupported format should throw")
 	}
@@ -703,7 +715,9 @@ func TestCompression_DirectDecompressUnsupportedFormat(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("__decompress with unsupported format should throw")
 	}

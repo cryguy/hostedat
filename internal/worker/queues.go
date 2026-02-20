@@ -11,8 +11,8 @@ import (
 
 // QueueMessage represents a message in a queue, stored in SQLite via GORM.
 type QueueMessage struct {
-	ID          string    `gorm:"primaryKey"`
-	QueueName   string    `gorm:"index"`
+	ID          string `gorm:"primaryKey"`
+	QueueName   string `gorm:"index"`
 	Body        string
 	ContentType string
 	CreatedAt   time.Time
@@ -20,7 +20,7 @@ type QueueMessage struct {
 }
 
 // BeforeCreate generates a nanoid for QueueMessage if not set.
-func (q *QueueMessage) BeforeCreate(tx *gorm.DB) error {
+func (q *QueueMessage) BeforeCreate(_ *gorm.DB) error {
 	if q.ID == "" {
 		q.ID = generateQueueID()
 	}
@@ -100,7 +100,7 @@ func buildQueueBinding(iso *v8.Isolate, ctx *v8.Context, bridge *QueueBridge, qu
 	}
 
 	// send(body, options?) -> Promise<void>
-	qObj.Set("send", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = qObj.Set("send", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 		if len(args) == 0 {
@@ -113,7 +113,7 @@ func buildQueueBinding(iso *v8.Isolate, ctx *v8.Context, bridge *QueueBridge, qu
 		contentType := "json"
 
 		if len(args) > 1 && args[1].IsObject() {
-			ctx.Global().Set("__tmp_queue_opts", args[1])
+			_ = ctx.Global().Set("__tmp_queue_opts", args[1])
 			optsResult, err := ctx.RunScript(`(function() {
 				var o = globalThis.__tmp_queue_opts;
 				delete globalThis.__tmp_queue_opts;
@@ -134,7 +134,7 @@ func buildQueueBinding(iso *v8.Isolate, ctx *v8.Context, bridge *QueueBridge, qu
 	}).GetFunction(ctx))
 
 	// sendBatch(messages) -> Promise<void>
-	qObj.Set("sendBatch", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = qObj.Set("sendBatch", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 		if len(args) == 0 {
@@ -144,7 +144,7 @@ func buildQueueBinding(iso *v8.Isolate, ctx *v8.Context, bridge *QueueBridge, qu
 		}
 
 		// Extract messages array via JS JSON serialization.
-		ctx.Global().Set("__tmp_queue_batch", args[0])
+		_ = ctx.Global().Set("__tmp_queue_batch", args[0])
 		batchResult, err := ctx.RunScript(`(function() {
 			var msgs = globalThis.__tmp_queue_batch;
 			delete globalThis.__tmp_queue_batch;
@@ -179,9 +179,4 @@ func buildQueueBinding(iso *v8.Isolate, ctx *v8.Context, bridge *QueueBridge, qu
 	}).GetFunction(ctx))
 
 	return qObj.Value, nil
-}
-
-// setupQueues is a placeholder setup function for queue globals (currently a no-op).
-func setupQueues(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
-	return nil
 }

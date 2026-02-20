@@ -2,6 +2,7 @@ package models
 
 import (
 	"fmt"
+	"log"
 	"strconv"
 
 	"github.com/cryguy/hostedat/internal/config"
@@ -30,7 +31,9 @@ func InitDB(cfg config.DBConfig) (*gorm.DB, error) {
 
 	closeDB := func() {
 		if sqlDB, err := db.DB(); err == nil {
-			sqlDB.Close()
+			if cerr := sqlDB.Close(); cerr != nil {
+				log.Printf("closing database during cleanup: %v", cerr)
+			}
 		}
 	}
 

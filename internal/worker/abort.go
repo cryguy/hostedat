@@ -136,7 +136,7 @@ globalThis.CustomEvent = CustomEvent;
 `
 
 // setupAbort evaluates the AbortController/AbortSignal polyfills.
-func setupAbort(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupAbort(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	if _, err := ctx.RunScript(abortJS, "abort.js"); err != nil {
 		return fmt.Errorf("evaluating abort.js: %w", err)
 	}

@@ -31,7 +31,7 @@ func setupTimers(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 		val, _ := v8.NewValue(iso, int32(id))
 		return val
 	})
-	ctx.Global().Set("setTimeout", setTimeoutFT.GetFunction(ctx))
+	_ = ctx.Global().Set("setTimeout", setTimeoutFT.GetFunction(ctx))
 
 	// clearTimeout(id)
 	clearTimeoutFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
@@ -41,7 +41,7 @@ func setupTimers(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 		}
 		return v8.Undefined(iso)
 	})
-	ctx.Global().Set("clearTimeout", clearTimeoutFT.GetFunction(ctx))
+	_ = ctx.Global().Set("clearTimeout", clearTimeoutFT.GetFunction(ctx))
 
 	// setInterval(fn, interval) -> timerID
 	setIntervalFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
@@ -63,7 +63,7 @@ func setupTimers(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 		val, _ := v8.NewValue(iso, int32(id))
 		return val
 	})
-	ctx.Global().Set("setInterval", setIntervalFT.GetFunction(ctx))
+	_ = ctx.Global().Set("setInterval", setIntervalFT.GetFunction(ctx))
 
 	// clearInterval(id)  Esame semantics as clearTimeout.
 	clearIntervalFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
@@ -73,7 +73,7 @@ func setupTimers(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 		}
 		return v8.Undefined(iso)
 	})
-	ctx.Global().Set("clearInterval", clearIntervalFT.GetFunction(ctx))
+	_ = ctx.Global().Set("clearInterval", clearIntervalFT.GetFunction(ctx))
 
 	return nil
 }

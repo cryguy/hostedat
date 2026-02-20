@@ -7,9 +7,9 @@ import (
 )
 
 // bodyTypesJS patches Request and Response prototypes with:
-// - text()/arrayBuffer()/json() that handle non-string body types
-//   (ArrayBuffer, TypedArray, Blob, URLSearchParams, FormData, ReadableStream)
-// - formData() method for parsing multipart/form-data and url-encoded bodies
+//   - text()/arrayBuffer()/json() that handle non-string body types
+//     (ArrayBuffer, TypedArray, Blob, URLSearchParams, FormData, ReadableStream)
+//   - formData() method for parsing multipart/form-data and url-encoded bodies
 //
 // Uses prototype patching so that worker scripts using the standard Request/Response
 // constructors get extended body handling automatically.
@@ -175,7 +175,7 @@ Response.prototype.formData = async function() {
 
 // setupBodyTypes patches Request/Response with extended body type support.
 // Must be called after setupWebAPIs, setupStreams, and setupFormData.
-func setupBodyTypes(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupBodyTypes(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	if _, err := ctx.RunScript(bodyTypesJS, "bodytypes.js"); err != nil {
 		return fmt.Errorf("evaluating bodytypes.js: %w", err)
 	}

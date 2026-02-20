@@ -201,9 +201,9 @@ subtle.generateKey = async function(algorithm, extractable, usages) {
 
 // setupCryptoRSA registers RSA Go functions and evaluates the JS patches.
 // Must run after setupCryptoExt.
-func setupCryptoRSA(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupCryptoRSA(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	// __cryptoSignRSA(algoName, keyID, dataB64, hashAlgo, saltLength) -> sigB64
-	ctx.Global().Set("__cryptoSignRSA", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoSignRSA", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 5 {
 			return throwError(iso, "signRSA requires 5 argument(s)")
@@ -261,7 +261,7 @@ func setupCryptoRSA(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoVerifyRSA(algoName, keyID, sigB64, dataB64, hashAlgo, saltLength) -> bool
-	ctx.Global().Set("__cryptoVerifyRSA", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoVerifyRSA", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 6 {
 			return throwError(iso, "verifyRSA requires 6 argument(s)")
@@ -325,7 +325,7 @@ func setupCryptoRSA(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoEncryptRSA(keyID, dataB64, labelB64) -> ctB64
-	ctx.Global().Set("__cryptoEncryptRSA", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoEncryptRSA", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 3 {
 			return throwError(iso, "encryptRSA requires 3 argument(s)")
@@ -381,7 +381,7 @@ func setupCryptoRSA(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoDecryptRSA(keyID, ctB64, labelB64) -> ptB64
-	ctx.Global().Set("__cryptoDecryptRSA", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoDecryptRSA", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 3 {
 			return throwError(iso, "decryptRSA requires 3 argument(s)")
@@ -432,7 +432,7 @@ func setupCryptoRSA(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoGenerateKeyRSA(algoName, modulusLength, hashAlgo, publicExponent) -> JSON
-	ctx.Global().Set("__cryptoGenerateKeyRSA", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoGenerateKeyRSA", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 4 {
 			return throwError(iso, "generateKeyRSA requires 4 argument(s)")
@@ -473,7 +473,7 @@ func setupCryptoRSA(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoImportKeyRSA(format, dataStr, algoName, hashAlgo) -> JSON
-	ctx.Global().Set("__cryptoImportKeyRSA", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoImportKeyRSA", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 4 {
 			return throwError(iso, "importKeyRSA requires 4 argument(s)")
@@ -503,7 +503,7 @@ func setupCryptoRSA(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
 	}).GetFunction(ctx))
 
 	// __cryptoExportKeyRSA(keyID, format, algoName, hashAlgo) -> base64 or JSON string
-	ctx.Global().Set("__cryptoExportKeyRSA", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ctx.Global().Set("__cryptoExportKeyRSA", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) < 4 {
 			return throwError(iso, "exportKeyRSA requires 4 argument(s)")

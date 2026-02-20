@@ -191,8 +191,8 @@ func TestValidateCron_RangeEdges(t *testing.T) {
 		wantErr bool
 	}{
 		{"0-59 0-23 1-31 1-12 0-6", false}, // all ranges at limits
-		{"0-0 * * * *", false},               // single-value range
-		{"59-59 * * * *", false},             // single-value range at max
+		{"0-0 * * * *", false},             // single-value range
+		{"59-59 * * * *", false},           // single-value range at max
 	}
 	for _, tt := range tests {
 		err := ValidateCron(tt.expr)
@@ -208,7 +208,9 @@ func TestCronRunner_TickWithMatchingSchedule(t *testing.T) {
 
 	// Create a user and site with an active deployment.
 	u := models.User{Email: "cron-tick@test.local", PasswordHash: "hash"}
-	db.Create(&u)
+	if result := db.Create(&u); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 	deployID := "cron-deploy-1"
 	s := models.Site{
 		ID:             "cron-tick-site",
@@ -218,7 +220,9 @@ func TestCronRunner_TickWithMatchingSchedule(t *testing.T) {
 		HasWorker:      true,
 		ActiveDeployID: &deployID,
 	}
-	db.Create(&s)
+	if result := db.Create(&s); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	// Cache the worker source.
 	source := `export default {
@@ -237,7 +241,9 @@ func TestCronRunner_TickWithMatchingSchedule(t *testing.T) {
 		Cron:    "* * * * *",
 		Enabled: true,
 	}
-	db.Create(&sched)
+	if result := db.Create(&sched); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	// Create the runner and manually tick.
 	cr := &CronRunner{db: db, engine: e, done: make(chan struct{})}
@@ -252,7 +258,9 @@ func TestCronRunner_TickSkipsDisabled(t *testing.T) {
 	e := newTestEngine(t, db)
 
 	u := models.User{Email: "cron-disabled@test.local", PasswordHash: "hash"}
-	db.Create(&u)
+	if result := db.Create(&u); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 	deployID := "disabled-deploy"
 	s := models.Site{
 		ID:             "cron-disabled-site",
@@ -262,7 +270,9 @@ func TestCronRunner_TickSkipsDisabled(t *testing.T) {
 		HasWorker:      true,
 		ActiveDeployID: &deployID,
 	}
-	db.Create(&s)
+	if result := db.Create(&s); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	// Disabled schedule should not run.
 	sched := models.CronSchedule{
@@ -270,7 +280,9 @@ func TestCronRunner_TickSkipsDisabled(t *testing.T) {
 		Cron:    "* * * * *",
 		Enabled: false,
 	}
-	db.Create(&sched)
+	if result := db.Create(&sched); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	cr := &CronRunner{db: db, engine: e, done: make(chan struct{})}
 	// This should not panic or dispatch anything.
@@ -282,7 +294,9 @@ func TestCronRunner_TickSkipsNoWorker(t *testing.T) {
 	e := newTestEngine(t, db)
 
 	u := models.User{Email: "cron-noworker@test.local", PasswordHash: "hash"}
-	db.Create(&u)
+	if result := db.Create(&u); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 	s := models.Site{
 		ID:            "cron-noworker-site",
 		UserID:        u.ID,
@@ -290,14 +304,18 @@ func TestCronRunner_TickSkipsNoWorker(t *testing.T) {
 		Name:          "No Worker",
 		HasWorker:     false,
 	}
-	db.Create(&s)
+	if result := db.Create(&s); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	sched := models.CronSchedule{
 		SiteID:  s.ID,
 		Cron:    "* * * * *",
 		Enabled: true,
 	}
-	db.Create(&sched)
+	if result := db.Create(&sched); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	cr := &CronRunner{db: db, engine: e, done: make(chan struct{})}
 	cr.tick(time.Now())
@@ -308,7 +326,9 @@ func TestCronRunner_TickFullPath(t *testing.T) {
 	e := newTestEngine(t, db)
 
 	u := models.User{Email: "cron-full@test.local", PasswordHash: "hash"}
-	db.Create(&u)
+	if result := db.Create(&u); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 	deployID := "full-deploy"
 	s := models.Site{
 		ID:             "cron-full-site",
@@ -318,7 +338,9 @@ func TestCronRunner_TickFullPath(t *testing.T) {
 		HasWorker:      true,
 		ActiveDeployID: &deployID,
 	}
-	db.Create(&s)
+	if result := db.Create(&s); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	source := `export default {
   fetch() { return new Response("ok"); },
@@ -335,7 +357,9 @@ func TestCronRunner_TickFullPath(t *testing.T) {
 		Cron:    "* * * * *",
 		Enabled: true,
 	}
-	db.Create(&sched)
+	if result := db.Create(&sched); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	cr := &CronRunner{db: db, engine: e, done: make(chan struct{})}
 
@@ -354,7 +378,9 @@ func TestCronRunner_TickSiteLookupFails(t *testing.T) {
 		Cron:    "* * * * *",
 		Enabled: true,
 	}
-	db.Create(&sched)
+	if result := db.Create(&sched); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	cr := &CronRunner{db: db, engine: e, done: make(chan struct{})}
 	cr.tick(time.Now()) // Should not panic, just skip
@@ -365,7 +391,9 @@ func TestCronRunner_TickNonMatchingCron(t *testing.T) {
 	e := newTestEngine(t, db)
 
 	u := models.User{Email: "cron-nomatch@test.local", PasswordHash: "hash"}
-	db.Create(&u)
+	if result := db.Create(&u); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 	deployID := "nomatch-deploy"
 	s := models.Site{
 		ID:             "cron-nomatch-site",
@@ -375,7 +403,9 @@ func TestCronRunner_TickNonMatchingCron(t *testing.T) {
 		HasWorker:      true,
 		ActiveDeployID: &deployID,
 	}
-	db.Create(&s)
+	if result := db.Create(&s); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	// Schedule that only runs at minute 59 — won't match minute 0.
 	sched := models.CronSchedule{
@@ -383,7 +413,9 @@ func TestCronRunner_TickNonMatchingCron(t *testing.T) {
 		Cron:    "59 23 31 12 0",
 		Enabled: true,
 	}
-	db.Create(&sched)
+	if result := db.Create(&sched); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	cr := &CronRunner{db: db, engine: e, done: make(chan struct{})}
 	// Use a time that doesn't match (minute 0, hour 0, day 1, month 1, Monday).
@@ -395,7 +427,9 @@ func TestCronRunner_DispatchDirect(t *testing.T) {
 	e := newTestEngine(t, db)
 
 	u := models.User{Email: "cron-dispatch@test.local", PasswordHash: "hash"}
-	db.Create(&u)
+	if result := db.Create(&u); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 	deployID := "dispatch-deploy"
 	s := models.Site{
 		ID:             "cron-dispatch-site",
@@ -405,7 +439,9 @@ func TestCronRunner_DispatchDirect(t *testing.T) {
 		HasWorker:      true,
 		ActiveDeployID: &deployID,
 	}
-	db.Create(&s)
+	if result := db.Create(&s); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	source := `export default {
   fetch() { return new Response("ok"); },
@@ -422,7 +458,9 @@ func TestCronRunner_DispatchDirect(t *testing.T) {
 		Cron:    "*/5 * * * *",
 		Enabled: true,
 	}
-	db.Create(&sched)
+	if result := db.Create(&sched); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	cr := &CronRunner{db: db, engine: e, done: make(chan struct{})}
 
@@ -448,7 +486,9 @@ func TestCronRunner_DispatchWithError(t *testing.T) {
 	e := newTestEngine(t, db)
 
 	u := models.User{Email: "cron-err@test.local", PasswordHash: "hash"}
-	db.Create(&u)
+	if result := db.Create(&u); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 	deployID := "err-deploy"
 	s := models.Site{
 		ID:             "cron-err-site",
@@ -458,7 +498,9 @@ func TestCronRunner_DispatchWithError(t *testing.T) {
 		HasWorker:      true,
 		ActiveDeployID: &deployID,
 	}
-	db.Create(&s)
+	if result := db.Create(&s); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	// Worker with no scheduled handler should fail.
 	source := `export default {
@@ -473,7 +515,9 @@ func TestCronRunner_DispatchWithError(t *testing.T) {
 		Cron:    "* * * * *",
 		Enabled: true,
 	}
-	db.Create(&sched)
+	if result := db.Create(&sched); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 
 	cr := &CronRunner{db: db, engine: e, done: make(chan struct{})}
 	env := BuildEnvFromDB(db, s.ID, nil)

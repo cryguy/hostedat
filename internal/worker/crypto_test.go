@@ -689,7 +689,9 @@ func TestCrypto_DigestUnsupportedAlgo(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("digest with unsupported algorithm should throw")
 	}
@@ -717,7 +719,9 @@ func TestCrypto_ImportKeyNonRawFormat(t *testing.T) {
 		Threw bool   `json:"threw"`
 		Msg   string `json:"msg"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("importKey with non-raw format should throw")
 	}
@@ -747,7 +751,9 @@ func TestCrypto_ExportKeyUnsupportedFormat(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("exportKey with unsupported format should throw")
 	}
@@ -777,7 +783,9 @@ func TestCrypto_SignUnsupportedAlgo(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("sign with unsupported algorithm should throw")
 	}
@@ -807,7 +815,9 @@ func TestCrypto_EncryptUnsupportedAlgo(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("encrypt with unsupported algorithm should throw")
 	}
@@ -831,7 +841,9 @@ func TestCrypto_DigestAlgoAsObject(t *testing.T) {
 	var data struct {
 		Len int `json:"len"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Len != 32 {
 		t.Errorf("digest length = %d, want 32", data.Len)
 	}
@@ -859,7 +871,9 @@ func TestCrypto_GetRandomValuesRejectsNull(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("getRandomValues(null) should throw")
 	}
@@ -885,7 +899,9 @@ func TestCrypto_RandomUUIDUniqueness(t *testing.T) {
 	var data struct {
 		Unique int `json:"unique"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Unique != 100 {
 		t.Errorf("expected 100 unique UUIDs, got %d", data.Unique)
 	}
@@ -1716,7 +1732,9 @@ func TestCrypto_DecryptUnsupportedAlgo(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("decrypt with unsupported algorithm should throw")
 	}
@@ -1746,7 +1764,9 @@ func TestCrypto_VerifyUnsupportedAlgo(t *testing.T) {
 	var data struct {
 		Threw bool `json:"threw"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Threw {
 		t.Error("verify with unsupported algorithm should throw")
 	}
@@ -2175,7 +2195,9 @@ func TestCrypto_ImportKeyBadBase64(t *testing.T) {
 		ImportFailed bool `json:"importFailed"`
 		DirectFailed bool `json:"directFailed"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.DirectFailed {
 		t.Error("__cryptoImportKey with bad base64 should throw")
 	}
@@ -2224,7 +2246,9 @@ func TestCrypto_SignBadDataBase64(t *testing.T) {
 		VerifySigFailed  bool `json:"verifySigFailed"`
 		VerifyDataFailed bool `json:"verifyDataFailed"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.SignFailed {
 		t.Error("sign with bad base64 should throw")
 	}
@@ -2279,7 +2303,9 @@ func TestCrypto_EncryptDecryptMissingArgs(t *testing.T) {
 	assertOK(t, r)
 
 	var results map[string]bool
-	json.Unmarshal(r.Response.Body, &results)
+	if err := json.Unmarshal(r.Response.Body, &results); err != nil {
+		t.Fatal(err)
+	}
 
 	expected := []string{"encMissing", "decMissing", "signMissing", "verifyMissing", "importMissing", "digestMissing", "digestBadB64"}
 	for _, key := range expected {
@@ -2324,7 +2350,9 @@ func TestCrypto_EncryptDecryptBadKeyID(t *testing.T) {
 	assertOK(t, r)
 
 	var results map[string]bool
-	json.Unmarshal(r.Response.Body, &results)
+	if err := json.Unmarshal(r.Response.Body, &results); err != nil {
+		t.Fatal(err)
+	}
 
 	expected := []string{"encBadKey", "decBadKey", "signBadKey", "verifyBadKey", "exportBadKey"}
 	for _, key := range expected {
@@ -2365,7 +2393,9 @@ func TestCrypto_EncryptBadBase64Data(t *testing.T) {
 	assertOK(t, r)
 
 	var results map[string]bool
-	json.Unmarshal(r.Response.Body, &results)
+	if err := json.Unmarshal(r.Response.Body, &results); err != nil {
+		t.Fatal(err)
+	}
 
 	if !results["encBadData"] {
 		t.Error("encrypt with bad data base64 should throw")
@@ -2407,7 +2437,9 @@ func TestCrypto_GetRandomBytesEdgeCases(t *testing.T) {
 	assertOK(t, r)
 
 	var results map[string]bool
-	json.Unmarshal(r.Response.Body, &results)
+	if err := json.Unmarshal(r.Response.Body, &results); err != nil {
+		t.Fatal(err)
+	}
 	if !results["zeroLen"] {
 		t.Error("getRandomBytes(0) should throw")
 	}
@@ -2448,7 +2480,9 @@ func TestCrypto_RandomUUIDv4Format(t *testing.T) {
 		Valid2    bool `json:"valid2"`
 		Different bool `json:"different"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Valid1 {
 		t.Error("first UUID should be valid v4")
 	}
@@ -2489,7 +2523,9 @@ func TestCrypto_GenerateKeyHMAC(t *testing.T) {
 		KeyType   string `json:"keyType"`
 		ExportLen int    `json:"exportLen"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Valid {
 		t.Error("HMAC sign/verify with generated key should be valid")
 	}
@@ -2529,7 +2565,9 @@ func TestCrypto_GenerateKeyAESGCM(t *testing.T) {
 		KeyType   string `json:"keyType"`
 		Roundtrip string `json:"roundtrip"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.KeyType != "secret" {
 		t.Errorf("keyType = %q, want secret", data.KeyType)
 	}
@@ -2568,7 +2606,9 @@ func TestCrypto_GenerateKeyAESCBC(t *testing.T) {
 		Roundtrip string `json:"roundtrip"`
 		CtLen     int    `json:"ctLen"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.KeyType != "secret" {
 		t.Errorf("keyType = %q, want secret", data.KeyType)
 	}
@@ -2616,7 +2656,9 @@ func TestCrypto_ExportImportJWK_HMAC(t *testing.T) {
 		JwkAlg string `json:"jwkAlg"`
 		Valid  bool   `json:"valid"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.JwkKty != "oct" {
 		t.Errorf("jwk.kty = %q, want oct", data.JwkKty)
 	}
@@ -2660,7 +2702,9 @@ func TestCrypto_ExportImportJWK_AESGCM(t *testing.T) {
 		JwkAlg    string `json:"jwkAlg"`
 		Roundtrip string `json:"roundtrip"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.JwkKty != "oct" {
 		t.Errorf("jwk.kty = %q, want oct", data.JwkKty)
 	}
@@ -2698,7 +2742,9 @@ func TestCrypto_AESCBCImportEncryptDecrypt(t *testing.T) {
 	var data struct {
 		Roundtrip string `json:"roundtrip"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Roundtrip != "aes-cbc import test" {
 		t.Errorf("roundtrip = %q", data.Roundtrip)
 	}
@@ -2736,7 +2782,9 @@ func TestCrypto_GenerateKeyECDSA(t *testing.T) {
 		PrivType string `json:"privType"`
 		PubType  string `json:"pubType"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Valid {
 		t.Error("ECDSA sign/verify with generated key should be valid")
 	}
@@ -2781,7 +2829,9 @@ func TestCrypto_ExportKeyJWK_ECDSA(t *testing.T) {
 		PubHasD  bool   `json:"pubHasD"`
 		PrivHasD bool   `json:"privHasD"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.PubKty != "EC" {
 		t.Errorf("pubJwk.kty = %q, want EC", data.PubKty)
 	}
@@ -2830,7 +2880,9 @@ func TestCrypto_ImportKeyJWK_ECDSA(t *testing.T) {
 	var data struct {
 		Valid bool `json:"valid"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Valid {
 		t.Error("verify with reimported JWK ECDSA key should succeed")
 	}
@@ -2856,7 +2908,9 @@ func TestCrypto_GenerateKeyHMAC_SHA384(t *testing.T) {
 	var data struct {
 		ExportLen int `json:"exportLen"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.ExportLen != 48 {
 		t.Errorf("SHA-384 HMAC key length = %d, want 48", data.ExportLen)
 	}
@@ -2882,7 +2936,9 @@ func TestCrypto_GenerateKeyHMAC_SHA512(t *testing.T) {
 	var data struct {
 		ExportLen int `json:"exportLen"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.ExportLen != 64 {
 		t.Errorf("SHA-512 HMAC key length = %d, want 64", data.ExportLen)
 	}
@@ -2908,7 +2964,9 @@ func TestCrypto_GenerateKeyHMAC_SHA1(t *testing.T) {
 	var data struct {
 		ExportLen int `json:"exportLen"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.ExportLen != 20 {
 		t.Errorf("SHA-1 HMAC key length = %d, want 20", data.ExportLen)
 	}
@@ -2935,7 +2993,9 @@ func TestCrypto_ExportKeyJWK_HMAC_HS384(t *testing.T) {
 		Alg string `json:"alg"`
 		Kty string `json:"kty"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Alg != "HS384" {
 		t.Errorf("jwk.alg = %q, want HS384", data.Alg)
 	}
@@ -2965,7 +3025,9 @@ func TestCrypto_ExportKeyJWK_HMAC_HS512(t *testing.T) {
 		Alg string `json:"alg"`
 		Kty string `json:"kty"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Alg != "HS512" {
 		t.Errorf("jwk.alg = %q, want HS512", data.Alg)
 	}

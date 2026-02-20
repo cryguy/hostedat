@@ -18,13 +18,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// clientError wraps errors that should be returned as 400 Bad Request.
-type clientError struct {
-	msg string
-}
-
-func (e *clientError) Error() string { return e.msg }
-
 type DeployHandler struct {
 	DB              *gorm.DB
 	Storage         *storage.Manager
@@ -58,15 +51,15 @@ func (h *DeployHandler) Deploy(c echo.Context) error {
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to open uploaded file")
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 
 	// Stream to temp file while computing hash
 	tmpFile, err := os.CreateTemp("", "hostedat-deploy-*.zip")
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to create temp file")
 	}
-	defer os.Remove(tmpFile.Name())
-	defer tmpFile.Close()
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+	defer func() { _ = tmpFile.Close() }()
 
 	hasher := sha256.New()
 	written, err := io.Copy(tmpFile, io.TeeReader(io.LimitReader(src, storage.MaxZipSize+1), hasher))

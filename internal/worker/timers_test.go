@@ -115,7 +115,9 @@ func TestTimers_SetTimeoutNoArgsReturnsZero(t *testing.T) {
 		ID     int  `json:"id"`
 		IsZero bool `json:"isZero"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsZero {
 		t.Errorf("setTimeout() with no args should return 0, got %d", data.ID)
 	}
@@ -140,7 +142,9 @@ func TestTimers_SetIntervalMinimumDelay(t *testing.T) {
 		ID       int  `json:"id"`
 		Positive bool `json:"positive"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Positive {
 		t.Error("setInterval should return a positive ID")
 	}
@@ -218,7 +222,9 @@ func TestTimers_SetIntervalNoArgsReturnsZero(t *testing.T) {
 	var data struct {
 		IsZero bool `json:"isZero"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsZero {
 		t.Error("setInterval() with no args should return 0")
 	}
@@ -241,7 +247,9 @@ func TestTimers_SetTimeoutNonFunctionReturnsZero(t *testing.T) {
 	var data struct {
 		IsZero bool `json:"isZero"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsZero {
 		t.Error("setTimeout('string', 0) should return 0")
 	}
@@ -264,7 +272,9 @@ func TestTimers_SetIntervalNonFunctionReturnsZero(t *testing.T) {
 	var data struct {
 		IsZero bool `json:"isZero"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsZero {
 		t.Error("setInterval(42, 10) should return 0")
 	}
@@ -306,7 +316,9 @@ func TestTimers_SetTimeoutWithDelay(t *testing.T) {
 	var data struct {
 		Elapsed bool `json:"elapsed"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Elapsed {
 		t.Error("setTimeout with 20ms delay should take at least 15ms")
 	}

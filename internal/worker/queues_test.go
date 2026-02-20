@@ -8,7 +8,7 @@ import (
 func queueTestDB(t *testing.T) *QueueBridge {
 	t.Helper()
 	db := testDB(t)
-	db.AutoMigrate(&QueueMessage{})
+	_ = db.AutoMigrate(&QueueMessage{})
 	return &QueueBridge{DB: db}
 }
 
@@ -108,7 +108,7 @@ func TestQueueBridge_Ack(t *testing.T) {
 
 // JS-level queue binding tests.
 
-func queueEnv(t *testing.T, bridge *QueueBridge) *Env {
+func queueEnv(t *testing.T, _ *QueueBridge) *Env {
 	t.Helper()
 	return &Env{
 		Vars:          make(map[string]string),
@@ -120,7 +120,7 @@ func queueEnv(t *testing.T, bridge *QueueBridge) *Env {
 
 func TestQueue_JSSend(t *testing.T) {
 	db := testDB(t)
-	db.AutoMigrate(&QueueMessage{})
+	_ = db.AutoMigrate(&QueueMessage{})
 	e := newTestEngine(t, db)
 	bridge := &QueueBridge{DB: db}
 
@@ -138,7 +138,9 @@ func TestQueue_JSSend(t *testing.T) {
 	var data struct {
 		OK bool `json:"ok"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.OK {
 		t.Error("expected ok: true")
 	}
@@ -161,7 +163,7 @@ func TestQueue_JSSend(t *testing.T) {
 
 func TestQueue_JSSendBatch(t *testing.T) {
 	db := testDB(t)
-	db.AutoMigrate(&QueueMessage{})
+	_ = db.AutoMigrate(&QueueMessage{})
 	e := newTestEngine(t, db)
 	bridge := &QueueBridge{DB: db}
 
@@ -190,7 +192,7 @@ func TestQueue_JSSendBatch(t *testing.T) {
 
 func TestQueue_JSDefaultContentType(t *testing.T) {
 	db := testDB(t)
-	db.AutoMigrate(&QueueMessage{})
+	_ = db.AutoMigrate(&QueueMessage{})
 	e := newTestEngine(t, db)
 	bridge := &QueueBridge{DB: db}
 
@@ -219,7 +221,7 @@ func TestQueue_JSDefaultContentType(t *testing.T) {
 
 func TestQueue_JSBindingExists(t *testing.T) {
 	db := testDB(t)
-	db.AutoMigrate(&QueueMessage{})
+	_ = db.AutoMigrate(&QueueMessage{})
 	e := newTestEngine(t, db)
 	bridge := &QueueBridge{DB: db}
 
@@ -239,7 +241,9 @@ func TestQueue_JSBindingExists(t *testing.T) {
 		HasSend      bool `json:"hasSend"`
 		HasSendBatch bool `json:"hasSendBatch"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.HasSend {
 		t.Error("env.MY_QUEUE.send should be a function")
 	}

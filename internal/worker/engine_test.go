@@ -58,7 +58,7 @@ func TestModuleDefaultExportFetch(t *testing.T) {
 }
 
 // TestPoolModuleFlow tests the full pool setup path matching the exact
-// production flow in GetOrCreatePool + Execute.
+// production flow in getOrCreatePool + Execute.
 func TestPoolModuleFlow(t *testing.T) {
 	source := `export default {
   fetch(request, env, ctx) {
@@ -78,8 +78,8 @@ func TestPoolModuleFlow(t *testing.T) {
 	pool, err := newV8Pool(cfg.PoolSize, source, []setupFunc{
 		setupWebAPIs,
 		setupConsole,
-		func(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
-			return setupFetch(iso, ctx, el, cfg)
+		func(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
+			return setupFetch(iso, ctx, cfg)
 		},
 	}, cfg.MemoryLimitMB)
 	if err != nil {
@@ -179,7 +179,7 @@ type mockAssetsFetcher struct {
 	err      error
 }
 
-func (m *mockAssetsFetcher) Fetch(req *WorkerRequest) (*WorkerResponse, error) {
+func (m *mockAssetsFetcher) Fetch(_ *WorkerRequest) (*WorkerResponse, error) {
 	return m.response, m.err
 }
 
@@ -383,10 +383,9 @@ func TestEngine_InvalidatePool(t *testing.T) {
 	}
 
 	// Create pool
-	env := defaultEnv()
-	pool, err := e.GetOrCreatePool(siteID, deployKey, env)
+	pool, err := e.getOrCreatePool(siteID, deployKey)
 	if err != nil {
-		t.Fatalf("GetOrCreatePool: %v", err)
+		t.Fatalf("getOrCreatePool: %v", err)
 	}
 	if pool == nil {
 		t.Fatal("pool should not be nil")
@@ -479,7 +478,7 @@ func TestEngine_ExecuteScheduled_Success(t *testing.T) {
 	}
 }
 
-func TestEngine_GetOrCreatePool_Reuses(t *testing.T) {
+func TestEngine_getOrCreatePool_Reuses(t *testing.T) {
 	db := testDB(t)
 	e := newTestEngine(t, db)
 
@@ -491,19 +490,18 @@ func TestEngine_GetOrCreatePool_Reuses(t *testing.T) {
 		t.Fatalf("CompileAndCache: %v", err)
 	}
 
-	env := defaultEnv()
-	pool1, err := e.GetOrCreatePool(siteID, deployKey, env)
+	pool1, err := e.getOrCreatePool(siteID, deployKey)
 	if err != nil {
-		t.Fatalf("GetOrCreatePool 1: %v", err)
+		t.Fatalf("getOrCreatePool 1: %v", err)
 	}
 
-	pool2, err := e.GetOrCreatePool(siteID, deployKey, env)
+	pool2, err := e.getOrCreatePool(siteID, deployKey)
 	if err != nil {
-		t.Fatalf("GetOrCreatePool 2: %v", err)
+		t.Fatalf("getOrCreatePool 2: %v", err)
 	}
 
 	if pool1 != pool2 {
-		t.Error("GetOrCreatePool should reuse the same pool")
+		t.Error("getOrCreatePool should reuse the same pool")
 	}
 }
 
@@ -516,8 +514,8 @@ func TestEngine_Shutdown(t *testing.T) {
 	if _, err := e.CompileAndCache("s1", "d1", source); err != nil {
 		t.Fatalf("CompileAndCache: %v", err)
 	}
-	if _, err := e.GetOrCreatePool("s1", "d1", defaultEnv()); err != nil {
-		t.Fatalf("GetOrCreatePool: %v", err)
+	if _, err := e.getOrCreatePool("s1", "d1"); err != nil {
+		t.Fatalf("getOrCreatePool: %v", err)
 	}
 
 	e.Shutdown()
@@ -833,17 +831,17 @@ func TestEngine_ExecuteScheduled_NoSource(t *testing.T) {
 	}
 }
 
-func TestEngine_GetOrCreatePool_NoSource(t *testing.T) {
+func TestEngine_getOrCreatePool_NoSource(t *testing.T) {
 	db := testDB(t)
 	e := newTestEngine(t, db)
 
-	_, err := e.GetOrCreatePool("no-source", "deploy1", defaultEnv())
+	_, err := e.getOrCreatePool("no-source", "deploy1")
 	if err == nil {
-		t.Fatal("GetOrCreatePool should fail with no source")
+		t.Fatal("getOrCreatePool should fail with no source")
 	}
 }
 
-func TestEngine_GetOrCreatePool_InvalidPoolReplaced(t *testing.T) {
+func TestEngine_getOrCreatePool_InvalidPoolReplaced(t *testing.T) {
 	db := testDB(t)
 	e := newTestEngine(t, db)
 
@@ -855,12 +853,10 @@ func TestEngine_GetOrCreatePool_InvalidPoolReplaced(t *testing.T) {
 		t.Fatalf("CompileAndCache: %v", err)
 	}
 
-	env := defaultEnv()
-
 	// Create initial pool.
-	pool1, err := e.GetOrCreatePool(siteID, deployKey, env)
+	pool1, err := e.getOrCreatePool(siteID, deployKey)
 	if err != nil {
-		t.Fatalf("GetOrCreatePool 1: %v", err)
+		t.Fatalf("getOrCreatePool 1: %v", err)
 	}
 
 	// Mark the pool as invalid.
@@ -870,13 +866,13 @@ func TestEngine_GetOrCreatePool_InvalidPoolReplaced(t *testing.T) {
 		sp.markInvalid()
 	}
 
-	// Re-cache source since the pool invalidation + GetOrCreatePool will need it.
+	// Re-cache source since the pool invalidation + getOrCreatePool will need it.
 	e.sources.Store(key, source)
 
 	// Next call should create a new pool.
-	pool2, err := e.GetOrCreatePool(siteID, deployKey, env)
+	pool2, err := e.getOrCreatePool(siteID, deployKey)
 	if err != nil {
-		t.Fatalf("GetOrCreatePool 2: %v", err)
+		t.Fatalf("getOrCreatePool 2: %v", err)
 	}
 	if pool1 == pool2 {
 		t.Error("should have created a new pool after invalidation")
@@ -1009,7 +1005,9 @@ func TestEngine_Execute_KVDelete(t *testing.T) {
 		Deleted   bool `json:"deleted"`
 		Remaining int  `json:"remaining"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Deleted {
 		t.Error("deleted key should return null")
 	}
@@ -1236,7 +1234,9 @@ func TestEngine_Execute_RequestHeaders(t *testing.T) {
 		CT   string `json:"ct"`
 		Auth string `json:"auth"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.CT != "application/json" {
 		t.Errorf("ct = %q", data.CT)
 	}
@@ -1266,7 +1266,9 @@ func TestEngine_Execute_StructuredClone(t *testing.T) {
 		Clone    int  `json:"clone"`
 		Deep     bool `json:"deep"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Original != 1 {
 		t.Errorf("original = %d, want 1", data.Original)
 	}
@@ -1296,7 +1298,9 @@ func TestEngine_Execute_PerformanceNow(t *testing.T) {
 		Elapsed float64 `json:"elapsed"`
 		HasNow  bool    `json:"hasNow"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.HasNow {
 		t.Error("performance.now should be a function")
 	}
@@ -1324,7 +1328,9 @@ func TestEngine_Execute_AtoB_BtoA(t *testing.T) {
 		Encoded string `json:"encoded"`
 		Decoded string `json:"decoded"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Encoded != "SGVsbG8sIFdvcmxkIQ==" {
 		t.Errorf("encoded = %q", data.Encoded)
 	}
@@ -1658,7 +1664,9 @@ func TestEngine_Execute_RequestURL(t *testing.T) {
 		Search   string `json:"search"`
 		Host     string `json:"host"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Pathname != "/api/test" {
 		t.Errorf("pathname = %q", data.Pathname)
 	}
@@ -1689,7 +1697,9 @@ func TestEngine_Execute_RequestMethod(t *testing.T) {
 	var data struct {
 		Method string `json:"method"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Method != "PUT" {
 		t.Errorf("method = %q, want PUT", data.Method)
 	}
@@ -1843,7 +1853,9 @@ func TestEngine_Execute_WithRequestBody(t *testing.T) {
 		Body   string `json:"body"`
 		Method string `json:"method"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Body != `{"hello":"world"}` {
 		t.Errorf("body = %q", data.Body)
 	}
@@ -1877,7 +1889,9 @@ func TestEngine_Execute_EnvVarsAndSecrets(t *testing.T) {
 		APIKey string `json:"apiKey"`
 		Secret string `json:"secret"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.APIKey != "test-key-123" {
 		t.Errorf("apiKey = %q", data.APIKey)
 	}
@@ -2007,7 +2021,9 @@ func TestEngine_Execute_AssetsFetchError(t *testing.T) {
 		Error   bool   `json:"error"`
 		Message string `json:"message"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Error {
 		t.Error("ASSETS.fetch with error should throw")
 	}
@@ -2047,7 +2063,9 @@ func TestEngine_Execute_AssetsFetchNullBody(t *testing.T) {
 		Status int    `json:"status"`
 		Body   string `json:"body"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Status != 204 {
 		t.Errorf("status = %d, want 204", data.Status)
 	}
@@ -2086,7 +2104,9 @@ func TestEngine_Execute_AssetsFetchNoArgs(t *testing.T) {
 		Error   bool   `json:"error"`
 		Message string `json:"message"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Error {
 		t.Error("ASSETS.fetch() with no args should throw")
 	}
@@ -2111,7 +2131,9 @@ func TestEngine_Execute_NilEnvMaps(t *testing.T) {
 	var data struct {
 		OK bool `json:"ok"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.OK {
 		t.Error("should work with nil env maps")
 	}
@@ -2296,7 +2318,7 @@ func TestEngine_Execute_PostRequestWithBody(t *testing.T) {
 		Body    string `json:"body"`
 		HasBody bool   `json:"hasBody"`
 	}
-	json.Unmarshal(result.Response.Body, &data)
+	_ = json.Unmarshal(result.Response.Body, &data)
 	if data.Method != "POST" {
 		t.Errorf("method = %q", data.Method)
 	}
@@ -2325,7 +2347,9 @@ func TestEngine_Execute_ResponseJsonMethod(t *testing.T) {
 		Items []int `json:"items"`
 		Total int   `json:"total"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Total != 3 {
 		t.Errorf("total = %d, want 3", data.Total)
 	}

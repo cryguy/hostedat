@@ -13,7 +13,7 @@ import (
 
 func TestDurableBridge_PutAndGet(t *testing.T) {
 	db := testDB(t)
-	db.AutoMigrate(&DurableObjectEntry{})
+	_ = db.AutoMigrate(&DurableObjectEntry{})
 	b := &DurableObjectBridge{DB: db}
 
 	if err := b.Put("ns1", "obj1", "greeting", `"hello"`); err != nil {
@@ -31,7 +31,7 @@ func TestDurableBridge_PutAndGet(t *testing.T) {
 
 func TestDurableBridge_GetNotFound(t *testing.T) {
 	db := testDB(t)
-	db.AutoMigrate(&DurableObjectEntry{})
+	_ = db.AutoMigrate(&DurableObjectEntry{})
 	b := &DurableObjectBridge{DB: db}
 
 	val, err := b.Get("ns1", "obj1", "missing")
@@ -45,11 +45,11 @@ func TestDurableBridge_GetNotFound(t *testing.T) {
 
 func TestDurableBridge_PutOverwrite(t *testing.T) {
 	db := testDB(t)
-	db.AutoMigrate(&DurableObjectEntry{})
+	_ = db.AutoMigrate(&DurableObjectEntry{})
 	b := &DurableObjectBridge{DB: db}
 
-	b.Put("ns1", "obj1", "key", `"v1"`)
-	b.Put("ns1", "obj1", "key", `"v2"`)
+	_ = b.Put("ns1", "obj1", "key", `"v1"`)
+	_ = b.Put("ns1", "obj1", "key", `"v2"`)
 
 	val, err := b.Get("ns1", "obj1", "key")
 	if err != nil {
@@ -62,10 +62,10 @@ func TestDurableBridge_PutOverwrite(t *testing.T) {
 
 func TestDurableBridge_Delete(t *testing.T) {
 	db := testDB(t)
-	db.AutoMigrate(&DurableObjectEntry{})
+	_ = db.AutoMigrate(&DurableObjectEntry{})
 	b := &DurableObjectBridge{DB: db}
 
-	b.Put("ns1", "obj1", "key", `"val"`)
+	_ = b.Put("ns1", "obj1", "key", `"val"`)
 	if err := b.Delete("ns1", "obj1", "key"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -81,12 +81,12 @@ func TestDurableBridge_Delete(t *testing.T) {
 
 func TestDurableBridge_DeleteAll(t *testing.T) {
 	db := testDB(t)
-	db.AutoMigrate(&DurableObjectEntry{})
+	_ = db.AutoMigrate(&DurableObjectEntry{})
 	b := &DurableObjectBridge{DB: db}
 
-	b.Put("ns1", "obj1", "a", `1`)
-	b.Put("ns1", "obj1", "b", `2`)
-	b.Put("ns1", "obj1", "c", `3`)
+	_ = b.Put("ns1", "obj1", "a", `1`)
+	_ = b.Put("ns1", "obj1", "b", `2`)
+	_ = b.Put("ns1", "obj1", "c", `3`)
 
 	if err := b.DeleteAll("ns1", "obj1"); err != nil {
 		t.Fatalf("DeleteAll: %v", err)
@@ -103,12 +103,12 @@ func TestDurableBridge_DeleteAll(t *testing.T) {
 
 func TestDurableBridge_DeleteMulti(t *testing.T) {
 	db := testDB(t)
-	db.AutoMigrate(&DurableObjectEntry{})
+	_ = db.AutoMigrate(&DurableObjectEntry{})
 	b := &DurableObjectBridge{DB: db}
 
-	b.Put("ns1", "obj1", "a", `1`)
-	b.Put("ns1", "obj1", "b", `2`)
-	b.Put("ns1", "obj1", "c", `3`)
+	_ = b.Put("ns1", "obj1", "a", `1`)
+	_ = b.Put("ns1", "obj1", "b", `2`)
+	_ = b.Put("ns1", "obj1", "c", `3`)
 
 	count, err := b.DeleteMulti("ns1", "obj1", []string{"a", "b"})
 	if err != nil {
@@ -126,12 +126,12 @@ func TestDurableBridge_DeleteMulti(t *testing.T) {
 
 func TestDurableBridge_ListPrefix(t *testing.T) {
 	db := testDB(t)
-	db.AutoMigrate(&DurableObjectEntry{})
+	_ = db.AutoMigrate(&DurableObjectEntry{})
 	b := &DurableObjectBridge{DB: db}
 
-	b.Put("ns1", "obj1", "user:1", `"alice"`)
-	b.Put("ns1", "obj1", "user:2", `"bob"`)
-	b.Put("ns1", "obj1", "other:1", `"nope"`)
+	_ = b.Put("ns1", "obj1", "user:1", `"alice"`)
+	_ = b.Put("ns1", "obj1", "user:2", `"bob"`)
+	_ = b.Put("ns1", "obj1", "other:1", `"nope"`)
 
 	entries, err := b.List("ns1", "obj1", "user:", 0, false)
 	if err != nil {
@@ -144,11 +144,11 @@ func TestDurableBridge_ListPrefix(t *testing.T) {
 
 func TestDurableBridge_GetMulti(t *testing.T) {
 	db := testDB(t)
-	db.AutoMigrate(&DurableObjectEntry{})
+	_ = db.AutoMigrate(&DurableObjectEntry{})
 	b := &DurableObjectBridge{DB: db}
 
-	b.Put("ns1", "obj1", "a", `"alpha"`)
-	b.Put("ns1", "obj1", "b", `"bravo"`)
+	_ = b.Put("ns1", "obj1", "a", `"alpha"`)
+	_ = b.Put("ns1", "obj1", "b", `"bravo"`)
 
 	result, err := b.GetMulti("ns1", "obj1", []string{"a", "b", "c"})
 	if err != nil {
@@ -207,7 +207,7 @@ func TestDurableUniqueID(t *testing.T) {
 func doTestCtx(t *testing.T) (*v8.Isolate, *v8.Context, *DurableObjectBridge) {
 	t.Helper()
 	db := testDB(t)
-	db.AutoMigrate(&DurableObjectEntry{})
+	_ = db.AutoMigrate(&DurableObjectEntry{})
 
 	iso := v8.NewIsolate()
 	ctx := v8.NewContext(iso)
@@ -289,7 +289,7 @@ func runDOScript(t *testing.T, ctx *v8.Context, script string) map[string]interf
 	if err != nil {
 		t.Fatalf("stringify: %v", err)
 	}
-	ctx.RunScript("delete globalThis.__test_val; delete globalThis.__test_resolved; delete globalThis.__test_rejected;", "cleanup.js")
+	_, _ = ctx.RunScript("delete globalThis.__test_val; delete globalThis.__test_resolved; delete globalThis.__test_rejected;", "cleanup.js")
 
 	var result map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonVal.String()), &result); err != nil {

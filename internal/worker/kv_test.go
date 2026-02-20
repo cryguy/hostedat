@@ -85,9 +85,9 @@ func TestKVBridge_ListWithPrefix(t *testing.T) {
 	db := testDB(t)
 	kv := &KVBridge{DB: db, NamespaceID: "test-ns-prefix"}
 
-	kv.Put("user:1", "alice", nil, nil)
-	kv.Put("user:2", "bob", nil, nil)
-	kv.Put("other:1", "nope", nil, nil)
+	_ = kv.Put("user:1", "alice", nil, nil)
+	_ = kv.Put("user:2", "bob", nil, nil)
+	_ = kv.Put("other:1", "nope", nil, nil)
 
 	listResult, err := kv.List("user:", 0, "")
 	if err != nil {
@@ -103,7 +103,7 @@ func TestKVBridge_ListWithLimit(t *testing.T) {
 	kv := &KVBridge{DB: db, NamespaceID: "test-ns-limit"}
 
 	for i := 0; i < 5; i++ {
-		kv.Put(fmt.Sprintf("k%d", i), fmt.Sprintf("v%d", i), nil, nil)
+		_ = kv.Put(fmt.Sprintf("k%d", i), fmt.Sprintf("v%d", i), nil, nil)
 	}
 
 	listResult, err := kv.List("", 2, "")
@@ -161,7 +161,9 @@ func TestKV_JSGetNoArgs(t *testing.T) {
 		Rejected bool   `json:"rejected"`
 		Msg      string `json:"msg"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Rejected {
 		t.Error("KV.get() with no args should reject")
 	}
@@ -189,7 +191,9 @@ func TestKV_JSPutNoArgs(t *testing.T) {
 	var data struct {
 		Rejected bool `json:"rejected"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Rejected {
 		t.Error("KV.put() with no args should reject")
 	}
@@ -217,7 +221,9 @@ func TestKV_JSDeleteNoArgs(t *testing.T) {
 	var data struct {
 		Rejected bool `json:"rejected"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.Rejected {
 		t.Error("KV.delete() with no args should reject")
 	}
@@ -242,7 +248,9 @@ func TestKV_JSPutGetRoundTrip(t *testing.T) {
 	var data struct {
 		Val string `json:"val"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Val != "hello world" {
 		t.Errorf("KV round-trip: got %q, want %q", data.Val, "hello world")
 	}
@@ -266,7 +274,9 @@ func TestKV_JSGetNotFound(t *testing.T) {
 	var data struct {
 		IsNull bool `json:"isNull"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsNull {
 		t.Error("KV.get for missing key should return null")
 	}
@@ -297,7 +307,9 @@ func TestKV_JSPutWithOptions(t *testing.T) {
 		KeyCount  int    `json:"keyCount"`
 		FoundMeta string `json:"foundMeta"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.KeyCount != 1 {
 		t.Errorf("key count = %d, want 1", data.KeyCount)
 	}
@@ -337,7 +349,9 @@ func TestKV_JSListWithOptions(t *testing.T) {
 		PrefixedCount int `json:"prefixedCount"`
 		LimitedCount  int `json:"limitedCount"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.AllCount != 3 {
 		t.Errorf("all count = %d, want 3", data.AllCount)
 	}
@@ -371,7 +385,9 @@ func TestKV_JSDeleteAndVerify(t *testing.T) {
 		Before    string `json:"before"`
 		AfterNull bool   `json:"afterNull"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Before != "value" {
 		t.Errorf("before = %q, want %q", data.Before, "value")
 	}
@@ -385,7 +401,9 @@ func kvEnv(t *testing.T, db *gorm.DB, nsID string) *Env {
 	t.Helper()
 	// Create namespace in DB.
 	ns := models.KVNamespace{ID: nsID, SiteID: "test-site-kv-" + nsID, Name: "MY_KV"}
-	db.Create(&ns)
+	if result := db.Create(&ns); result.Error != nil {
+		t.Fatal(result.Error)
+	}
 	return &Env{
 		Vars:       make(map[string]string),
 		Secrets:    make(map[string]string),
@@ -466,7 +484,7 @@ func TestKVBridge_ListCursorPagination(t *testing.T) {
 	kv := &KVBridge{DB: db, NamespaceID: "test-ns-cursor"}
 
 	for i := 0; i < 5; i++ {
-		kv.Put(fmt.Sprintf("k%d", i), fmt.Sprintf("v%d", i), nil, nil)
+		_ = kv.Put(fmt.Sprintf("k%d", i), fmt.Sprintf("v%d", i), nil, nil)
 	}
 
 	// First page: limit 2
@@ -517,7 +535,7 @@ func TestKVBridge_ListComplete(t *testing.T) {
 	kv := &KVBridge{DB: db, NamespaceID: "test-ns-complete"}
 
 	for i := 0; i < 3; i++ {
-		kv.Put(fmt.Sprintf("k%d", i), fmt.Sprintf("v%d", i), nil, nil)
+		_ = kv.Put(fmt.Sprintf("k%d", i), fmt.Sprintf("v%d", i), nil, nil)
 	}
 
 	result, err := kv.List("", 10, "")
@@ -562,7 +580,9 @@ func TestKV_JSGetWithMetadata(t *testing.T) {
 		Value    string `json:"value"`
 		Metadata string `json:"metadata"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Value != "hello" {
 		t.Errorf("value = %q, want %q", data.Value, "hello")
 	}
@@ -593,7 +613,9 @@ func TestKV_JSGetWithMetadataNotFound(t *testing.T) {
 		ValueNull bool `json:"valueNull"`
 		MetaNull  bool `json:"metaNull"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.ValueNull {
 		t.Error("value should be null for missing key")
 	}
@@ -631,7 +653,9 @@ func TestKV_JSGetTypeJSON(t *testing.T) {
 		Age      int    `json:"age"`
 		IsObject bool   `json:"isObject"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Name != "alice" {
 		t.Errorf("name = %q, want %q", data.Name, "alice")
 	}
@@ -666,7 +690,9 @@ func TestKV_JSGetTypeArrayBuffer(t *testing.T) {
 		Text       string `json:"text"`
 		ByteLength int    `json:"byteLength"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsAB {
 		t.Error("get with type:arrayBuffer should return ArrayBuffer")
 	}
@@ -702,7 +728,9 @@ func TestKV_JSGetTypeStream(t *testing.T) {
 		IsRS bool   `json:"isRS"`
 		Text string `json:"text"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsRS {
 		t.Error("get with type:stream should return ReadableStream")
 	}
@@ -731,7 +759,9 @@ func TestKV_JSGetTypeText(t *testing.T) {
 		Val      string `json:"val"`
 		IsString bool   `json:"isString"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Val != "plain text" {
 		t.Errorf("val = %q, want %q", data.Val, "plain text")
 	}
@@ -758,7 +788,9 @@ func TestKV_JSGetTypeNullReturnsNull(t *testing.T) {
 	var data struct {
 		IsNull bool `json:"isNull"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsNull {
 		t.Error("get with any type for missing key should return null")
 	}
@@ -818,7 +850,9 @@ func TestKV_JSListCursorPagination(t *testing.T) {
 		P3NoCursor bool     `json:"p3NoCursor"`
 		TotalKeys  []string `json:"totalKeys"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 
 	if data.P1Count != 2 {
 		t.Errorf("page1 count = %d, want 2", data.P1Count)
@@ -872,7 +906,9 @@ func TestKV_JSListComplete(t *testing.T) {
 		Complete bool `json:"complete"`
 		NoCursor bool `json:"noCursor"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.Count != 2 {
 		t.Errorf("count = %d, want 2", data.Count)
 	}
@@ -913,7 +949,9 @@ func TestKV_JSGetWithMetadataJSON(t *testing.T) {
 		Metadata string `json:"metadata"`
 		IsObject bool   `json:"isObject"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if data.X != 42 {
 		t.Errorf("x = %d, want 42", data.X)
 	}
@@ -976,7 +1014,9 @@ func TestKV_JSGetWithMetadataArrayBuffer(t *testing.T) {
 		Text     string `json:"text"`
 		Metadata string `json:"metadata"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsAB {
 		t.Error("getWithMetadata type:arrayBuffer value should be ArrayBuffer")
 	}
@@ -1017,7 +1057,9 @@ func TestKV_JSGetWithMetadataStream(t *testing.T) {
 		Text     string `json:"text"`
 		Metadata string `json:"metadata"`
 	}
-	json.Unmarshal(r.Response.Body, &data)
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
 	if !data.IsRS {
 		t.Error("getWithMetadata type:stream value should be ReadableStream")
 	}
@@ -1052,9 +1094,9 @@ func TestKVBridge_ListWithCorruptedCursor(t *testing.T) {
 	db := testDB(t)
 	kv := &KVBridge{DB: db, NamespaceID: "test-ns-bad-cursor"}
 
-	kv.Put("a", "1", nil, nil)
-	kv.Put("b", "2", nil, nil)
-	kv.Put("c", "3", nil, nil)
+	_ = kv.Put("a", "1", nil, nil)
+	_ = kv.Put("b", "2", nil, nil)
+	_ = kv.Put("c", "3", nil, nil)
 
 	result, err := kv.List("", 0, "!!!not-valid-base64!!!")
 	if err != nil {
@@ -1116,9 +1158,9 @@ func TestKVBridge_ListCursorPastEnd(t *testing.T) {
 	db := testDB(t)
 	kv := &KVBridge{DB: db, NamespaceID: "test-ns-cursor-past-end"}
 
-	kv.Put("a", "1", nil, nil)
-	kv.Put("b", "2", nil, nil)
-	kv.Put("c", "3", nil, nil)
+	_ = kv.Put("a", "1", nil, nil)
+	_ = kv.Put("b", "2", nil, nil)
+	_ = kv.Put("c", "3", nil, nil)
 
 	cursor := encodeCursor(100)
 	result, err := kv.List("", 10, cursor)

@@ -499,7 +499,7 @@ globalThis.FixedLengthStream = FixedLengthStream;
 `
 
 // setupStreams evaluates the Streams API polyfills.
-func setupStreams(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
+func setupStreams(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	if _, err := ctx.RunScript(streamsJS, "streams.js"); err != nil {
 		return fmt.Errorf("evaluating streams.js: %w", err)
 	}

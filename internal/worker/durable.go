@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	v8 "github.com/tommie/v8go"
@@ -31,7 +32,7 @@ func (b *DurableObjectBridge) Get(namespace, objectID, key string) (string, erro
 	var entry DurableObjectEntry
 	err := b.DB.Where("namespace = ? AND object_id = ? AND key = ?", namespace, objectID, key).First(&entry).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return "", nil
 		}
 		return "", err
@@ -168,15 +169,15 @@ func buildDurableObjectBinding(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 			return nil, err
 		}
 		hexVal, _ := v8.NewValue(iso, hexID)
-		idObj.Set("_hex", hexVal)
+		_ = idObj.Set("_hex", hexVal)
 
-		idObj.Set("toString", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		_ = idObj.Set("toString", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 			self := info.This()
 			h, _ := self.Get("_hex")
 			return h
 		}).GetFunction(ctx))
 
-		idObj.Set("equals", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		_ = idObj.Set("equals", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 			args := info.Args()
 			if len(args) == 0 {
 				val, _ := v8.NewValue(iso, false)
@@ -208,10 +209,10 @@ func buildDurableObjectBinding(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 			return nil, err
 		}
 
-		stub.Set("id", idObj)
+		_ = stub.Set("id", idObj)
 
 		// stub.fetch() returns Response("ok")
-		stub.Set("fetch", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		_ = stub.Set("fetch", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 			resolver, _ := v8.NewPromiseResolver(ctx)
 			resp, err := ctx.RunScript(`new Response("ok")`, "do_stub_fetch.js")
 			if err != nil {
@@ -228,13 +229,13 @@ func buildDurableObjectBinding(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 		if err != nil {
 			return nil, err
 		}
-		stub.Set("storage", storage)
+		_ = stub.Set("storage", storage)
 
 		return stub, nil
 	}
 
 	// namespace.idFromName(name) -> DurableObjectId
-	ns.Set("idFromName", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ns.Set("idFromName", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) == 0 {
 			errVal, _ := v8.NewValue(iso, "")
@@ -251,7 +252,7 @@ func buildDurableObjectBinding(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 	}).GetFunction(ctx))
 
 	// namespace.idFromString(hex) -> DurableObjectId
-	ns.Set("idFromString", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ns.Set("idFromString", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) == 0 {
 			errVal, _ := v8.NewValue(iso, "")
@@ -267,7 +268,7 @@ func buildDurableObjectBinding(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 	}).GetFunction(ctx))
 
 	// namespace.newUniqueId() -> DurableObjectId
-	ns.Set("newUniqueId", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ns.Set("newUniqueId", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		hexID, err := durableObjectUniqueID()
 		if err != nil {
 			errVal, _ := v8.NewValue(iso, "")
@@ -282,7 +283,7 @@ func buildDurableObjectBinding(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 	}).GetFunction(ctx))
 
 	// namespace.get(id) -> DurableObjectStub
-	ns.Set("get", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = ns.Set("get", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		args := info.Args()
 		if len(args) == 0 {
 			errVal, _ := v8.NewValue(iso, "")
@@ -318,7 +319,7 @@ func buildDurableObjectStorage(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 	}
 
 	// storage.get(key) or storage.get([keys]) -> Promise
-	stor.Set("get", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = stor.Set("get", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 		if len(args) == 0 {
@@ -330,7 +331,7 @@ func buildDurableObjectStorage(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 		arg := args[0]
 		if arg.IsArray() {
 			// Extract keys via JS
-			ctx.Global().Set("__tmp_do_keys", arg)
+			_ = ctx.Global().Set("__tmp_do_keys", arg)
 			keysResult, err := ctx.RunScript(`(function() {
 				var a = globalThis.__tmp_do_keys;
 				delete globalThis.__tmp_do_keys;
@@ -342,7 +343,7 @@ func buildDurableObjectStorage(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 				return resolver.GetPromise().Value
 			}
 			var keys []string
-			json.Unmarshal([]byte(keysResult.String()), &keys)
+			_ = json.Unmarshal([]byte(keysResult.String()), &keys)
 			result, err := bridge.GetMulti(namespace, objectID, keys)
 			if err != nil {
 				errVal, _ := v8.NewValue(iso, err.Error())
@@ -389,7 +390,7 @@ func buildDurableObjectStorage(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 	}).GetFunction(ctx))
 
 	// storage.put(key, value) or storage.put(entries) -> Promise
-	stor.Set("put", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = stor.Set("put", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 		if len(args) == 0 {
@@ -402,7 +403,7 @@ func buildDurableObjectStorage(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 			// storage.put(key, value)
 			key := args[0].String()
 			// Serialize value to JSON via JS
-			ctx.Global().Set("__tmp_do_put_val", args[1])
+			_ = ctx.Global().Set("__tmp_do_put_val", args[1])
 			jsonResult, err := ctx.RunScript(`(function() {
 				var v = globalThis.__tmp_do_put_val;
 				delete globalThis.__tmp_do_put_val;
@@ -422,7 +423,7 @@ func buildDurableObjectStorage(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 			resolver.Resolve(v8.Undefined(iso))
 		} else if args[0].IsObject() {
 			// storage.put(entries) - entries is an object {key: value, ...}
-			ctx.Global().Set("__tmp_do_put_entries", args[0])
+			_ = ctx.Global().Set("__tmp_do_put_entries", args[0])
 			entriesResult, err := ctx.RunScript(`(function() {
 				var o = globalThis.__tmp_do_put_entries;
 				delete globalThis.__tmp_do_put_entries;
@@ -457,7 +458,7 @@ func buildDurableObjectStorage(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 	}).GetFunction(ctx))
 
 	// storage.delete(key) or storage.delete([keys]) -> Promise
-	stor.Set("delete", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = stor.Set("delete", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 		if len(args) == 0 {
@@ -468,7 +469,7 @@ func buildDurableObjectStorage(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 
 		arg := args[0]
 		if arg.IsArray() {
-			ctx.Global().Set("__tmp_do_del_keys", arg)
+			_ = ctx.Global().Set("__tmp_do_del_keys", arg)
 			keysResult, err := ctx.RunScript(`(function() {
 				var a = globalThis.__tmp_do_del_keys;
 				delete globalThis.__tmp_do_del_keys;
@@ -480,7 +481,7 @@ func buildDurableObjectStorage(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 				return resolver.GetPromise().Value
 			}
 			var keys []string
-			json.Unmarshal([]byte(keysResult.String()), &keys)
+			_ = json.Unmarshal([]byte(keysResult.String()), &keys)
 			count, err := bridge.DeleteMulti(namespace, objectID, keys)
 			if err != nil {
 				errVal, _ := v8.NewValue(iso, err.Error())
@@ -503,7 +504,7 @@ func buildDurableObjectStorage(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 	}).GetFunction(ctx))
 
 	// storage.deleteAll() -> Promise
-	stor.Set("deleteAll", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = stor.Set("deleteAll", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		if err := bridge.DeleteAll(namespace, objectID); err != nil {
 			errVal, _ := v8.NewValue(iso, err.Error())
@@ -515,7 +516,7 @@ func buildDurableObjectStorage(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 	}).GetFunction(ctx))
 
 	// storage.list(options?) -> Promise<Map>
-	stor.Set("list", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+	_ = stor.Set("list", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
 		resolver, _ := v8.NewPromiseResolver(ctx)
 		args := info.Args()
 
@@ -524,7 +525,7 @@ func buildDurableObjectStorage(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 		reverse := false
 
 		if len(args) > 0 && args[0].IsObject() {
-			ctx.Global().Set("__tmp_do_list_opts", args[0])
+			_ = ctx.Global().Set("__tmp_do_list_opts", args[0])
 			optsResult, err := ctx.RunScript(`(function() {
 				var o = globalThis.__tmp_do_list_opts;
 				delete globalThis.__tmp_do_list_opts;
@@ -573,11 +574,4 @@ func buildDurableObjectStorage(iso *v8.Isolate, ctx *v8.Context, bridge *Durable
 	}).GetFunction(ctx))
 
 	return stor, nil
-}
-
-// setupDurableObjects is a no-op setup function for global DO polyfills.
-// The actual bindings are created per-namespace in buildDurableObjectBinding.
-func setupDurableObjects(iso *v8.Isolate, ctx *v8.Context, el *eventLoop) error {
-	// No global setup needed — all DO state is per-namespace/per-object.
-	return nil
 }

@@ -58,7 +58,7 @@ func (c *Client) do(method, path string, body io.Reader, contentType string) (*h
 	}
 
 	if resp.StatusCode >= 400 {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		var errResp struct {
 			Error string `json:"error"`
 		}
@@ -85,7 +85,7 @@ func (c *Client) doJSON(method, path string, reqBody, respBody interface{}) erro
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if respBody != nil {
 		return json.NewDecoder(resp.Body).Decode(respBody)
