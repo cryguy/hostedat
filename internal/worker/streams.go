@@ -71,9 +71,20 @@ class ReadableStreamDefaultReader {
 			// Trigger pull if source has one.
 			if (stream._pullFn && !stream._pulling) {
 				stream._pulling = true;
-				Promise.resolve().then(() => {
+				Promise.resolve().then(function pullLoop() {
 					stream._pulling = false;
-					try { var r = stream._pullFn(stream._controller); if (r && typeof r.then === "function") r.then(undefined, function(e) { stream._errorInternal(e); }); } catch(e) { stream._errorInternal(e); }
+					if (stream._closed || stream._errored) return;
+					try {
+						var r = stream._pullFn(stream._controller);
+						function afterPull() {
+							if (stream._pendingReads.length > 0 && stream._queue.length === 0 && !stream._closed && !stream._errored && stream._pullFn) {
+								stream._pulling = true;
+								Promise.resolve().then(pullLoop);
+							}
+						}
+						if (r && typeof r.then === "function") r.then(afterPull, function(e) { stream._errorInternal(e); });
+						else afterPull();
+					} catch(e) { stream._errorInternal(e); }
 				});
 			}
 		});

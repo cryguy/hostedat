@@ -349,6 +349,7 @@ func TestWebSocket_SendStringCallsTextMode(t *testing.T) {
 
     var pair = new WebSocketPair();
     var server = pair[1];
+    server._isHTTPBridged = true;
     server.accept();
     server.send("hello text");
 
@@ -394,6 +395,7 @@ func TestWebSocket_SendArrayBufferCallsBinaryMode(t *testing.T) {
 
     var pair = new WebSocketPair();
     var server = pair[1];
+    server._isHTTPBridged = true;
     server.accept();
 
     // Create an ArrayBuffer with bytes [1, 2, 3, 4]
@@ -444,6 +446,7 @@ func TestWebSocket_SendTypedArrayCallsBinaryMode(t *testing.T) {
 
     var pair = new WebSocketPair();
     var server = pair[1];
+    server._isHTTPBridged = true;
     server.accept();
 
     var arr = new Uint8Array([10, 20, 30]);
@@ -487,6 +490,7 @@ func TestWebSocket_SendNonStringFallback(t *testing.T) {
 
     var pair = new WebSocketPair();
     var server = pair[1];
+    server._isHTTPBridged = true;
     server.accept();
     server.send(42);
 
@@ -1134,5 +1138,78 @@ func TestWebSocketPair_InProcessBidirectional(t *testing.T) {
 	}
 	if len(data.ServerReceived) != 1 || data.ServerReceived[0] != "from-client" {
 		t.Errorf("serverReceived = %v, want ['from-client']", data.ServerReceived)
+	}
+}
+
+func TestWebSocketPair_InProcessWithoutClientAccept(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	// Critical: only server.accept(), NOT client.accept().
+	// This mirrors the real Cloudflare Workers pattern.
+	source := `export default {
+  async fetch(request, env) {
+    var pair = new WebSocketPair();
+    var client = pair[0];
+    var server = pair[1];
+    server.accept();
+
+    var received = null;
+    client.addEventListener('message', function(e) {
+      received = e.data;
+    });
+
+    server.send("hello from server");
+    await new Promise(resolve => queueMicrotask(resolve));
+
+    return Response.json({ received: received });
+  }
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Received string `json:"received"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if data.Received != "hello from server" {
+		t.Errorf("received = %q, want 'hello from server'", data.Received)
+	}
+}
+
+func TestWebSocketPair_Iterable(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    var [client, server] = new WebSocketPair();
+    return Response.json({
+      clientIsWS: client instanceof WebSocket,
+      serverIsWS: server instanceof WebSocket,
+      peerLinked: client._peer === server,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		ClientIsWS bool `json:"clientIsWS"`
+		ServerIsWS bool `json:"serverIsWS"`
+		PeerLinked bool `json:"peerLinked"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !data.ClientIsWS || !data.ServerIsWS {
+		t.Error("destructured pair members should be WebSocket instances")
+	}
+	if !data.PeerLinked {
+		t.Error("destructured pair members should be peer-linked")
 	}
 }

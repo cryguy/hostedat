@@ -359,20 +359,25 @@ func setupTCPSocket(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 			return throwError(iso, "tcpRead: unknown socket ID")
 		}
 
-		data, eof, _ := buf.take(maxBytes)
-		if data == "" && !eof {
-			// No data yet — block until data arrives or timeout (5s).
-			// This prevents the JS pull() loop from busy-spinning.
-			buf.waitForData(5 * time.Second)
-			data, eof, _ = buf.take(maxBytes)
+		// Loop until data is available or EOF. Each iteration waits
+		// up to 1 second for the readLoop goroutine to deliver data.
+		// Bounded to 30 iterations (30s) to prevent blocking forever
+		// if no data arrives (the execution watchdog will also fire).
+		for attempts := 0; attempts < 30; attempts++ {
+			data, eof, _ := buf.take(maxBytes)
+			if data != "" {
+				val, _ := v8.NewValue(iso, data)
+				return val
+			}
+			if eof {
+				result, _ := ctx.RunScript("null", "null.js")
+				return result
+			}
+			buf.waitForData(1 * time.Second)
 		}
-		if data == "" && eof {
-			// Return null for EOF.
-			result, _ := ctx.RunScript("null", "null.js")
-			return result
-		}
-
-		val, _ := v8.NewValue(iso, data)
+		// Exhausted retries without data — return empty string
+		// so the JS pull() can yield control.
+		val, _ := v8.NewValue(iso, "")
 		return val
 	}).GetFunction(ctx))
 

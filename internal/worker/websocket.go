@@ -42,7 +42,7 @@ class WebSocket {
 			throw new DOMException('WebSocket is not open', 'InvalidStateError');
 		}
 		// In-process pair: deliver directly to peer via microtask queue
-		if (!this._isHTTPBridged && this._peer && this._peer._readyState >= 1) {
+		if (!this._isHTTPBridged && this._peer && this._peer._readyState < 2) {
 			var peer = this._peer;
 			var evt;
 			if (typeof data === 'string') {
@@ -74,7 +74,7 @@ class WebSocket {
 		if (this._readyState >= 2) return;
 		this._readyState = 2;
 		// Notify peer for in-process pairs
-		if (!this._isHTTPBridged && this._peer && this._peer._readyState === 1) {
+		if (!this._isHTTPBridged && this._peer && this._peer._readyState < 2) {
 			var peer = this._peer;
 			var closeCode = code || 1000;
 			var closeReason = reason || '';
@@ -134,6 +134,10 @@ class WebSocketPair {
 		this[1] = ws1;
 	}
 }
+
+WebSocketPair.prototype[Symbol.iterator] = function() {
+	return [this[0], this[1]][Symbol.iterator]();
+};
 
 globalThis.WebSocket = WebSocket;
 globalThis.WebSocketPair = WebSocketPair;
