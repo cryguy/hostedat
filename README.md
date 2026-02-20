@@ -1,5 +1,13 @@
 # hostedat
 
+[![Release](https://github.com/cryguy/hostedat/actions/workflows/release.yml/badge.svg)](https://github.com/cryguy/hostedat/actions/workflows/release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/cryguy/hostedat)](https://github.com/cryguy/hostedat/releases/latest)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/cryguy/hostedat)](https://go.dev/)
+[![Go Report Card](https://goreportcard.com/badge/github.com/cryguy/hostedat)](https://goreportcard.com/report/github.com/cryguy/hostedat)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/cryguy/hostedat/blob/master/LICENSE)
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-informational)](https://github.com/cryguy/hostedat/releases/latest)
+[![Stars](https://img.shields.io/github/stars/cryguy/hostedat?style=flat)](https://github.com/cryguy/hostedat/stargazers)
+
 Self-hosted static site hosting platform with server-side JavaScript workers. Upload a zip of your built site and get a live subdomain — like Cloudflare Pages, but on your own server with single-command deploys.
 
 ## Features
