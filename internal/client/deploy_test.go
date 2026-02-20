@@ -80,8 +80,8 @@ func TestClient_Deploy_NotADirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Close()
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+	_ = tmpFile.Close()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("server should not be called")
@@ -371,7 +371,7 @@ func TestZipDirectory_FileContent(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to open test.txt in zip: %v", err)
 			}
-			defer rc.Close()
+			defer func() { _ = rc.Close() }()
 			data, err := io.ReadAll(rc)
 			if err != nil {
 				t.Fatalf("failed to read test.txt content: %v", err)

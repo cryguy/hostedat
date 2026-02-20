@@ -299,9 +299,8 @@ func TestWorkerCreateCronSchedule_Success(t *testing.T) {
 	site := models.Site{UserID: user.ID, SubdomainSlug: "mysite", Name: "Site"}
 	env.db.Create(&site)
 
-	enabled := true
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/worker/crons",
-		jsonBody(map[string]interface{}{"cron": "0 0 * * *", "enabled": enabled}))
+		jsonBody(map[string]interface{}{"cron": "0 0 * * *", "enabled": true}))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := env.doRequest(req)

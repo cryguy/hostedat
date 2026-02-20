@@ -24,8 +24,8 @@ func TestDeployDeploy_Success(t *testing.T) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	part, _ := writer.CreateFormFile("file", "deploy.zip")
-	io.Copy(part, zipData)
-	writer.Close()
+	_, _ = io.Copy(part, zipData)
+	_ = writer.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deploy", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -67,8 +67,8 @@ func TestDeployDeploy_WithWorker(t *testing.T) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	part, _ := writer.CreateFormFile("file", "deploy.zip")
-	io.Copy(part, zipData)
-	writer.Close()
+	_, _ = io.Copy(part, zipData)
+	_ = writer.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deploy", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -109,8 +109,8 @@ func TestDeployDeploy_SiteNotFound(t *testing.T) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	part, _ := writer.CreateFormFile("file", "deploy.zip")
-	io.Copy(part, zipData)
-	writer.Close()
+	_, _ = io.Copy(part, zipData)
+	_ = writer.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/nonexistent/deploy", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -134,8 +134,8 @@ func TestDeployDeploy_Forbidden(t *testing.T) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	part, _ := writer.CreateFormFile("file", "deploy.zip")
-	io.Copy(part, zipData)
-	writer.Close()
+	_, _ = io.Copy(part, zipData)
+	_ = writer.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deploy", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -159,8 +159,8 @@ func TestDeployDeploy_MultipleVersions(t *testing.T) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	part, _ := writer.CreateFormFile("file", "deploy.zip")
-	io.Copy(part, zipData)
-	writer.Close()
+	_, _ = io.Copy(part, zipData)
+	_ = writer.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deploy", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -176,8 +176,8 @@ func TestDeployDeploy_MultipleVersions(t *testing.T) {
 	body2 := &bytes.Buffer{}
 	writer2 := multipart.NewWriter(body2)
 	part2, _ := writer2.CreateFormFile("file", "deploy.zip")
-	io.Copy(part2, zipData2)
-	writer2.Close()
+	_, _ = io.Copy(part2, zipData2)
+	_ = writer2.Close()
 
 	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deploy", body2)
 	req2.Header.Set("Content-Type", writer2.FormDataContentType())
@@ -417,7 +417,7 @@ func TestDeployList_Pagination(t *testing.T) {
 	rec2 := env.doRequest(req2)
 
 	var response2 map[string]interface{}
-	json.Unmarshal(rec2.Body.Bytes(), &response2)
+	_ = json.Unmarshal(rec2.Body.Bytes(), &response2)
 
 	deployments2, _ := response2["deployments"].([]interface{})
 	if len(deployments2) != 5 {

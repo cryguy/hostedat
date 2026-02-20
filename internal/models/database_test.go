@@ -125,7 +125,7 @@ func TestEnsureNoDuplicateStorageBindingNames_WithDuplicates(t *testing.T) {
 	// Close DB before InitDB opens it
 	sqlDB, _ := db.DB()
 	if sqlDB != nil {
-		sqlDB.Close()
+		_ = sqlDB.Close()
 	}
 
 	// InitDB should detect duplicates and fail
@@ -209,7 +209,7 @@ func TestInitDB_ClosesDBOnMigrationError(t *testing.T) {
 
 	sqlDB, _ := db.DB()
 	if sqlDB != nil {
-		sqlDB.Close()
+		_ = sqlDB.Close()
 	}
 
 	// InitDB should fail and clean up

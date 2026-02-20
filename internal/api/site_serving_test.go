@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/cryguy/hostedat/internal/models"
+	"github.com/cryguy/hostedat/internal/storage"
 )
 
 func TestStaticSiteHandler_NoDeployment(t *testing.T) {
@@ -43,8 +44,8 @@ func TestStaticSiteHandler_ServeFile(t *testing.T) {
 	})
 
 	deployPath := env.store.GetDeploymentPath(site.ID, deployID)
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<html>Hello</html>"), 0644)
+	_ = os.MkdirAll(deployPath, 0755)
+	_ = os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<html>Hello</html>"), 0644)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "mysite." + env.domain
@@ -74,11 +75,11 @@ func TestStaticSiteHandler_BlockInternalFiles(t *testing.T) {
 	})
 
 	deployPath := env.store.GetDeploymentPath(site.ID, deployID)
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "_worker.js"), []byte("worker code"), 0644)
-	os.WriteFile(filepath.Join(deployPath, "_headers"), []byte("headers"), 0644)
-	os.WriteFile(filepath.Join(deployPath, "_redirects"), []byte("redirects"), 0644)
-	os.WriteFile(filepath.Join(deployPath, "_routes.json"), []byte("{}"), 0644)
+	_ = os.MkdirAll(deployPath, 0755)
+	_ = os.WriteFile(filepath.Join(deployPath, "_worker.js"), []byte("worker code"), 0644)
+	_ = os.WriteFile(filepath.Join(deployPath, "_headers"), []byte("headers"), 0644)
+	_ = os.WriteFile(filepath.Join(deployPath, "_redirects"), []byte("redirects"), 0644)
+	_ = os.WriteFile(filepath.Join(deployPath, "_routes.json"), []byte("{}"), 0644)
 
 	internalPaths := []string{"/_worker.js", "/_headers", "/_redirects", "/_routes.json"}
 	for _, path := range internalPaths {
@@ -108,8 +109,8 @@ func TestStaticSiteHandler_SPAMode(t *testing.T) {
 	})
 
 	deployPath := env.store.GetDeploymentPath(site.ID, deployID)
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<html>SPA</html>"), 0644)
+	_ = os.MkdirAll(deployPath, 0755)
+	_ = os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<html>SPA</html>"), 0644)
 
 	// Request non-existent path should return index.html in SPA mode
 	req := httptest.NewRequest(http.MethodGet, "/app/page", nil)
@@ -140,8 +141,8 @@ func TestStaticSiteHandler_Custom404(t *testing.T) {
 	})
 
 	deployPath := env.store.GetDeploymentPath(site.ID, deployID)
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "404.html"), []byte("<html>Not Found</html>"), 0644)
+	_ = os.MkdirAll(deployPath, 0755)
+	_ = os.WriteFile(filepath.Join(deployPath, "404.html"), []byte("<html>Not Found</html>"), 0644)
 
 	req := httptest.NewRequest(http.MethodGet, "/nonexistent", nil)
 	req.Host = "mysite." + env.domain
@@ -171,10 +172,10 @@ func TestStaticSiteHandler_ContentType(t *testing.T) {
 	})
 
 	deployPath := env.store.GetDeploymentPath(site.ID, deployID)
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<html>Test</html>"), 0644)
-	os.WriteFile(filepath.Join(deployPath, "style.css"), []byte("body {}"), 0644)
-	os.WriteFile(filepath.Join(deployPath, "script.js"), []byte("console.log()"), 0644)
+	_ = os.MkdirAll(deployPath, 0755)
+	_ = os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<html>Test</html>"), 0644)
+	_ = os.WriteFile(filepath.Join(deployPath, "style.css"), []byte("body {}"), 0644)
+	_ = os.WriteFile(filepath.Join(deployPath, "script.js"), []byte("console.log()"), 0644)
 
 	tests := []struct {
 		path        string
@@ -269,16 +270,16 @@ func TestStaticSiteHandler_Redirects(t *testing.T) {
 	})
 
 	deployPath := env.store.GetDeploymentPath(site.ID, deployID)
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<html>Home</html>"), 0644)
-	os.WriteFile(filepath.Join(deployPath, "about.html"), []byte("<html>About</html>"), 0644)
+	_ = os.MkdirAll(deployPath, 0755)
+	_ = os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<html>Home</html>"), 0644)
+	_ = os.WriteFile(filepath.Join(deployPath, "about.html"), []byte("<html>About</html>"), 0644)
 
 	// Create _redirects file
 	redirects := "/old-path /index.html 301\n/legacy /about.html 302\n"
-	os.WriteFile(filepath.Join(deployPath, "_redirects"), []byte(redirects), 0644)
+	_ = os.WriteFile(filepath.Join(deployPath, "_redirects"), []byte(redirects), 0644)
 
 	// Clear cache to ensure rules are reloaded
-	env.cache = env.cache
+	env.cache = storage.NewSiteRulesCache()
 
 	req := httptest.NewRequest(http.MethodGet, "/old-path", nil)
 	req.Host = "mysite." + env.domain
@@ -305,12 +306,12 @@ func TestStaticSiteHandler_Headers(t *testing.T) {
 	})
 
 	deployPath := env.store.GetDeploymentPath(site.ID, deployID)
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<html>Test</html>"), 0644)
+	_ = os.MkdirAll(deployPath, 0755)
+	_ = os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<html>Test</html>"), 0644)
 
 	// Create _headers file
 	headers := "/*\n  X-Custom-Header: test-value\n"
-	os.WriteFile(filepath.Join(deployPath, "_headers"), []byte(headers), 0644)
+	_ = os.WriteFile(filepath.Join(deployPath, "_headers"), []byte(headers), 0644)
 
 	req := httptest.NewRequest(http.MethodGet, "/index.html", nil)
 	req.Host = "mysite." + env.domain
@@ -342,12 +343,12 @@ func TestStaticSiteHandler_DeniedHeaders(t *testing.T) {
 	})
 
 	deployPath := env.store.GetDeploymentPath(site.ID, deployID)
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<html>Test</html>"), 0644)
+	_ = os.MkdirAll(deployPath, 0755)
+	_ = os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<html>Test</html>"), 0644)
 
 	// Try to set denied headers
 	headers := "/*\n  Set-Cookie: evil=true\n  Host: evil.com\n"
-	os.WriteFile(filepath.Join(deployPath, "_headers"), []byte(headers), 0644)
+	_ = os.WriteFile(filepath.Join(deployPath, "_headers"), []byte(headers), 0644)
 
 	req := httptest.NewRequest(http.MethodGet, "/index.html", nil)
 	req.Host = "mysite." + env.domain
@@ -382,8 +383,8 @@ func TestStaticSiteHandler_LocalhostDevelopment(t *testing.T) {
 	})
 
 	deployPath := env.store.GetDeploymentPath(site.ID, deployID)
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<html>Local</html>"), 0644)
+	_ = os.MkdirAll(deployPath, 0755)
+	_ = os.WriteFile(filepath.Join(deployPath, "index.html"), []byte("<html>Local</html>"), 0644)
 
 	// Test *.localhost pattern for development
 	req := httptest.NewRequest(http.MethodGet, "/", nil)

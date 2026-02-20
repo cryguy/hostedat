@@ -65,7 +65,7 @@ func TestAuthMiddleware_RevokedJWT(t *testing.T) {
 	_, token := env.createTestUser(t, "revoked@test.com", "password123", "user")
 
 	claims, _ := auth.ValidateToken(token, env.jwtSecret)
-	RevokeToken(env.db, token, claims.ExpiresAt.Time)
+	_ = RevokeToken(env.db, token, claims.ExpiresAt.Time)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
 	req.Header.Set("Authorization", "Bearer "+token)

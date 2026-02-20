@@ -56,7 +56,7 @@ func TestErrorJSON_DifferentStatusCodes(t *testing.T) {
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
 
-			errorJSON(c, tt.statusCode, tt.message)
+			_ = errorJSON(c, tt.statusCode, tt.message)
 
 			if rec.Code != tt.statusCode {
 				t.Errorf("status = %d, want %d", rec.Code, tt.statusCode)
@@ -145,7 +145,7 @@ func TestCustomErrorHandler_ResponseAlreadyCommitted(t *testing.T) {
 	e.GET("/test", func(c echo.Context) error {
 		// Commit the response first
 		c.Response().WriteHeader(http.StatusOK)
-		c.Response().Write([]byte("already sent"))
+		_, _ = c.Response().Write([]byte("already sent"))
 		// Then return an error (should be ignored)
 		return errors.New("too late")
 	})

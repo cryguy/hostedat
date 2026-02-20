@@ -318,10 +318,10 @@ func TestMigrateDeployPaths_MultipleSites(t *testing.T) {
 	// Create old paths for both sites
 	oldPath1 := filepath.Join(store.BasePath, s1.ID, "1")
 	oldPath2 := filepath.Join(store.BasePath, s2.ID, "1")
-	os.MkdirAll(oldPath1, 0755)
-	os.MkdirAll(oldPath2, 0755)
-	os.WriteFile(filepath.Join(oldPath1, "f1.txt"), []byte("site1"), 0644)
-	os.WriteFile(filepath.Join(oldPath2, "f2.txt"), []byte("site2"), 0644)
+	_ = os.MkdirAll(oldPath1, 0755)
+	_ = os.MkdirAll(oldPath2, 0755)
+	_ = os.WriteFile(filepath.Join(oldPath1, "f1.txt"), []byte("site1"), 0644)
+	_ = os.WriteFile(filepath.Join(oldPath2, "f2.txt"), []byte("site2"), 0644)
 
 	if err := MigrateDeployPaths(db, store); err != nil {
 		t.Fatalf("MigrateDeployPaths: %v", err)
@@ -375,8 +375,8 @@ func TestMigrateDeployPaths_Idempotent(t *testing.T) {
 	db.Create(&dep)
 
 	oldPath := filepath.Join(store.BasePath, s.ID, "1")
-	os.MkdirAll(oldPath, 0755)
-	os.WriteFile(filepath.Join(oldPath, "test.txt"), []byte("data"), 0644)
+	_ = os.MkdirAll(oldPath, 0755)
+	_ = os.WriteFile(filepath.Join(oldPath, "test.txt"), []byte("data"), 0644)
 
 	// First migration
 	if err := MigrateDeployPaths(db, store); err != nil {
