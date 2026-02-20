@@ -4,86 +4,72 @@ SERVER_PKG := ./cmd/server
 CLI_PKG := ./cmd/hostedat
 DIST_DIR := dist
 
-# Build version from git
 VERSION := $(shell cat VERSION 2>/dev/null | tr -d '[:space:]' || echo dev)
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
-# Read build-time config from build.env
 -include build.env
 export
 
-# Reproducible build flags
-GOFLAGS := -trimpath
 CGO_ENABLED ?= 1
 export CGO_ENABLED
 
-# Linker flags — inject version and build config into binaries
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(GIT_COMMIT) -buildid=
 CLI_LDFLAGS := $(LDFLAGS) -X main.defaultServer=$(DEFAULT_SERVER)
 
-.PHONY: all clean frontend server cli build test
-.PHONY: build-linux build-darwin build-cli-all build-all
-.PHONY: docs docs-dev release deploy-docs full-release
+.PHONY: all build server cli frontend test test-frontend
+.PHONY: build-linux build-darwin build-cli-windows
+.PHONY: docs docs-dev clean
 
-# Default: build frontend + server + cli for current platform
+# ── Local development ──────────────────────────────────────────────
+
 all: frontend server cli
-
-# Frontend (auto-installs deps if node_modules is missing or stale)
-web/node_modules: web/package-lock.json
-	cd web && npm ci
 
 frontend: web/node_modules
 	cd web && npm run build
 
-# Server binary (current platform)
 server: frontend
 	CGO_ENABLED=$(CGO_ENABLED) go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY_NAME) $(SERVER_PKG)
 
-# CLI binary (current platform)
 cli:
 	CGO_ENABLED=$(CGO_ENABLED) go build -trimpath -ldflags "$(CLI_LDFLAGS)" -o bin/$(CLI_NAME) $(CLI_PKG)
 
-# Just the Go builds without rebuilding frontend
 build:
 	CGO_ENABLED=$(CGO_ENABLED) go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY_NAME) $(SERVER_PKG)
 	CGO_ENABLED=$(CGO_ENABLED) go build -trimpath -ldflags "$(CLI_LDFLAGS)" -o bin/$(CLI_NAME) $(CLI_PKG)
 
-# Tests (CGO required for v8go worker tests)
 test:
 	CGO_ENABLED=1 go test ./...
 
 test-frontend: web/node_modules
 	cd web && npx tsc --noEmit
 
-# Cross-compilation targets (server requires CGO_ENABLED=1 for v8go, CLI does not)
+web/node_modules: web/package-lock.json
+	cd web && npm ci
+
+# ── Cross-compilation (used by CI, see .github/workflows/release.yml) ──
+
+# Linux ARM64 requires: apt install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 build-linux: frontend
 	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-linux-amd64 $(SERVER_PKG)
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(CLI_LDFLAGS)" -o $(DIST_DIR)/$(CLI_NAME)-linux-amd64 $(CLI_PKG)
-	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-linux-arm64 $(SERVER_PKG)
+	CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-linux-arm64 $(SERVER_PKG)
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(CLI_LDFLAGS)" -o $(DIST_DIR)/$(CLI_NAME)-linux-arm64 $(CLI_PKG)
 
+# Requires macOS with Xcode toolchain. Produces universal (amd64+arm64) binaries via lipo.
 build-darwin: frontend
-	CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-darwin-amd64 $(SERVER_PKG)
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$(CLI_LDFLAGS)" -o $(DIST_DIR)/$(CLI_NAME)-darwin-amd64 $(CLI_PKG)
-	CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/$(BINARY_NAME)-darwin-arm64 $(SERVER_PKG)
-	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$(CLI_LDFLAGS)" -o $(DIST_DIR)/$(CLI_NAME)-darwin-arm64 $(CLI_PKG)
+	CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/.server-amd64 $(SERVER_PKG)
+	CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/.server-arm64 $(SERVER_PKG)
+	lipo -create -output $(DIST_DIR)/$(BINARY_NAME)-darwin-universal $(DIST_DIR)/.server-amd64 $(DIST_DIR)/.server-arm64
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$(CLI_LDFLAGS)" -o $(DIST_DIR)/.cli-amd64 $(CLI_PKG)
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$(CLI_LDFLAGS)" -o $(DIST_DIR)/.cli-arm64 $(CLI_PKG)
+	lipo -create -output $(DIST_DIR)/$(CLI_NAME)-darwin-universal $(DIST_DIR)/.cli-amd64 $(DIST_DIR)/.cli-arm64
+	rm -f $(DIST_DIR)/.server-* $(DIST_DIR)/.cli-*
 
-# CLI-only targets (no v8go dependency, pure Go)
-build-cli-all: frontend
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(CLI_LDFLAGS)" -o $(DIST_DIR)/$(CLI_NAME)-linux-amd64 $(CLI_PKG)
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(CLI_LDFLAGS)" -o $(DIST_DIR)/$(CLI_NAME)-linux-arm64 $(CLI_PKG)
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$(CLI_LDFLAGS)" -o $(DIST_DIR)/$(CLI_NAME)-darwin-amd64 $(CLI_PKG)
-	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$(CLI_LDFLAGS)" -o $(DIST_DIR)/$(CLI_NAME)-darwin-arm64 $(CLI_PKG)
+build-cli-windows:
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(CLI_LDFLAGS)" -o $(DIST_DIR)/$(CLI_NAME)-windows-amd64.exe $(CLI_PKG)
 	CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags "$(CLI_LDFLAGS)" -o $(DIST_DIR)/$(CLI_NAME)-windows-arm64.exe $(CLI_PKG)
 
-# Build server for all supported platforms (linux + darwin, requires CGO)
-# and CLI for all platforms (pure Go, includes Windows)
-build-all: build-linux build-darwin build-cli-all
-
-# Documentation site (auto-installs deps if node_modules is missing or stale)
-docs/node_modules: docs/package-lock.json
-	cd docs && npm ci
+# ── Docs ───────────────────────────────────────────────────────────
 
 docs: docs/node_modules
 	cd docs && npm run build
@@ -91,19 +77,10 @@ docs: docs/node_modules
 docs-dev: docs/node_modules
 	cd docs && npm run dev
 
-# Full release: cross-compile + checksums + docs
-release:
-	bash scripts/build-release.sh
+docs/node_modules: docs/package-lock.json
+	cd docs && npm ci
 
-# Upload binaries to S3 bucket via hostedat CLI (reads credentials from deploy.env)
-upload-downloads:
-	set -a && . ./deploy.env && set +a && bash scripts/build-release.sh --skip-build --skip-docs
-
-# Deploy docs site to hostedat (reads credentials from deploy.env)
-deploy-docs:
-	set -a && . ./deploy.env && set +a && bin/$(CLI_NAME) deploy $(DOCS_SITE) docs/dist
-
-full-release: release deploy-docs
+# ── Cleanup ────────────────────────────────────────────────────────
 
 clean:
 	rm -rf bin/ $(DIST_DIR)/ web/dist/ web/node_modules/ docs/dist/ docs/node_modules/

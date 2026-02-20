@@ -36,11 +36,8 @@ chmod +x hostedat-server`}
     </div>
     <div class="platform-panel" data-platform="macos">
       <CodeBlock
-        code={`# Apple Silicon (M1+)
-curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-server-darwin-arm64 -o hostedat-server
-
-# or Intel
-curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-server-darwin-amd64 -o hostedat-server
+        code={`# Universal binary (Apple Silicon + Intel)
+curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-server-darwin-universal -o hostedat-server
 
 chmod +x hostedat-server`}
         lang="bash"

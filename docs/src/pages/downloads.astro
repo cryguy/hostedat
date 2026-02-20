@@ -61,13 +61,14 @@ function osIcon(os: string): string {
 const cliFiles = manifest?.files.filter(f => f.type === 'cli') || [];
 const serverFiles = manifest?.files.filter(f => f.type === 'server') || [];
 
-// Sort: linux first, then darwin, then windows; amd64 before arm64
+// Sort: linux first, then darwin, then windows; amd64 before arm64, universal last per OS
 const osOrder = ['linux', 'darwin', 'windows'];
+const archOrder = ['amd64', 'arm64', 'universal'];
 const sortFiles = (files: DownloadFile[]) =>
   [...files].sort((a, b) => {
     const osDiff = osOrder.indexOf(a.os) - osOrder.indexOf(b.os);
     if (osDiff !== 0) return osDiff;
-    return a.arch === 'amd64' ? -1 : 1;
+    return archOrder.indexOf(a.arch) - archOrder.indexOf(b.arch);
   });
 ---
 
@@ -262,11 +263,8 @@ const sortFiles = (files: DownloadFile[]) =>
             </div>
             <div class="platform-panel rounded-b-xl border border-t-0 border-zinc-800/60 bg-zinc-900/30" data-platform="macos">
               <div class="p-5">
-                <pre class="text-sm font-mono text-zinc-400 leading-relaxed overflow-x-auto"><code><span class="text-zinc-600"># Apple Silicon (M1+)</span>
-<span class="text-emerald-400">curl</span> -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-darwin-arm64 -o hostedat
-
-<span class="text-zinc-600"># or Intel</span>
-<span class="text-emerald-400">curl</span> -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-darwin-amd64 -o hostedat
+                <pre class="text-sm font-mono text-zinc-400 leading-relaxed overflow-x-auto"><code><span class="text-zinc-600"># Universal binary (Apple Silicon + Intel)</span>
+<span class="text-emerald-400">curl</span> -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-darwin-universal -o hostedat
 
 <span class="text-emerald-400">chmod</span> +x hostedat
 <span class="text-emerald-400">sudo</span> mv hostedat /usr/local/bin/
@@ -298,7 +296,7 @@ const sortFiles = (files: DownloadFile[]) =>
 <span class="text-emerald-400">sha256sum</span> hostedat-linux-amd64
 
 <span class="text-zinc-600"># macOS</span>
-<span class="text-emerald-400">shasum</span> -a 256 hostedat-darwin-arm64
+<span class="text-emerald-400">shasum</span> -a 256 hostedat-darwin-universal
 
 <span class="text-zinc-600"># Windows (PowerShell)</span>
 <span class="text-emerald-400">Get-FileHash</span> hostedat-windows-amd64.exe -Algorithm SHA256</code></pre>

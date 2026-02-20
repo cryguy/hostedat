@@ -12,7 +12,7 @@ Download the binary for your platform from the releases page:
 https://docs.example.com/downloads/hostedat-{os}-{arch}
 ```
 
-Where `{os}` is one of `linux`, `darwin`, `windows` and `{arch}` is one of `amd64`, `arm64`.
+Where `{os}` is one of `linux`, `darwin`, `windows` and `{arch}` is one of `amd64`, `arm64`, or `universal` (macOS only).
 
 After downloading, make the binary executable (Linux/macOS) and place it on your `PATH`.
 

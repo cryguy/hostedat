@@ -1,0 +1,187 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version override (e.g., 2.0.0)'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-darwin:
+    runs-on: self-hosted-macos
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build Darwin universal binaries
+        run: make build-darwin
+
+      - name: Verify universal binaries
+        run: |
+          file dist/hostedat-server-darwin-universal
+          file dist/hostedat-darwin-universal
+          lipo -info dist/hostedat-server-darwin-universal
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-darwin
+          path: dist/*
+
+  release:
+    needs: build-darwin
+    runs-on: self-hosted-linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Ensure ARM64 cross-compiler
+        run: |
+          if ! command -v aarch64-linux-gnu-gcc &>/dev/null; then
+            sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          fi
+
+      - name: Download Darwin binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-darwin
+          path: dist
+
+      - name: Build Linux binaries
+        run: make build-linux
+
+      - name: Build Windows CLI
+        run: make build-cli-windows
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > checksums-sha256.txt
+          cat checksums-sha256.txt
+
+      - name: Generate downloads manifest
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          DATE=$(git log -1 --format=%cd --date=short 2>/dev/null || date -u +%Y-%m-%d)
+          MANIFEST="docs/public/downloads.json"
+          mkdir -p docs/public
+
+          echo '{' > "$MANIFEST"
+          echo "  \"version\": \"$VERSION\"," >> "$MANIFEST"
+          echo "  \"date\": \"$DATE\"," >> "$MANIFEST"
+          echo '  "files": [' >> "$MANIFEST"
+
+          first=true
+          for binary in dist/*; do
+            filename=$(basename "$binary")
+            case "$filename" in checksums-*) continue ;; esac
+
+            os=""
+            case "$filename" in
+              *-linux-*)  os="linux" ;;
+              *-darwin-*) os="darwin" ;;
+              *-windows-*) os="windows" ;;
+            esac
+
+            arch=""
+            case "$filename" in
+              *-universal*) arch="universal" ;;
+              *-amd64*) arch="amd64" ;;
+              *-arm64*) arch="arm64" ;;
+            esac
+
+            type=""
+            case "$filename" in
+              hostedat-server*) type="server" ;;
+              hostedat-*)       type="cli" ;;
+            esac
+
+            [ -z "$os" ] || [ -z "$arch" ] || [ -z "$type" ] && continue
+
+            size=$(wc -c < "$binary" | tr -d ' ')
+            sha256=$(sha256sum "$binary" | awk '{print $1}')
+
+            if [ "$first" = true ]; then first=false; else echo '    ,' >> "$MANIFEST"; fi
+            cat >> "$MANIFEST" <<ENTRY
+              {
+                "name": "$filename",
+                "os": "$os",
+                "arch": "$arch",
+                "type": "$type",
+                "size": $size,
+                "sha256": "$sha256"
+              }
+          ENTRY
+            echo "  $filename ($type, $os/$arch, ${size} bytes)"
+          done
+
+          echo '  ]' >> "$MANIFEST"
+          echo '}' >> "$MANIFEST"
+          echo "==> Manifest written: $VERSION ($DATE)"
+          cat "$MANIFEST"
+
+      - name: Upload binaries to hostedat bucket
+        env:
+          HOSTEDAT_SERVER: ${{ secrets.HOSTEDAT_SERVER }}
+          HOSTEDAT_API_KEY: ${{ secrets.HOSTEDAT_API_KEY }}
+          DOCS_SITE: ${{ secrets.DOCS_SITE }}
+          DOWNLOADS_BUCKET: ${{ secrets.DOWNLOADS_BUCKET }}
+        run: |
+          CLI="dist/hostedat-linux-amd64"
+          chmod +x "$CLI"
+
+          for binary in dist/*; do
+            filename=$(basename "$binary")
+            case "$filename" in checksums-*) continue ;; esac
+            echo "  Uploading $filename..."
+            "$CLI" storage upload "$DOCS_SITE" "$DOWNLOADS_BUCKET" "$binary" --key "$filename" \
+              --server "$HOSTEDAT_SERVER"
+          done
+          echo "==> All binaries uploaded to bucket: $DOWNLOADS_BUCKET"
+
+      - name: Build and deploy docs site
+        env:
+          HOSTEDAT_SERVER: ${{ secrets.HOSTEDAT_SERVER }}
+          HOSTEDAT_API_KEY: ${{ secrets.HOSTEDAT_API_KEY }}
+          DOCS_SITE: ${{ secrets.DOCS_SITE }}
+        run: |
+          cd docs && npm ci && npm run build && cd ..
+          CLI="dist/hostedat-linux-amd64"
+          "$CLI" deploy "$DOCS_SITE" docs/dist --server "$HOSTEDAT_SERVER"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: v${{ steps.version.outputs.version }}
+          files: dist/*
+          generate_release_notes: true

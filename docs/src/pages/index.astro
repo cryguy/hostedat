@@ -184,7 +184,7 @@ import CodeBlock from '../components/CodeBlock.astro';
           </div>
           <div class="platform-panel" data-platform="macos">
             <CodeBlock
-              code={`# Apple Silicon (M1+)\ncurl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-darwin-arm64 -o hostedat\n\n# or Intel\ncurl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-darwin-amd64 -o hostedat\n\nchmod +x hostedat\nsudo mv hostedat /usr/local/bin/`}
+              code={`# Universal binary (Apple Silicon + Intel)\ncurl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-darwin-universal -o hostedat\n\nchmod +x hostedat\nsudo mv hostedat /usr/local/bin/`}
               lang="bash"
             />
           </div>
