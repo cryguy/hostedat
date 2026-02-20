@@ -329,7 +329,7 @@ const key = await crypto.subtle.importKey(
 
 Supported formats: `"raw"`, `"jwk"`. For RSA keys: `"jwk"`, `"spki"` (public), `"pkcs8"` (private). For Ed25519: `"raw"`, `"jwk"`.
 
-Supported algorithms for import: `HMAC`, `AES-GCM`, `AES-CBC`, `ECDSA` (P-256, P-384), `RSASSA-PKCS1-v1_5`, `RSA-PSS`, `RSA-OAEP`, `Ed25519`.
+Supported algorithms for import: `HMAC`, `AES-GCM`, `AES-CBC`, `AES-CTR`, `AES-KW`, `ECDSA` (P-256, P-384), `ECDH` (P-256, P-384, P-521), `X25519`, `RSASSA-PKCS1-v1_5`, `RSA-PSS`, `RSA-OAEP`, `Ed25519`.
 
 Returns `Promise<CryptoKey>`.
 
@@ -395,11 +395,11 @@ const plaintext = await crypto.subtle.decrypt(
 );
 ```
 
-Supported algorithms: `AES-GCM` (iv must be 12 bytes), `AES-CBC` (iv must be 16 bytes), `RSA-OAEP`.
+Supported algorithms: `AES-GCM` (iv must be 12 bytes), `AES-CBC` (iv must be 16 bytes), `AES-CTR` (counter must be 16 bytes), `RSA-OAEP`.
 
 Returns `Promise<ArrayBuffer>`.
 
-**Difference from Cloudflare:** Most common algorithms are supported (HMAC, ECDSA, RSA, Ed25519, AES-GCM, AES-CBC, RSA-OAEP). ECDH is not available.
+**Difference from Cloudflare:** Most common algorithms are supported (HMAC, ECDSA, ECDH, X25519, RSA, Ed25519, AES-GCM, AES-CBC, AES-CTR, RSA-OAEP).
 
 ---
 
@@ -416,8 +416,10 @@ const keyPair = await crypto.subtle.generateKey(
 
 Supported algorithms:
 - `ECDSA` (P-256, P-384) — returns `CryptoKeyPair`
+- `ECDH` (P-256, P-384, P-521) — returns `CryptoKeyPair`
+- `X25519` — returns `CryptoKeyPair`
 - `HMAC` (with hash) — returns `CryptoKey`
-- `AES-GCM`, `AES-CBC` (with length: 128, 256) — returns `CryptoKey`
+- `AES-GCM`, `AES-CBC`, `AES-CTR`, `AES-KW` (with length: 128, 192, 256) — returns `CryptoKey`
 - `RSASSA-PKCS1-v1_5`, `RSA-PSS`, `RSA-OAEP` (with modulusLength, publicExponent, hash) — returns `CryptoKeyPair`
 - `Ed25519` — returns `CryptoKeyPair`
 
@@ -441,7 +443,7 @@ const derived = await crypto.subtle.deriveBits(
 );
 ```
 
-Supported algorithms: `HKDF` (with hash, salt, info), `PBKDF2` (with hash, salt, iterations).
+Supported algorithms: `HKDF` (with hash, salt, info), `PBKDF2` (with hash, salt, iterations), `ECDH` (with public key), `X25519` (with public key).
 
 `deriveBits` returns `Promise<ArrayBuffer>`. `deriveKey` returns `Promise<CryptoKey>` with the derived key imported for the specified target algorithm.
 
@@ -462,7 +464,147 @@ const unwrapped = await crypto.subtle.unwrapKey(
 );
 ```
 
-Wraps/unwraps a key for secure transport. Combines `exportKey` + `encrypt` (wrap) or `decrypt` + `importKey` (unwrap).
+Wraps/unwraps a key for secure transport. Combines `exportKey` + `encrypt` (wrap) or `decrypt` + `importKey` (unwrap). Supported wrap algorithms: `AES-GCM`, `AES-KW` (RFC 3394).
+
+---
+
+### ECDH / X25519 Key Agreement
+
+Elliptic-curve Diffie-Hellman key agreement is fully supported for `ECDH` (P-256, P-384, P-521) and `X25519`.
+
+```js
+// ECDH key agreement
+const aliceKeys = await crypto.subtle.generateKey(
+  { name: "ECDH", namedCurve: "P-256" },
+  true,
+  ["deriveBits", "deriveKey"]
+);
+const bobKeys = await crypto.subtle.generateKey(
+  { name: "ECDH", namedCurve: "P-256" },
+  true,
+  ["deriveBits", "deriveKey"]
+);
+
+// Derive shared secret
+const sharedBits = await crypto.subtle.deriveBits(
+  { name: "ECDH", public: bobKeys.publicKey },
+  aliceKeys.privateKey,
+  256
+);
+
+// Or derive an AES key directly
+const aesKey = await crypto.subtle.deriveKey(
+  { name: "ECDH", public: bobKeys.publicKey },
+  aliceKeys.privateKey,
+  { name: "AES-GCM", length: 256 },
+  false,
+  ["encrypt", "decrypt"]
+);
+```
+
+```js
+// X25519 key agreement
+const aliceKeys = await crypto.subtle.generateKey(
+  { name: "X25519" },
+  true,
+  ["deriveBits", "deriveKey"]
+);
+const bobKeys = await crypto.subtle.generateKey(
+  { name: "X25519" },
+  true,
+  ["deriveBits", "deriveKey"]
+);
+
+const sharedSecret = await crypto.subtle.deriveBits(
+  { name: "X25519", public: bobKeys.publicKey },
+  aliceKeys.privateKey,
+  256
+);
+```
+
+| Feature | Details |
+|---------|---------|
+| ECDH curves | P-256, P-384, P-521 |
+| X25519 | 32-byte keys, Curve25519 |
+| Import formats | `raw` (public), `jwk` (ECDH only) |
+| Export formats | `raw`, `jwk` (ECDH only) |
+| Operations | `generateKey`, `deriveBits`, `deriveKey`, `importKey`, `exportKey` |
+
+**Difference from Cloudflare:** Fully compatible. Both P-curve ECDH and X25519 are supported.
+
+---
+
+### AES-CTR
+
+Counter-mode symmetric encryption. The counter must be exactly 16 bytes.
+
+```js
+const key = await crypto.subtle.generateKey(
+  { name: "AES-CTR", length: 256 },
+  true,
+  ["encrypt", "decrypt"]
+);
+
+const counter = crypto.getRandomValues(new Uint8Array(16));
+const ciphertext = await crypto.subtle.encrypt(
+  { name: "AES-CTR", counter, length: 64 },
+  key,
+  new TextEncoder().encode("Hello")
+);
+```
+
+---
+
+### AES-KW (Key Wrapping)
+
+RFC 3394 AES Key Wrap for securely transporting keys. The key to wrap must be a multiple of 8 bytes and at least 16 bytes.
+
+```js
+const wrappingKey = await crypto.subtle.generateKey(
+  { name: "AES-KW", length: 256 },
+  true,
+  ["wrapKey", "unwrapKey"]
+);
+
+const keyToWrap = await crypto.subtle.generateKey(
+  { name: "AES-GCM", length: 256 },
+  true,
+  ["encrypt", "decrypt"]
+);
+
+// Wrap
+const wrapped = await crypto.subtle.wrapKey("raw", keyToWrap, wrappingKey, { name: "AES-KW" });
+
+// Unwrap
+const unwrapped = await crypto.subtle.unwrapKey(
+  "raw", wrapped, wrappingKey,
+  { name: "AES-KW" },
+  { name: "AES-GCM" },
+  true, ["encrypt", "decrypt"]
+);
+```
+
+---
+
+### `crypto.DigestStream`
+
+A `WritableStream` that computes a hash digest as data is written to it. Cloudflare Workers-compatible.
+
+```js
+const ds = new crypto.DigestStream("SHA-256");
+const writer = ds.writable.getWriter();
+await writer.write(new TextEncoder().encode("hello "));
+await writer.write(new TextEncoder().encode("world"));
+await writer.close();
+
+const digest = await ds.digest; // ArrayBuffer
+const hex = Array.from(new Uint8Array(digest))
+  .map(b => b.toString(16).padStart(2, "0")).join("");
+```
+
+Supported algorithms: `SHA-1`, `SHA-256`, `SHA-384`, `SHA-512`.
+
+**Difference from Cloudflare:** Fully compatible. Available as both `crypto.DigestStream` and the global `DigestStream`.
 
 ---
 
@@ -648,7 +790,11 @@ const decompressed = compressedStream
   .pipeThrough(new DecompressionStream("gzip"));
 ```
 
-Supported formats: `"gzip"`, `"deflate"`, `"deflate-raw"`.
+Supported formats: `"gzip"`, `"deflate"`, `"deflate-raw"`, `"br"` (Brotli).
+
+Go-backed streaming compression using real compressor/decompressor goroutines. Each chunk is processed incrementally rather than buffered to completion.
+
+**Difference from Cloudflare:** Fully compatible. Brotli (`"br"`) is additionally supported beyond the standard Web API formats.
 
 ---
 
@@ -828,6 +974,436 @@ export default {
 
 ---
 
+### D1 Database
+
+D1 bindings provide a Cloudflare Workers-compatible SQL database API backed by isolated per-binding SQLite databases (WAL mode enabled).
+
+```js
+// D1 bindings are configured via the API and appear as env properties.
+const stmt = env.MY_DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId);
+const { results } = await stmt.all();
+
+// Insert with bindings
+await env.MY_DB.prepare("INSERT INTO users (name, email) VALUES (?, ?)")
+  .bind("Alice", "alice@example.com")
+  .run();
+
+// Get a single row
+const user = await env.MY_DB.prepare("SELECT * FROM users WHERE id = ?")
+  .bind(1)
+  .first();
+
+// Raw rows (arrays instead of objects)
+const rows = await env.MY_DB.prepare("SELECT id, name FROM users")
+  .raw({ columnNames: true });
+
+// Batch multiple statements
+const results = await env.MY_DB.batch([
+  env.MY_DB.prepare("INSERT INTO users (name) VALUES (?)").bind("Bob"),
+  env.MY_DB.prepare("INSERT INTO users (name) VALUES (?)").bind("Carol"),
+]);
+
+// Execute raw SQL (multiple semicolon-separated statements)
+await env.MY_DB.exec("CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, msg TEXT)");
+```
+
+**D1 PreparedStatement API:**
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `bind` | `(...values) => D1PreparedStatement` | New statement with bound parameters |
+| `all` | `() => Promise<{ results, success, meta }>` | All rows as objects |
+| `first` | `(column?) => Promise<object \| value \| null>` | First row or column value |
+| `raw` | `(opts?) => Promise<any[][]>` | Rows as arrays |
+| `run` | `() => Promise<{ success, meta }>` | Execute without returning rows |
+
+**D1 Meta:**
+
+```js
+// meta shape:
+{ changed_db: boolean, changes: number, last_row_id: number, rows_read: number, rows_written: number }
+```
+
+**Difference from Cloudflare D1:** Backed by a local SQLite database file per binding (`{dataDir}/d1/{databaseID}.sqlite3`), not Cloudflare's distributed SQLite. `dump()` is not supported.
+
+---
+
+### Durable Objects
+
+Durable Objects provide globally unique, persistent storage objects. Each object has a unique ID and transactional key-value storage.
+
+```js
+// Get a Durable Object namespace from env
+const id = env.MY_DO.idFromName("my-object");
+const stub = env.MY_DO.get(id);
+
+// Storage operations (on the stub)
+await stub.storage.put("counter", 42);
+const value = await stub.storage.get("counter"); // 42
+
+// Bulk operations
+await stub.storage.put({ key1: "val1", key2: "val2" });
+const map = await stub.storage.get(["key1", "key2"]); // Map { "key1" => "val1", ... }
+
+// List with options
+const entries = await stub.storage.list({ prefix: "user:", limit: 10, reverse: false });
+
+// Delete
+await stub.storage.delete("counter"); // true
+await stub.storage.delete(["key1", "key2"]); // count
+await stub.storage.deleteAll();
+```
+
+**DurableObjectNamespace API:**
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `idFromName` | `(name: string) => DurableObjectId` | Deterministic ID from name |
+| `idFromString` | `(hex: string) => DurableObjectId` | ID from hex string |
+| `newUniqueId` | `() => DurableObjectId` | Random unique ID |
+| `get` | `(id: DurableObjectId) => DurableObjectStub` | Get stub for the object |
+
+**DurableObjectStorage API:**
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `get` | `(key: string) => Promise<any \| null>` | Single value |
+| `get` | `(keys: string[]) => Promise<Map>` | Multiple values |
+| `put` | `(key: string, value: any) => Promise<void>` | Store single value |
+| `put` | `(entries: object) => Promise<void>` | Store multiple values |
+| `delete` | `(key: string) => Promise<boolean>` | Delete single key |
+| `delete` | `(keys: string[]) => Promise<number>` | Delete multiple keys |
+| `deleteAll` | `() => Promise<void>` | Delete all entries |
+| `list` | `(opts?) => Promise<Map>` | List entries (prefix, limit, reverse) |
+
+**Difference from Cloudflare:** Storage is backed by the application database (GORM/SQLite), not a globally distributed coordination layer. `stub.fetch()` returns a placeholder response. Real Durable Object class instantiation and alarm scheduling are not yet implemented.
+
+---
+
+### Cache API
+
+A Cloudflare Workers-compatible Cache API for storing and retrieving HTTP responses.
+
+```js
+// Use the default cache
+const cache = caches.default;
+
+// Or open a named cache
+const myCache = await caches.open("my-cache");
+
+// Store a response (TTL from Cache-Control: max-age)
+const response = new Response("cached data", {
+  headers: { "Cache-Control": "max-age=3600" },
+});
+await cache.put("https://example.com/data", response);
+
+// Retrieve a cached response
+const cached = await cache.match("https://example.com/data");
+if (cached) {
+  const text = await cached.text();
+}
+
+// Delete from cache
+const deleted = await cache.delete("https://example.com/data"); // true/false
+```
+
+**Cache API:**
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `match` | `(request: string \| Request) => Promise<Response \| undefined>` | Cached response or undefined |
+| `put` | `(request: string \| Request, response: Response) => Promise<void>` | Store response |
+| `delete` | `(request: string \| Request) => Promise<boolean>` | Delete entry |
+
+**CacheStorage:**
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `open` | `(name: string) => Promise<Cache>` | Open a named cache |
+| `default` | `Cache` | The default cache instance |
+
+**Difference from Cloudflare:** Cache is backed by the application database, not Cloudflare's edge cache. Expired entries (based on `Cache-Control: max-age`) are cleaned up on read.
+
+---
+
+### Queues
+
+Queue bindings allow workers to send messages to named queues for asynchronous processing.
+
+```js
+// Send a single message
+await env.MY_QUEUE.send({ action: "process", id: 123 });
+
+// Send with content type
+await env.MY_QUEUE.send("raw text", { contentType: "text" });
+
+// Send a batch of messages
+await env.MY_QUEUE.sendBatch([
+  { body: JSON.stringify({ id: 1 }), contentType: "json" },
+  { body: JSON.stringify({ id: 2 }), contentType: "json" },
+]);
+```
+
+**Queue API:**
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `send` | `(body: any, options?: { contentType?: string }) => Promise<void>` | Send single message |
+| `sendBatch` | `(messages: { body, contentType? }[]) => Promise<void>` | Send batch |
+
+**Difference from Cloudflare:** Messages are stored in the application database (SQLite). Queue consumers and pull-based consumption are managed server-side, not via a `queue()` handler in the worker.
+
+---
+
+### Service Bindings
+
+Service bindings allow one worker to call another worker's `fetch` handler directly, without going through HTTP.
+
+```js
+// Call another worker via service binding
+const response = await env.AUTH_SERVICE.fetch("https://auth/verify", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ token: "..." }),
+});
+const result = await response.json();
+```
+
+**Service Binding API:**
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `fetch` | `(url: string \| Request, init?: RequestInit) => Promise<Response>` | Response from target worker |
+
+**Difference from Cloudflare:** Calls are routed through the worker engine on the same server. No edge network routing or zone-based binding configuration.
+
+---
+
+### TCP Sockets (`connect()`)
+
+The `connect()` global creates outbound TCP connections, compatible with the Cloudflare Workers TCP Socket API.
+
+```js
+const socket = connect("example.com:8080");
+
+// Or with options
+const socket = connect({ hostname: "example.com", port: 443 }, {
+  secureTransport: "on",  // "on" for TLS, "off" for plain TCP
+  allowHalfOpen: false,
+});
+
+// Read from the socket
+const reader = socket.readable.getReader();
+const { value, done } = await reader.read();
+
+// Write to the socket
+const writer = socket.writable.getWriter();
+await writer.write(new TextEncoder().encode("GET / HTTP/1.0\r\n\r\n"));
+
+// Upgrade to TLS (STARTTLS)
+const tlsSocket = socket.startTls();
+
+// Close
+await socket.close();
+
+// Wait for close
+await socket.closed;
+```
+
+**Socket properties:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `readable` | `ReadableStream` | Read data from the socket |
+| `writable` | `WritableStream` | Write data to the socket |
+| `closed` | `Promise<void>` | Resolves when the socket closes |
+| `opened` | `Promise<{ remoteAddress, localAddress }>` | Resolves when connected |
+| `close()` | `() => Promise<void>` | Close the socket |
+| `startTls()` | `() => Socket` | Upgrade to TLS (returns new socket) |
+
+**SSRF protection:** Connections to private/loopback IP addresses (127.x.x.x, 10.x.x.x, 172.16-31.x.x, 192.168.x.x, localhost) are blocked.
+
+**Difference from Cloudflare:** Compatible API. Connections are made from the server process directly. No Cloudflare Spectrum or regional restrictions.
+
+---
+
+### EventSource (Server-Sent Events)
+
+`EventSource` provides client-side SSE support for workers to consume server-sent event streams.
+
+```js
+const es = new EventSource("https://api.example.com/events");
+
+es.onopen = () => console.log("Connected");
+
+es.onmessage = (event) => {
+  console.log("Message:", event.data);
+};
+
+es.addEventListener("custom-event", (event) => {
+  console.log("Custom:", event.data, event.lastEventId);
+});
+
+es.onerror = (event) => {
+  console.error("Error:", event.message);
+  es.close();
+};
+
+// Close the connection
+es.close();
+```
+
+**EventSource properties:**
+
+| Property/Method | Type | Description |
+|-----------------|------|-------------|
+| `url` | `string` | The SSE endpoint URL |
+| `readyState` | `number` | `0` (CONNECTING), `1` (OPEN), `2` (CLOSED) |
+| `withCredentials` | `boolean` | Credentials flag |
+| `onopen` | `EventHandler` | Fired on connection open |
+| `onmessage` | `EventHandler` | Fired on `message` events |
+| `onerror` | `EventHandler` | Fired on errors |
+| `close()` | `() => void` | Close the connection |
+
+**SSRF protection:** Connections to private IP addresses are blocked.
+
+**Difference from Cloudflare:** Cloudflare Workers do not provide a built-in `EventSource` class. This is an extension.
+
+---
+
+### URLPattern
+
+`URLPattern` provides URL pattern matching, compatible with the URLPattern Web API.
+
+```js
+const pattern = new URLPattern({ pathname: "/users/:id" });
+
+// Test if a URL matches
+pattern.test("https://example.com/users/123"); // true
+pattern.test("https://example.com/posts/123"); // false
+
+// Extract matched groups
+const result = pattern.exec("https://example.com/users/123");
+// result.pathname.groups.id === "123"
+```
+
+**Constructor forms:**
+
+```js
+// Object with individual components
+new URLPattern({ protocol: "https", hostname: "*.example.com", pathname: "/api/*" });
+
+// String pattern with base URL
+new URLPattern("/users/:id", "https://example.com");
+
+// Full URL string pattern
+new URLPattern("https://example.com/users/:id");
+```
+
+**URLPattern API:**
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `test` | `(input: string \| URL \| object, baseURL?: string) => boolean` | Whether the input matches |
+| `exec` | `(input: string \| URL \| object, baseURL?: string) => URLPatternResult \| null` | Match result or null |
+
+**Difference from Cloudflare:** Compatible API. Supports `:param` named groups and `*` wildcards. Does not support the full URLPattern regex syntax.
+
+---
+
+### TextEncoderStream / TextDecoderStream
+
+Streaming text encoding/decoding as `TransformStream` subclasses.
+
+```js
+// Encode string chunks to UTF-8 bytes
+const encoder = new TextEncoderStream();
+const writer = encoder.writable.getWriter();
+const reader = encoder.readable.getReader();
+writer.write("Hello world");
+const { value } = await reader.read(); // Uint8Array
+
+// Decode UTF-8 bytes to string chunks
+const decoder = new TextDecoderStream();
+const dWriter = decoder.writable.getWriter();
+const dReader = decoder.readable.getReader();
+dWriter.write(new Uint8Array([72, 101, 108, 108, 111]));
+const { value: text } = await dReader.read(); // "Hello"
+```
+
+`IdentityTransformStream` is also available as a pass-through `TransformStream`.
+
+---
+
+### MessageChannel / MessagePort
+
+`MessageChannel` creates a pair of connected `MessagePort` objects for structured message passing.
+
+```js
+const channel = new MessageChannel();
+
+channel.port1.onmessage = (event) => {
+  console.log("Port 1 received:", event.data);
+};
+
+channel.port2.postMessage({ hello: "world" });
+```
+
+**MessagePort API:**
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `postMessage` | `(data: any) => void` | Send a structured-cloned message to the remote port |
+| `start` | `() => void` | Start receiving queued messages (auto-started) |
+| `close` | `() => void` | Close the port |
+
+Ports auto-start (Cloudflare Workers behavior). Messages are cloned via `structuredClone`.
+
+---
+
+### ReadableStream BYOB Reader
+
+Byte-oriented readable streams with "bring your own buffer" readers for zero-copy reading.
+
+```js
+const stream = new ReadableStream({
+  type: "bytes",
+  start(controller) {
+    controller.enqueue(new Uint8Array([1, 2, 3, 4]));
+    controller.close();
+  },
+});
+
+const reader = stream.getReader({ mode: "byob" });
+const buffer = new Uint8Array(4);
+const { value, done } = await reader.read(buffer);
+// value is a Uint8Array view into the buffer with the read data
+```
+
+Adds `ReadableStreamBYOBReader` and `ReadableByteStreamController`. Existing `ReadableStream` is monkey-patched to support `{ type: "bytes" }` underlying sources and `getReader({ mode: "byob" })`.
+
+---
+
+### Unhandled Rejection Tracking
+
+`PromiseRejectionEvent` and best-effort `unhandledrejection` event tracking.
+
+```js
+globalThis.addEventListener("unhandledrejection", (event) => {
+  console.error("Unhandled rejection:", event.reason);
+  // event.promise is the rejected promise
+});
+
+// This will fire the event:
+Promise.reject(new Error("oops"));
+```
+
+Uses microtask-based detection: if a rejected promise is not handled before the next microtask, an `unhandledrejection` event is dispatched on `globalThis`.
+
+**Difference from Cloudflare:** Compatible event shape. Detection is best-effort via microtask timing rather than V8 engine-level hooks.
+
+---
+
 ## Execution Context (`ctx`)
 
 The `ctx` object is passed to both `fetch` and `scheduled` handlers.
@@ -885,13 +1461,27 @@ Request arrives → check pool for {siteID, deployID} → checkout runtime
 |---------|-----------|---------|
 | JS engine | V8 | V8 (via v8go) |
 | Module system | ESM (native V8) | ESM (wrapped via globalThis) |
-| `crypto.subtle` algorithms | Full Web Crypto API | HMAC, ECDSA, RSA (PKCS1v15, PSS, OAEP), Ed25519, AES-GCM, AES-CBC, HKDF, PBKDF2, digest |
+| `crypto.subtle` algorithms | Full Web Crypto API | HMAC, ECDSA, ECDH, X25519, RSA (PKCS1v15, PSS, OAEP), Ed25519, AES-GCM, AES-CBC, AES-CTR, AES-KW, HKDF, PBKDF2, digest |
 | `importKey` formats | JWK, PKCS8, SPKI, raw | `raw`, `jwk`, `pkcs8`, `spki` |
+| `DigestStream` | Available | Available |
 | Timer accuracy | Wall-clock | Wall-clock (Go event loop) |
 | `waitUntil` | Extends lifetime | No-op |
 | `fetch` rate limit | Aggregate billing | Per-invocation limit (default 50) |
 | KV consistency | Eventually consistent | Strongly consistent (DB) |
 | Storage | R2 (edge-replicated) | MinIO/SeaweedFS (single node) |
+| D1 database | Distributed SQLite | Local SQLite per binding |
+| Durable Objects | Full DO runtime | Storage API only (no class instantiation/alarms) |
+| Cache API | Edge cache | Database-backed cache |
+| Queues | Queue producers + consumers | Queue producer (send/sendBatch) |
+| Service Bindings | Edge routing | Same-server worker-to-worker calls |
+| TCP Sockets (`connect()`) | Via Cloudflare network | Direct from server (SSRF-protected) |
+| EventSource | Not built-in | Available (SSE client) |
+| URLPattern | Available | Available (`:param` and `*` wildcards) |
+| CompressionStream | gzip, deflate, deflate-raw | gzip, deflate, deflate-raw, br (Brotli) |
+| TextEncoderStream / TextDecoderStream | Available | Available |
+| MessageChannel / MessagePort | Available | Available (auto-started ports) |
+| BYOB Reader | Available | Available (`ReadableStream` type: "bytes") |
+| `unhandledrejection` event | Engine-level tracking | Best-effort microtask-based tracking |
 | `structuredClone` | Full structured clone | JSON-based (no Map/Set/circular) |
 | `ReadableStream` | Fully streaming | Read-to-completion |
 | `navigator.userAgent` | `"Cloudflare-Workers"` | `"hostedat-worker/1.0"` |

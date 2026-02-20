@@ -8,6 +8,9 @@ Self-hosted static site hosting platform with server-side JavaScript workers. Up
 - **Single-command deploys** — `hostedat deploy my-site ./dist` from your terminal or CI
 - **Server-side workers** — deploy `_worker.js` for dynamic request handling (Cloudflare Workers-compatible API)
 - **KV storage** — per-site key-value namespaces accessible from workers
+- **D1 database** — per-site SQLite databases accessible from workers (Cloudflare D1-compatible API)
+- **Durable Objects** — persistent, transactional key-value storage with atomic operations
+- **Cache API** — `caches.default` and `caches.open()` for HTTP response caching
 - **Cron triggers** — schedule worker execution with standard cron expressions
 - **Netlify-compatible `_redirects`** — redirects, rewrites, and SPA fallback rules
 - **Custom `_headers`** — per-path response headers
@@ -149,13 +152,24 @@ Workers have access to standard Web APIs:
 
 - `fetch()` — outbound HTTP requests
 - `Request`, `Response`, `Headers`, `URL`, `URLSearchParams`
-- `crypto.getRandomValues()`, `crypto.subtle` (ECDSA, RSA, Ed25519, HKDF, PBKDF2, AES), `crypto.randomUUID()`
+- `URLPattern` — URL pattern matching
+- `crypto.getRandomValues()`, `crypto.subtle` (ECDSA, ECDH, X25519, RSA, Ed25519, HKDF, PBKDF2, AES), `crypto.randomUUID()`
 - `ReadableStream`, `WritableStream`, `TransformStream`
-- `CompressionStream`, `DecompressionStream` (gzip, deflate, deflate-raw)
+- `TextEncoderStream`, `TextDecoderStream`
+- `CompressionStream`, `DecompressionStream` (gzip, deflate, deflate-raw, brotli)
+- `DigestStream` — streaming hash computation
 - `FormData`, `Blob`, `File`
 - `AbortController`, `AbortSignal`
 - `WebSocket` — client WebSocket connections from workers
+- `EventSource` — Server-Sent Events (SSE) client
 - `HTMLRewriter` — streaming HTML transformation (Cloudflare-compatible API)
+- `MessageChannel`, `MessagePort` — structured message passing
+- `Cache API` — `caches.default` and `caches.open()` for HTTP response caching
+- `D1 Database` — per-site SQLite databases (Cloudflare D1-compatible)
+- `Durable Objects` — persistent, transactional key-value storage
+- `Queues` — asynchronous message queues
+- `Service Bindings` — invoke other workers directly
+- `TCP Sockets` — `connect()` for outbound TCP/TLS connections
 - `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`
 - `atob`, `btoa`
 - `structuredClone`
@@ -163,7 +177,7 @@ Workers have access to standard Web APIs:
 
 ### Environment Variables & Secrets
 
-Set environment variables and secrets via the API. They're available on the `env` object in your worker:
+Set environment variables and secrets via the API. They're available on the `env` object in your worker, alongside bindings for KV namespaces, D1 databases, Durable Objects, Queues, Service Bindings, and storage buckets:
 
 ```js
 export default {

@@ -101,15 +101,15 @@ import CodeBlock from '../../components/CodeBlock.astro';
       <strong>crypto.subtle</strong> — Web Crypto API subset:
       <ul>
         <li><code>digest(algorithm, data)</code> — SHA-1, SHA-256, SHA-384, SHA-512</li>
-        <li><code>generateKey(algorithm, extractable, usages)</code> — HMAC, AES-GCM, AES-CBC, ECDSA (P-256, P-384), RSA-OAEP, RSASSA-PKCS1-v1_5, RSA-PSS, Ed25519</li>
-        <li><code>importKey(format, keyData, algorithm, extractable, usages)</code> — Formats: <code>raw</code>, <code>jwk</code>, <code>pkcs8</code> (RSA), <code>spki</code> (RSA). Algorithms: HMAC, AES-GCM, AES-CBC, ECDSA, RSA-OAEP, RSASSA-PKCS1-v1_5, RSA-PSS, Ed25519</li>
+        <li><code>generateKey(algorithm, extractable, usages)</code> — HMAC, AES-GCM, AES-CBC, ECDSA (P-256, P-384), ECDH (P-256, P-384, P-521), X25519, RSA-OAEP, RSASSA-PKCS1-v1_5, RSA-PSS, Ed25519</li>
+        <li><code>importKey(format, keyData, algorithm, extractable, usages)</code> — Formats: <code>raw</code>, <code>jwk</code>, <code>pkcs8</code> (RSA), <code>spki</code> (RSA). Algorithms: HMAC, AES-GCM, AES-CBC, ECDSA, ECDH, X25519, RSA-OAEP, RSASSA-PKCS1-v1_5, RSA-PSS, Ed25519</li>
         <li><code>exportKey(format, key)</code> — Formats: <code>raw</code>, <code>jwk</code>, <code>pkcs8</code> (RSA), <code>spki</code> (RSA); key must be extractable</li>
         <li><code>sign(algorithm, key, data)</code> — HMAC, ECDSA, RSASSA-PKCS1-v1_5, RSA-PSS, Ed25519</li>
         <li><code>verify(algorithm, key, signature, data)</code> — HMAC, ECDSA, RSASSA-PKCS1-v1_5, RSA-PSS, Ed25519</li>
         <li><code>encrypt(algorithm, key, data)</code> — AES-GCM (12-byte IV), AES-CBC (16-byte IV), RSA-OAEP</li>
         <li><code>decrypt(algorithm, key, data)</code> — AES-GCM (12-byte IV), AES-CBC (16-byte IV), RSA-OAEP</li>
-        <li><code>deriveBits(algorithm, baseKey, length)</code> — HKDF, PBKDF2</li>
-        <li><code>deriveKey(algorithm, baseKey, derivedKeyAlgorithm, extractable, usages)</code> — HKDF, PBKDF2</li>
+        <li><code>deriveBits(algorithm, baseKey, length)</code> — HKDF, PBKDF2, ECDH, X25519</li>
+        <li><code>deriveKey(algorithm, baseKey, derivedKeyAlgorithm, extractable, usages)</code> — HKDF, PBKDF2, ECDH, X25519</li>
         <li><code>wrapKey(format, key, wrappingKey, wrapAlgorithm)</code> — Wraps via exportKey + encrypt</li>
         <li><code>unwrapKey(format, wrappedKey, unwrappingKey, unwrapAlgo, unwrappedKeyAlgo, extractable, usages)</code> — Unwraps via decrypt + importKey</li>
       </ul>
@@ -127,7 +127,7 @@ import CodeBlock from '../../components/CodeBlock.astro';
       <strong>HTMLRewriter</strong> — Streaming HTML transformation (Cloudflare Workers compatible). Chain <code>.on(selector, handler)</code> and <code>.onDocument(handler)</code> calls, then <code>.transform(response)</code> to rewrite HTML. Element handlers support <code>getAttribute</code>, <code>setAttribute</code>, <code>removeAttribute</code>, <code>before</code>, <code>after</code>, <code>prepend</code>, <code>append</code>, <code>setInnerContent</code>, <code>remove</code>, and <code>tagName</code> mutation
     </li>
     <li>
-      <strong>CompressionStream / DecompressionStream</strong> — Streaming compression and decompression. Supported formats: <code>gzip</code>, <code>deflate</code>, <code>deflate-raw</code>
+      <strong>CompressionStream / DecompressionStream</strong> — Streaming compression and decompression. Supported formats: <code>gzip</code>, <code>deflate</code>, <code>deflate-raw</code>, <code>br</code> (Brotli)
     </li>
     <li>
       <strong>structuredClone(value)</strong> — Deep-clone JSON-serializable values; functions, symbols, Map, Set, WeakMap, and WeakSet are not supported
@@ -140,6 +140,30 @@ import CodeBlock from '../../components/CodeBlock.astro';
     </li>
     <li>
       <strong>navigator.userAgent</strong> — Returns <code>"hostedat-worker/1.0"</code>
+    </li>
+    <li>
+      <strong>URLPattern</strong> — URL pattern matching with named groups and wildcards. Supports <code>test(input)</code> and <code>exec(input)</code> methods for matching URLs against patterns with <code>:param</code> and <code>*</code> placeholders
+    </li>
+    <li>
+      <strong>EventSource</strong> — Server-Sent Events (SSE) client. Connects to an SSE endpoint and dispatches <code>message</code>, <code>open</code>, and <code>error</code> events. Supports <code>close()</code> and <code>readyState</code>. SSRF-protected
+    </li>
+    <li>
+      <strong>connect(address, options?)</strong> — TCP socket connections (Cloudflare Workers compatible). Returns a socket with <code>readable</code>/<code>writable</code> streams, <code>opened</code>/<code>closed</code> promises, and <code>startTls()</code> for TLS upgrade. SSRF-protected — blocks private/loopback IPs
+    </li>
+    <li>
+      <strong>TextEncoderStream / TextDecoderStream</strong> — Streaming UTF-8 encoding and decoding as TransformStreams. Pipe bytes through <code>TextDecoderStream</code> to get strings, or strings through <code>TextEncoderStream</code> to get bytes
+    </li>
+    <li>
+      <strong>IdentityTransformStream</strong> — A no-op TransformStream that passes chunks through unchanged
+    </li>
+    <li>
+      <strong>crypto.DigestStream</strong> — A WritableStream that computes a hash digest (SHA-1, SHA-256, SHA-384, SHA-512) as data is written. Access the result via the <code>.digest</code> promise after closing
+    </li>
+    <li>
+      <strong>MessageChannel / MessagePort</strong> — In-memory message passing between ports. Create a <code>MessageChannel</code> to get a <code>port1</code>/<code>port2</code> pair, then use <code>postMessage(data)</code> and <code>onmessage</code> to communicate
+    </li>
+    <li>
+      <strong>Cache API (caches / CacheStorage)</strong> — HTTP response caching backed by SQLite. Use <code>caches.default</code> or <code>await caches.open(name)</code> to get a <code>Cache</code> instance with <code>match(request)</code>, <code>put(request, response)</code>, and <code>delete(request)</code>. TTL derived from <code>Cache-Control: max-age</code>
     </li>
   </ul>
 
@@ -332,9 +356,180 @@ import CodeBlock from '../../components/CodeBlock.astro';
     lang="js"
   />
 
+  <h3>Example: Cache API</h3>
+  <p>
+    Use the <code>Cache API</code> to store and retrieve HTTP responses. Each cache is backed by
+    SQLite and supports TTL via <code>Cache-Control: max-age</code> headers. Use <code>caches.default</code>
+    for the default cache or <code>await caches.open(name)</code> for named caches.
+  </p>
+
+  <CodeBlock
+    title="Cache API — store and serve cached responses"
+    code={`export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const cacheKey = url.pathname;
+
+    // Check the default cache first.
+    const cached = await caches.default.match(cacheKey);
+    if (cached) {
+      return new Response(await cached.text(), {
+        headers: { "X-Cache": "HIT", "Content-Type": "application/json" }
+      });
+    }
+
+    // Fetch fresh data from upstream.
+    const data = { time: new Date().toISOString(), path: url.pathname };
+    const response = new Response(JSON.stringify(data), {
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "max-age=60"   // TTL: 60 seconds
+      }
+    });
+
+    // Store in cache (non-blocking).
+    await caches.default.put(cacheKey, response.clone());
+
+    return response;
+  }
+};`}
+    lang="js"
+  />
+
+  <h3>Example: D1 database</h3>
+  <p>
+    D1 databases are Cloudflare Workers-compatible SQL databases backed by isolated SQLite instances.
+    Each D1 binding gets its own database file, completely separate from the application database.
+    Use <code>prepare()</code> to create parameterized statements and <code>.all()</code>, <code>.first()</code>,
+    <code>.run()</code>, or <code>.raw()</code> to execute them.
+  </p>
+
+  <CodeBlock
+    title="D1 — query and insert"
+    code={`export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/users") {
+      // Query all users.
+      const { results } = await env.DB.prepare("SELECT id, name, email FROM users").all();
+      return Response.json(results);
+    }
+
+    if (url.pathname === "/users/create" && request.method === "POST") {
+      const { name, email } = await request.json();
+      // Parameterized insert — safe from SQL injection.
+      const result = await env.DB.prepare(
+        "INSERT INTO users (name, email) VALUES (?, ?)"
+      ).bind(name, email).run();
+
+      return Response.json({ success: true, meta: result.meta });
+    }
+
+    return new Response("Not found", { status: 404 });
+  }
+};`}
+    lang="js"
+  />
+
+  <CodeBlock
+    title="D1 — batch operations and schema setup"
+    code={`export default {
+  async fetch(request, env) {
+    // Run raw SQL to set up tables (useful for migrations).
+    await env.DB.exec(\`
+      CREATE TABLE IF NOT EXISTS posts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        body TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    \`);
+
+    // Batch multiple prepared statements in a single call.
+    const results = await env.DB.batch([
+      env.DB.prepare("INSERT INTO posts (title, body) VALUES (?, ?)").bind("Hello", "First post"),
+      env.DB.prepare("INSERT INTO posts (title, body) VALUES (?, ?)").bind("World", "Second post"),
+      env.DB.prepare("SELECT * FROM posts"),
+    ]);
+
+    return Response.json({
+      inserted: results.slice(0, 2).map(r => r.meta),
+      posts: results[2].results
+    });
+  }
+};`}
+    lang="js"
+  />
+
+  <h3>Example: Durable Objects</h3>
+  <p>
+    Durable Objects provide strongly consistent, per-object key-value storage backed by SQLite.
+    Each object has a unique ID (deterministic from a name or randomly generated) and its own
+    isolated storage with <code>get</code>, <code>put</code>, <code>delete</code>, <code>deleteAll</code>,
+    and <code>list</code> methods. Storage operations return Promises.
+  </p>
+
+  <CodeBlock
+    title="Durable Objects — per-user counters"
+    code={`export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const userId = url.searchParams.get("user") || "anonymous";
+
+    // Get a deterministic ID from the user name.
+    const id = env.COUNTERS.idFromName(userId);
+
+    // Get a stub to interact with this specific object.
+    const stub = env.COUNTERS.get(id);
+
+    // Read and increment the counter in storage.
+    const current = await stub.storage.get("count") || 0;
+    await stub.storage.put("count", current + 1);
+
+    return Response.json({
+      user: userId,
+      objectId: id.toString(),
+      count: current + 1
+    });
+  }
+};`}
+    lang="js"
+  />
+
+  <CodeBlock
+    title="Durable Objects — storage operations"
+    code={`export default {
+  async fetch(request, env) {
+    const id = env.SESSIONS.idFromName("demo-session");
+    const stub = env.SESSIONS.get(id);
+
+    // Put multiple values at once.
+    await stub.storage.put({ name: "Alice", role: "admin", loginAt: Date.now() });
+
+    // Get multiple values (returns a Map).
+    const data = await stub.storage.get(["name", "role"]);
+
+    // List all keys with a prefix.
+    const allKeys = await stub.storage.list({ prefix: "", limit: 100 });
+
+    // Delete a single key.
+    await stub.storage.delete("loginAt");
+
+    return Response.json({
+      name: data.get("name"),
+      role: data.get("role"),
+      totalKeys: allKeys.size
+    });
+  }
+};`}
+    lang="js"
+  />
+
   <h2>Environment bindings</h2>
   <p>
     The <code>env</code> parameter provides access to environment variables, secrets, KV namespaces,
+    D1 databases, Durable Object namespaces, Queues, Service Bindings,
     storage bucket bindings, and the static asset pipeline.
   </p>
 
@@ -622,6 +817,189 @@ hostedat storage update <site> <bucket-id> --public`}
     <code>env.ASSETS.fetch(request)</code> serves files as if no worker existed — it respects
     <code>_redirects</code>, <code>_headers</code>, SPA mode, and custom <code>404.html</code>.
   </p>
+
+  <h3>D1 databases</h3>
+  <p>
+    D1 bindings provide isolated SQLite databases accessible via a Cloudflare Workers-compatible API.
+    Each D1 binding gets its own database file stored separately from the application database.
+    Configure D1 bindings via the API or dashboard and access them as <code>env.DB</code> (or whatever
+    binding name you choose).
+  </p>
+
+  <h4>D1 API reference</h4>
+  <ul>
+    <li>
+      <code>env.DB.prepare(sql)</code> → <code>D1PreparedStatement</code>
+      — Create a parameterized statement
+    </li>
+    <li>
+      <code>stmt.bind(...params)</code> → <code>D1PreparedStatement</code>
+      — Bind positional parameters (returns a new statement)
+    </li>
+    <li>
+      <code>stmt.all()</code> → <code>Promise&lt;{'{'} results: object[], success: boolean, meta {'}'}&gt;</code>
+      — Execute and return all rows as objects
+    </li>
+    <li>
+      <code>stmt.first(column?)</code> → <code>Promise&lt;object|value|null&gt;</code>
+      — Return the first row (or a specific column value)
+    </li>
+    <li>
+      <code>stmt.run()</code> → <code>Promise&lt;{'{'} success: boolean, meta {'}'}&gt;</code>
+      — Execute a write statement (INSERT, UPDATE, DELETE)
+    </li>
+    <li>
+      <code>stmt.raw(options?)</code> → <code>Promise&lt;any[][]&gt;</code>
+      — Return rows as arrays. Pass <code>{'{'} columnNames: true {'}'}</code> to include column names as the first row
+    </li>
+    <li>
+      <code>env.DB.batch(statements)</code> → <code>Promise&lt;D1Result[]&gt;</code>
+      — Execute multiple prepared statements in a single batch
+    </li>
+    <li>
+      <code>env.DB.exec(sql)</code> → <code>Promise&lt;{'{'} count: number {'}'}&gt;</code>
+      — Execute raw SQL (multiple statements separated by <code>;</code>)
+    </li>
+  </ul>
+
+  <h3>Durable Object namespaces</h3>
+  <p>
+    Durable Object bindings provide strongly consistent, per-object key-value storage. Each namespace
+    contains uniquely identified objects with their own isolated storage. Values are JSON-serialized
+    automatically. Configure bindings via the API or dashboard.
+  </p>
+
+  <h4>Durable Object namespace API reference</h4>
+  <ul>
+    <li>
+      <code>env.NS.idFromName(name)</code> → <code>DurableObjectId</code>
+      — Get a deterministic ID from a string name (SHA-256 based)
+    </li>
+    <li>
+      <code>env.NS.idFromString(hex)</code> → <code>DurableObjectId</code>
+      — Reconstruct an ID from its hex string representation
+    </li>
+    <li>
+      <code>env.NS.newUniqueId()</code> → <code>DurableObjectId</code>
+      — Generate a random unique ID
+    </li>
+    <li>
+      <code>env.NS.get(id)</code> → <code>DurableObjectStub</code>
+      — Get a stub for the given ID, providing access to <code>stub.storage</code> and <code>stub.fetch()</code>
+    </li>
+  </ul>
+
+  <h4>Durable Object storage API reference</h4>
+  <ul>
+    <li>
+      <code>stub.storage.get(key)</code> → <code>Promise&lt;any|null&gt;</code>
+      — Get a single value by key
+    </li>
+    <li>
+      <code>stub.storage.get([keys])</code> → <code>Promise&lt;Map&gt;</code>
+      — Get multiple values (returns a Map)
+    </li>
+    <li>
+      <code>stub.storage.put(key, value)</code> → <code>Promise&lt;void&gt;</code>
+      — Store a single key-value pair
+    </li>
+    <li>
+      <code>stub.storage.put(entries)</code> → <code>Promise&lt;void&gt;</code>
+      — Store multiple entries from an object <code>{'{'} key: value, ... {'}'}</code>
+    </li>
+    <li>
+      <code>stub.storage.delete(key)</code> → <code>Promise&lt;boolean&gt;</code>
+      — Delete a single key
+    </li>
+    <li>
+      <code>stub.storage.delete([keys])</code> → <code>Promise&lt;number&gt;</code>
+      — Delete multiple keys, returns count deleted
+    </li>
+    <li>
+      <code>stub.storage.deleteAll()</code> → <code>Promise&lt;void&gt;</code>
+      — Delete all entries for this object
+    </li>
+    <li>
+      <code>stub.storage.list(options?)</code> → <code>Promise&lt;Map&gt;</code>
+      — List entries. Options: <code>{'{'} prefix?, limit?, reverse? {'}'}</code>. Default limit is 128
+    </li>
+  </ul>
+
+  <h3>Queues</h3>
+  <p>
+    Queue bindings provide message queuing backed by SQLite. Workers can produce messages via
+    <code>send()</code> or <code>sendBatch()</code>. Configure bindings via the API or dashboard.
+  </p>
+
+  <CodeBlock
+    title="Queues — sending messages"
+    code={`export default {
+  async fetch(request, env) {
+    // Send a single message.
+    await env.MY_QUEUE.send(JSON.stringify({ event: "page_view", path: "/home" }));
+
+    // Send a batch of messages.
+    await env.MY_QUEUE.sendBatch([
+      { body: JSON.stringify({ event: "click", target: "signup" }) },
+      { body: JSON.stringify({ event: "click", target: "login" }), contentType: "json" }
+    ]);
+
+    return new Response("Messages sent");
+  }
+};`}
+    lang="js"
+  />
+
+  <h4>Queue API reference</h4>
+  <ul>
+    <li>
+      <code>env.QUEUE.send(body, options?)</code> → <code>Promise&lt;void&gt;</code>
+      — Send a single message. Options: <code>{'{'} contentType? {'}'}</code> (default: <code>"json"</code>)
+    </li>
+    <li>
+      <code>env.QUEUE.sendBatch(messages)</code> → <code>Promise&lt;void&gt;</code>
+      — Send multiple messages. Each item: <code>{'{'} body, contentType? {'}'}</code>
+    </li>
+  </ul>
+
+  <h3>Service Bindings</h3>
+  <p>
+    Service Bindings allow one worker to call another worker's <code>fetch()</code> handler directly
+    without going through the network. The target worker is identified by its site ID and deploy key.
+    Configure bindings via the API or dashboard.
+  </p>
+
+  <CodeBlock
+    title="Service Bindings — calling another worker"
+    code={`export default {
+  async fetch(request, env) {
+    // Call the auth worker's fetch handler directly.
+    const authResponse = await env.AUTH_SERVICE.fetch(
+      "https://fake-host/verify",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: request.headers.get("Authorization") })
+      }
+    );
+
+    if (authResponse.status !== 200) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+
+    return new Response("Authenticated!");
+  }
+};`}
+    lang="js"
+  />
+
+  <h4>Service Binding API reference</h4>
+  <ul>
+    <li>
+      <code>env.BINDING.fetch(urlOrRequest, init?)</code> → <code>Promise&lt;Response&gt;</code>
+      — Call the target worker's fetch handler. Accepts a URL string or Request object, plus optional init options
+    </li>
+  </ul>
 
   <h2>Cron triggers</h2>
   <p>

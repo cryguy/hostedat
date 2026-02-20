@@ -117,6 +117,7 @@ const nanoidLength = 12
 | `WorkerLog` | `id`, `site_id`, `level`, `message`, `created_at` |
 | `StorageBucket` | `id`, `site_id`, `name` (binding), `bucket_name` (S3), `public` |
 | `S3Credential` | `id`, `user_id`, `external_key_id` (IAM username), `access_key_id`, `name` |
+| `CacheEntry` | `id`, `cache_name`, `url`, `status`, `headers`, `body`, `expires_at` |
 | `RevokedToken` | `token_hash`, `expires_at` |
 | `Setting` | `key`, `value` (used for `registration_enabled`, `invite_required`) |
 
@@ -187,7 +188,7 @@ type poolKey struct {
 2. Site rules looked up (cache ↁEDB)
 3. Worker pool for `{siteID, activeDeployID}` checked out
 4. JS `fetch` handler called: `export default { fetch(request, env, ctx) }`
-5. `env` object built with: plain vars, secret vars, KV namespaces, storage buckets, `ASSETS` binding
+5. `env` object built with: plain vars, secret vars, KV namespaces, D1 databases, Durable Objects, Queues, Service Bindings, storage buckets, `ASSETS` binding
 6. Response extracted from JS, converted to Go `WorkerResponse`
 7. Runtime returned to pool
 
@@ -274,6 +275,7 @@ Config is loaded from a YAML file (path passed as CLI arg). Key settings:
 | `worker.max_response_bytes` | `10485760` (10 MB) | Max fetch response body size |
 | `worker.max_log_retention` | `7` (days) | Worker log retention |
 | `worker.max_script_size_kb` | `1024` | Max `_worker.js` size |
+| `worker.data_dir` | | Directory for worker data (D1 databases, Durable Objects, Queues) |
 | `object_storage.enabled` | `false` | Enable S3-compatible object storage |
 | `object_storage.managed` | `false` | Auto-manage SeaweedFS instance |
 | `object_storage.s3_endpoint` | `http://127.0.0.1:8333` | S3 API endpoint |
