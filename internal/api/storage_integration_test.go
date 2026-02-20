@@ -243,3 +243,226 @@ func mustFreePort(t *testing.T) int {
 	defer ln.Close()
 	return ln.Addr().(*net.TCPAddr).Port
 }
+
+// ──────────────────────────────────────────────
+// SeaweedFS Manager lifecycle tests
+// ──────────────────────────────────────────────
+
+func TestSeaweedFS_ManagerStartStop(t *testing.T) {
+	weedBin := resolveWeedBinary(t)
+	port := mustFreePort(t)
+
+	mgr := seaweedfs.NewManager(config.ObjectStorageConfig{
+		Enabled:    true,
+		Managed:    true,
+		DataDir:    t.TempDir(),
+		BinaryPath: weedBin,
+		S3Endpoint: fmt.Sprintf("http://127.0.0.1:%d", port),
+		Region:     "us-east-1",
+	})
+
+	if err := mgr.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	if !mgr.IsHealthy() {
+		t.Fatal("manager should report healthy after start")
+	}
+	if err := mgr.Stop(); err != nil {
+		t.Fatalf("manager stop: %v", err)
+	}
+}
+
+// ──────────────────────────────────────────────
+// PublicS3Wrapper integration tests
+// ──────────────────────────────────────────────
+
+func TestPublicS3Wrapper_Integration(t *testing.T) {
+	weedBin := resolveWeedBinary(t)
+	port := mustFreePort(t)
+
+	mgr := seaweedfs.NewManager(config.ObjectStorageConfig{
+		Enabled:    true,
+		Managed:    true,
+		DataDir:    t.TempDir(),
+		BinaryPath: weedBin,
+		S3Endpoint: fmt.Sprintf("http://127.0.0.1:%d", port),
+		Region:     "us-east-1",
+	})
+	if err := mgr.Start(); err != nil {
+		t.Fatalf("start SeaweedFS: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Stop() })
+
+	db, err := models.InitDB(config.DBConfig{Driver: "sqlite", DSN: ":memory:"})
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+
+	user := models.User{Email: "pub-s3@test.local", PasswordHash: "hash", Role: "user"}
+	db.Create(&user)
+	site := models.Site{UserID: user.ID, SubdomainSlug: "pub-s3", Name: "PubS3"}
+	db.Create(&site)
+
+	adminClient, err := minioClientForEndpoint(mgr.Config.S3Endpoint, "", "")
+	if err != nil {
+		t.Fatalf("admin minio client: %v", err)
+	}
+
+	h := &StorageHandler{DB: db, S3Client: adminClient, IAMClient: mgr.Client, Region: "us-east-1"}
+
+	// Create a public bucket
+	bucketName := site.ID + "-public"
+	c, rec := newAuthedIntegrationContext(t, http.MethodPost, "/api/v1/sites/"+site.ID+"/storage/buckets", map[string]interface{}{
+		"name":        "PUBLIC_ASSETS",
+		"bucket_name": bucketName,
+		"public":      true,
+	}, user)
+	c.SetParamNames("id")
+	c.SetParamValues(site.ID)
+	if err := h.CreateBucket(c); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("CreateBucket status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Upload an object
+	putObject(t, adminClient, bucketName, "hello.txt", "hello world")
+
+	// Set up the public S3 wrapper
+	s3Proxy := NewS3Proxy(mgr.Config.S3Endpoint, true)
+	wrapper := NewPublicS3Wrapper(s3Proxy, db, adminClient)
+
+	// Unauthenticated GET should succeed for public bucket
+	req := httptest.NewRequest(http.MethodGet, "/"+bucketName+"/hello.txt", nil)
+	wrec := httptest.NewRecorder()
+	wrapper.ServeHTTP(wrec, req)
+
+	if wrec.Code != http.StatusOK {
+		t.Fatalf("GET public object: status=%d body=%s", wrec.Code, wrec.Body.String())
+	}
+	if wrec.Body.String() != "hello world" {
+		t.Errorf("body = %q, want 'hello world'", wrec.Body.String())
+	}
+	if wrec.Header().Get("Content-Type") == "" {
+		t.Error("expected Content-Type header")
+	}
+	if wrec.Header().Get("ETag") == "" {
+		t.Error("expected ETag header")
+	}
+}
+
+func TestPublicS3Wrapper_HeadRequest(t *testing.T) {
+	weedBin := resolveWeedBinary(t)
+	port := mustFreePort(t)
+
+	mgr := seaweedfs.NewManager(config.ObjectStorageConfig{
+		Enabled:    true,
+		Managed:    true,
+		DataDir:    t.TempDir(),
+		BinaryPath: weedBin,
+		S3Endpoint: fmt.Sprintf("http://127.0.0.1:%d", port),
+		Region:     "us-east-1",
+	})
+	if err := mgr.Start(); err != nil {
+		t.Fatalf("start SeaweedFS: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Stop() })
+
+	db, err := models.InitDB(config.DBConfig{Driver: "sqlite", DSN: ":memory:"})
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+
+	user := models.User{Email: "head@test.local", PasswordHash: "hash", Role: "user"}
+	db.Create(&user)
+	site := models.Site{UserID: user.ID, SubdomainSlug: "head-s3", Name: "HeadS3"}
+	db.Create(&site)
+
+	adminClient, err := minioClientForEndpoint(mgr.Config.S3Endpoint, "", "")
+	if err != nil {
+		t.Fatalf("admin minio client: %v", err)
+	}
+
+	h := &StorageHandler{DB: db, S3Client: adminClient, IAMClient: mgr.Client, Region: "us-east-1"}
+
+	bucketName := site.ID + "-head"
+	createBucketViaHandler(t, h, user, site.ID, "HEAD_BUCKET", bucketName)
+
+	// Mark bucket as public
+	var bucket models.StorageBucket
+	db.Where("bucket_name = ?", bucketName).First(&bucket)
+	bucket.Public = true
+	db.Save(&bucket)
+
+	putObject(t, adminClient, bucketName, "file.txt", "content")
+
+	s3Proxy := NewS3Proxy(mgr.Config.S3Endpoint, true)
+	wrapper := NewPublicS3Wrapper(s3Proxy, db, adminClient)
+
+	req := httptest.NewRequest(http.MethodHead, "/"+bucketName+"/file.txt", nil)
+	rec := httptest.NewRecorder()
+	wrapper.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("HEAD status=%d", rec.Code)
+	}
+	if rec.Header().Get("Content-Length") == "" {
+		t.Error("expected Content-Length header on HEAD")
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("HEAD body should be empty, got %d bytes", rec.Body.Len())
+	}
+}
+
+func TestPublicS3Wrapper_NonPublicBucket_Forbidden(t *testing.T) {
+	weedBin := resolveWeedBinary(t)
+	port := mustFreePort(t)
+
+	mgr := seaweedfs.NewManager(config.ObjectStorageConfig{
+		Enabled:    true,
+		Managed:    true,
+		DataDir:    t.TempDir(),
+		BinaryPath: weedBin,
+		S3Endpoint: fmt.Sprintf("http://127.0.0.1:%d", port),
+		Region:     "us-east-1",
+	})
+	if err := mgr.Start(); err != nil {
+		t.Fatalf("start SeaweedFS: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Stop() })
+
+	db, err := models.InitDB(config.DBConfig{Driver: "sqlite", DSN: ":memory:"})
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+
+	user := models.User{Email: "priv@test.local", PasswordHash: "hash", Role: "user"}
+	db.Create(&user)
+	site := models.Site{UserID: user.ID, SubdomainSlug: "priv-s3", Name: "PrivS3"}
+	db.Create(&site)
+
+	adminClient, err := minioClientForEndpoint(mgr.Config.S3Endpoint, "", "")
+	if err != nil {
+		t.Fatalf("admin minio client: %v", err)
+	}
+
+	h := &StorageHandler{DB: db, S3Client: adminClient, IAMClient: mgr.Client, Region: "us-east-1"}
+
+	bucketName := site.ID + "-private"
+	createBucketViaHandler(t, h, user, site.ID, "PRIVATE_BUCKET", bucketName)
+	// Bucket is NOT public (default)
+
+	putObject(t, adminClient, bucketName, "secret.txt", "private data")
+
+	s3Proxy := NewS3Proxy(mgr.Config.S3Endpoint, true)
+	wrapper := NewPublicS3Wrapper(s3Proxy, db, adminClient)
+
+	req := httptest.NewRequest(http.MethodGet, "/"+bucketName+"/secret.txt", nil)
+	rec := httptest.NewRecorder()
+	wrapper.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403 for non-public bucket", rec.Code)
+	}
+}

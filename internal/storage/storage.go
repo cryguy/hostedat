@@ -46,7 +46,7 @@ func (m *Manager) ExtractZip(siteID string, deployKey string, reader io.ReaderAt
 	// Clean up partially extracted files on any error.
 	defer func() {
 		if extractErr != nil {
-			os.RemoveAll(destDir)
+			_ = os.RemoveAll(destDir)
 		}
 	}()
 
@@ -142,22 +142,26 @@ func extractFile(f *zip.File, destPath string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("opening zip entry %s: %w", f.Name, err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	out, err := os.Create(destPath)
 	if err != nil {
 		return 0, fmt.Errorf("creating file %s: %w", destPath, err)
 	}
-	defer out.Close()
 
 	written, err := io.Copy(out, io.LimitReader(rc, maxFileSize+1))
 	if err != nil {
+		_ = out.Close()
 		return 0, fmt.Errorf("writing file %s: %w", destPath, err)
 	}
 	if written > maxFileSize {
+		_ = out.Close()
 		return 0, fmt.Errorf("file exceeds maximum size during extraction: %s", f.Name)
 	}
 
+	if err := out.Close(); err != nil {
+		return 0, fmt.Errorf("closing file %s: %w", destPath, err)
+	}
 	return written, nil
 }
 

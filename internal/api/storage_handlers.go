@@ -15,7 +15,7 @@ import (
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/seaweedfs"
 	"github.com/labstack/echo/v4"
-	minio "github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7"
 	"gorm.io/gorm"
 )
 
@@ -402,7 +402,7 @@ func (h *StorageHandler) buildPolicyDocumentForUser(userID string) (string, erro
 		resources = append(resources, fmt.Sprintf("arn:aws:s3:::%s/*", b.BucketName))
 	}
 
-	statements := []map[string]interface{}{}
+	var statements []map[string]interface{}
 	if len(resources) > 0 {
 		statements = append(statements, map[string]interface{}{
 			"Effect":   "Allow",

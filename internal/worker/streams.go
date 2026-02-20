@@ -3,7 +3,7 @@ package worker
 import (
 	"fmt"
 
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 )
 
 // streamsJS implements ReadableStream, WritableStream, and TransformStream
@@ -73,7 +73,7 @@ class ReadableStreamDefaultReader {
 				stream._pulling = true;
 				Promise.resolve().then(() => {
 					stream._pulling = false;
-					try { stream._pullFn(stream._controller); } catch(e) { stream._errorInternal(e); }
+					try { var r = stream._pullFn(stream._controller); if (r && typeof r.then === "function") r.then(undefined, function(e) { stream._errorInternal(e); }); } catch(e) { stream._errorInternal(e); }
 				});
 			}
 		});
@@ -133,6 +133,85 @@ class ReadableStream {
 	}
 
 	get locked() { return this._locked; }
+
+	pipeTo(destination, options) {
+		if (this._locked) return Promise.reject(new TypeError('ReadableStream is locked'));
+		if (!(destination instanceof WritableStream)) return Promise.reject(new TypeError('pipeTo requires a WritableStream'));
+		options = options || {};
+		const preventClose = !!options.preventClose;
+		const preventAbort = !!options.preventAbort;
+		const preventCancel = !!options.preventCancel;
+		const reader = this.getReader();
+		const writer = destination.getWriter();
+		async function pump() {
+			try {
+				while (true) {
+					const { value, done } = await reader.read();
+					if (done) {
+						if (!preventClose) await writer.close();
+						else writer.releaseLock();
+						break;
+					}
+					await writer.write(value);
+				}
+			} catch(e) {
+				if (!preventAbort) {
+					try { await writer.abort(e); } catch(_) {}
+				}
+				if (!preventCancel) {
+					try { await reader.cancel(e); } catch(_) {}
+				}
+				throw e;
+			} finally {
+				reader.releaseLock();
+			}
+		}
+		return pump();
+	}
+
+	pipeThrough(transform, options) {
+		if (this._locked) throw new TypeError('ReadableStream is locked');
+		if (!transform || typeof transform !== 'object') throw new TypeError('pipeThrough requires a transform object');
+		if (!(transform.writable instanceof WritableStream)) throw new TypeError('pipeThrough requires transform.writable to be a WritableStream');
+		this.pipeTo(transform.writable, options);
+		return transform.readable;
+	}
+
+	tee() {
+		if (this._locked) throw new TypeError('ReadableStream is locked');
+		const reader = this.getReader();
+		let closed = false;
+		let branch1Controller;
+		let branch2Controller;
+		const branch1 = new ReadableStream({
+			start(controller) { branch1Controller = controller; },
+		});
+		const branch2 = new ReadableStream({
+			start(controller) { branch2Controller = controller; },
+		});
+		async function pump() {
+			try {
+				while (true) {
+					const { value, done } = await reader.read();
+					if (done) {
+						if (!closed) {
+							closed = true;
+							branch1Controller.close();
+							branch2Controller.close();
+						}
+						return;
+					}
+					branch1Controller.enqueue(value);
+					branch2Controller.enqueue(value);
+				}
+			} catch(e) {
+				branch1Controller.error(e);
+				branch2Controller.error(e);
+			}
+		}
+		pump();
+		return [branch1, branch2];
+	}
 
 	_pull() {
 		// Deliver queued chunks to pending reads.
@@ -347,19 +426,109 @@ class TransformStream {
 	}
 }
 
+// --- ReadableStream.from() ---
+
+ReadableStream.from = function(asyncIterable) {
+	if (asyncIterable == null) {
+		throw new TypeError('ReadableStream.from called on null or undefined');
+	}
+	const asyncIteratorMethod = asyncIterable[Symbol.asyncIterator];
+	const iteratorMethod = asyncIterable[Symbol.iterator];
+	if (typeof asyncIteratorMethod !== 'function' && typeof iteratorMethod !== 'function') {
+		throw new TypeError('ReadableStream.from requires an iterable or async iterable');
+	}
+	const iterator = typeof asyncIteratorMethod === 'function'
+		? asyncIterable[Symbol.asyncIterator]()
+		: asyncIterable[Symbol.iterator]();
+	return new ReadableStream({
+		async pull(controller) {
+			const { value, done } = await iterator.next();
+			if (done) {
+				controller.close();
+			} else {
+				controller.enqueue(value);
+			}
+		}
+	});
+};
+
+// --- FixedLengthStream ---
+
+class FixedLengthStream {
+	constructor(expectedLength) {
+		if (typeof expectedLength !== 'number' || expectedLength < 0) {
+			throw new TypeError('FixedLengthStream requires a non-negative number');
+		}
+		this._expectedLength = expectedLength;
+		let bytesWritten = 0;
+		const expected = expectedLength;
+		const ts = new TransformStream({
+			transform(chunk, controller) {
+				const len = (chunk && typeof chunk.byteLength === 'number')
+					? chunk.byteLength
+					: (chunk && typeof chunk.length === 'number' ? chunk.length : 0);
+				bytesWritten += len;
+				if (bytesWritten > expected) {
+					throw new TypeError(
+						'FixedLengthStream: exceeded expected length of ' + expected + ' bytes (wrote ' + bytesWritten + ')'
+					);
+				}
+				controller.enqueue(chunk);
+			},
+			flush(controller) {
+				if (bytesWritten !== expected) {
+					throw new TypeError(
+						'FixedLengthStream: expected ' + expected + ' bytes but received ' + bytesWritten
+					);
+				}
+			}
+		});
+		this.readable = ts.readable;
+		this.writable = ts.writable;
+	}
+}
+
 globalThis.ReadableStream = ReadableStream;
 globalThis.ReadableStreamDefaultReader = ReadableStreamDefaultReader;
 globalThis.WritableStream = WritableStream;
 globalThis.WritableStreamDefaultWriter = WritableStreamDefaultWriter;
 globalThis.TransformStream = TransformStream;
+globalThis.FixedLengthStream = FixedLengthStream;
 
 })();
 `
 
+// queuingStrategiesJS defines ByteLengthQueuingStrategy and CountQueuingStrategy.
+const queuingStrategiesJS = `
+class ByteLengthQueuingStrategy {
+	constructor(init) {
+		this.highWaterMark = init.highWaterMark;
+	}
+	size(chunk) {
+		return chunk.byteLength;
+	}
+}
+
+class CountQueuingStrategy {
+	constructor(init) {
+		this.highWaterMark = init.highWaterMark;
+	}
+	size(chunk) {
+		return 1;
+	}
+}
+
+globalThis.ByteLengthQueuingStrategy = ByteLengthQueuingStrategy;
+globalThis.CountQueuingStrategy = CountQueuingStrategy;
+`
+
 // setupStreams evaluates the Streams API polyfills.
-func setupStreams(rt *qjs.Runtime) error {
-	if _, err := rt.Eval("streams.js", qjs.Code(streamsJS)); err != nil {
+func setupStreams(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
+	if _, err := ctx.RunScript(streamsJS, "streams.js"); err != nil {
 		return fmt.Errorf("evaluating streams.js: %w", err)
+	}
+	if _, err := ctx.RunScript(queuingStrategiesJS, "queuing_strategies.js"); err != nil {
+		return fmt.Errorf("evaluating queuing_strategies.js: %w", err)
 	}
 	return nil
 }

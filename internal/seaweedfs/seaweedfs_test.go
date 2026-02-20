@@ -42,7 +42,7 @@ func TestEnsurePortsAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to bind port: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	busyPort := ln.Addr().(*net.TCPAddr).Port
 
 	if err := ensurePortsAvailable(busyPort); err == nil {
@@ -55,7 +55,7 @@ func TestEnsurePortsAvailable(t *testing.T) {
 		t.Fatalf("failed to bind port: %v", err)
 	}
 	freePort := ln2.Addr().(*net.TCPAddr).Port
-	ln2.Close()
+	_ = ln2.Close()
 
 	if err := ensurePortsAvailable(freePort); err != nil {
 		t.Errorf("expected free port %d to be available: %v", freePort, err)
@@ -72,7 +72,7 @@ func TestManagerIsHealthy_NilClient(t *testing.T) {
 func TestClientDoIAM_MalformedXML(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
-		w.Write([]byte("this is not xml at all"))
+		_, _ = w.Write([]byte("this is not xml at all"))
 	}))
 	defer srv.Close()
 

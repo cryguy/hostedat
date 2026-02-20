@@ -32,7 +32,7 @@ type User struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
-func (u *User) BeforeCreate(tx *gorm.DB) error {
+func (u *User) BeforeCreate(_ *gorm.DB) error {
 	if u.ID == "" {
 		u.ID = generateID()
 	}
@@ -43,21 +43,21 @@ func (u *User) BeforeCreate(tx *gorm.DB) error {
 }
 
 type Site struct {
-	ID              string    `gorm:"primaryKey;size:20" json:"id"`
-	UserID          string    `gorm:"index;not null" json:"user_id"`
-	SubdomainSlug   string    `gorm:"uniqueIndex;not null" json:"subdomain_slug"`
-	Name            string    `gorm:"not null" json:"name"`
-	SPAMode         bool      `gorm:"default:false" json:"spa_mode"`
-	HasWorker       bool      `gorm:"default:false" json:"has_worker"`
-	ActiveVersion   *int      `json:"active_version"`
-	ActiveDeployID  *string   `gorm:"size:20" json:"active_deploy_id,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID             string    `gorm:"primaryKey;size:20" json:"id"`
+	UserID         string    `gorm:"index;not null" json:"user_id"`
+	SubdomainSlug  string    `gorm:"uniqueIndex;not null" json:"subdomain_slug"`
+	Name           string    `gorm:"not null" json:"name"`
+	SPAMode        bool      `gorm:"default:false" json:"spa_mode"`
+	HasWorker      bool      `gorm:"default:false" json:"has_worker"`
+	ActiveVersion  *int      `json:"active_version"`
+	ActiveDeployID *string   `gorm:"size:20" json:"active_deploy_id,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 
 	User        User         `gorm:"foreignKey:UserID" json:"-"`
 	Deployments []Deployment `gorm:"foreignKey:SiteID" json:"deployments,omitempty"`
 }
 
-func (s *Site) BeforeCreate(tx *gorm.DB) error {
+func (s *Site) BeforeCreate(_ *gorm.DB) error {
 	if s.ID == "" {
 		s.ID = generateID()
 	}
@@ -75,7 +75,7 @@ type Deployment struct {
 	Site Site `gorm:"foreignKey:SiteID" json:"-"`
 }
 
-func (d *Deployment) BeforeCreate(tx *gorm.DB) error {
+func (d *Deployment) BeforeCreate(_ *gorm.DB) error {
 	if d.ID == "" {
 		d.ID = generateID()
 	}
@@ -96,7 +96,7 @@ type APIKey struct {
 	User User `gorm:"foreignKey:UserID" json:"-"`
 }
 
-func (k *APIKey) BeforeCreate(tx *gorm.DB) error {
+func (k *APIKey) BeforeCreate(_ *gorm.DB) error {
 	if k.ID == "" {
 		k.ID = generateID()
 	}
@@ -116,7 +116,7 @@ type Invite struct {
 	Creator User `gorm:"foreignKey:CreatedBy" json:"-"`
 }
 
-func (i *Invite) BeforeCreate(tx *gorm.DB) error {
+func (i *Invite) BeforeCreate(_ *gorm.DB) error {
 	if i.ID == "" {
 		i.ID = generateID()
 	}
@@ -133,7 +133,7 @@ type AuthCode struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
-func (a *AuthCode) BeforeCreate(tx *gorm.DB) error {
+func (a *AuthCode) BeforeCreate(_ *gorm.DB) error {
 	if a.ID == "" {
 		a.ID = generateID()
 	}
@@ -164,7 +164,7 @@ type WorkerEnvVar struct {
 	Site Site `gorm:"foreignKey:SiteID" json:"-"`
 }
 
-func (w *WorkerEnvVar) BeforeCreate(tx *gorm.DB) error {
+func (w *WorkerEnvVar) BeforeCreate(_ *gorm.DB) error {
 	if w.ID == "" {
 		w.ID = generateID()
 	}
@@ -180,7 +180,7 @@ type KVNamespace struct {
 	Site Site `gorm:"foreignKey:SiteID" json:"-"`
 }
 
-func (k *KVNamespace) BeforeCreate(tx *gorm.DB) error {
+func (k *KVNamespace) BeforeCreate(_ *gorm.DB) error {
 	if k.ID == "" {
 		k.ID = generateID()
 	}
@@ -198,7 +198,7 @@ type KVEntry struct {
 	Namespace KVNamespace `gorm:"foreignKey:NamespaceID" json:"-"`
 }
 
-func (k *KVEntry) BeforeCreate(tx *gorm.DB) error {
+func (k *KVEntry) BeforeCreate(_ *gorm.DB) error {
 	if k.ID == "" {
 		k.ID = generateID()
 	}
@@ -216,7 +216,7 @@ type CronSchedule struct {
 	Site Site `gorm:"foreignKey:SiteID" json:"-"`
 }
 
-func (cs *CronSchedule) BeforeCreate(tx *gorm.DB) error {
+func (cs *CronSchedule) BeforeCreate(_ *gorm.DB) error {
 	if cs.ID == "" {
 		cs.ID = generateID()
 	}
@@ -233,7 +233,7 @@ type WorkerLog struct {
 	Site Site `gorm:"foreignKey:SiteID" json:"-"`
 }
 
-func (wl *WorkerLog) BeforeCreate(tx *gorm.DB) error {
+func (wl *WorkerLog) BeforeCreate(_ *gorm.DB) error {
 	if wl.ID == "" {
 		wl.ID = generateID()
 	}
@@ -253,9 +253,51 @@ type StorageBucket struct {
 	Site Site `gorm:"foreignKey:SiteID" json:"-"`
 }
 
-func (sb *StorageBucket) BeforeCreate(tx *gorm.DB) error {
+func (sb *StorageBucket) BeforeCreate(_ *gorm.DB) error {
 	if sb.ID == "" {
 		sb.ID = generateID()
+	}
+	return nil
+}
+
+// D1Database represents a D1 database binding for a site.
+type D1Database struct {
+	ID         string    `gorm:"primaryKey;size:20" json:"id"`
+	SiteID     string    `gorm:"not null;uniqueIndex:idx_d1_databases_site_name,priority:1" json:"site_id"`
+	Name       string    `gorm:"not null;uniqueIndex:idx_d1_databases_site_name,priority:2" json:"name"`
+	DatabaseID string    `gorm:"uniqueIndex;not null" json:"database_id"`
+	CreatedAt  time.Time `json:"created_at"`
+
+	Site Site `gorm:"foreignKey:SiteID" json:"-"`
+}
+
+func (d *D1Database) BeforeCreate(_ *gorm.DB) error {
+	if d.ID == "" {
+		d.ID = generateID()
+	}
+	if d.DatabaseID == "" {
+		d.DatabaseID = generateID()
+	}
+	return nil
+}
+
+// DurableObjectNamespace represents a Durable Object namespace binding for a site.
+type DurableObjectNamespace struct {
+	ID          string    `gorm:"primaryKey;size:20" json:"id"`
+	SiteID      string    `gorm:"not null;uniqueIndex:idx_do_namespaces_site_name,priority:1" json:"site_id"`
+	Name        string    `gorm:"not null;uniqueIndex:idx_do_namespaces_site_name,priority:2" json:"name"`
+	NamespaceID string    `gorm:"uniqueIndex;not null" json:"namespace_id"`
+	CreatedAt   time.Time `json:"created_at"`
+
+	Site Site `gorm:"foreignKey:SiteID" json:"-"`
+}
+
+func (d *DurableObjectNamespace) BeforeCreate(_ *gorm.DB) error {
+	if d.ID == "" {
+		d.ID = generateID()
+	}
+	if d.NamespaceID == "" {
+		d.NamespaceID = generateID()
 	}
 	return nil
 }
@@ -272,9 +314,21 @@ type S3Credential struct {
 	User User `gorm:"foreignKey:UserID" json:"-"`
 }
 
-func (sc *S3Credential) BeforeCreate(tx *gorm.DB) error {
+func (sc *S3Credential) BeforeCreate(_ *gorm.DB) error {
 	if sc.ID == "" {
 		sc.ID = generateID()
 	}
 	return nil
+}
+
+// CacheEntry stores a cached HTTP response for the Cache API.
+type CacheEntry struct {
+	ID        uint   `gorm:"primaryKey"`
+	CacheName string `gorm:"index:idx_cache_lookup"`
+	URL       string `gorm:"index:idx_cache_lookup"`
+	Status    int
+	Headers   string
+	Body      []byte
+	ExpiresAt *time.Time
+	CreatedAt time.Time
 }

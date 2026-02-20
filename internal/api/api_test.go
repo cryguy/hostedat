@@ -14,11 +14,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cryguy/hostedat/internal/auth"
 	"github.com/cryguy/hostedat/internal/config"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
+	"github.com/cryguy/hostedat/internal/worker"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
@@ -56,7 +58,9 @@ func setupTestEnvWithMinVersion(t *testing.T, minVersion string) *testEnv {
 			Enabled: true,
 		},
 	}
-	models.SeedDefaults(db, cfg)
+	if err := models.SeedDefaults(db, cfg); err != nil {
+		t.Fatal(err)
+	}
 
 	store := storage.NewManager(t.TempDir())
 	cache := storage.NewSiteRulesCache()
@@ -102,9 +106,9 @@ func createTestZip(t *testing.T, files map[string]string) *bytes.Buffer {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.Write([]byte(content))
+		_, _ = f.Write([]byte(content))
 	}
-	w.Close()
+	_ = w.Close()
 	return buf
 }
 
@@ -195,7 +199,9 @@ func TestRegister_RegistrationDisabled(t *testing.T) {
 	env := setupTestEnv(t)
 	// Create an existing user so the first-user bootstrap bypass doesn't apply.
 	env.createTestUser(t, "existing@test.com", "password123", "superadmin")
-	models.SetSetting(env.db, "registration_enabled", "false")
+	if err := models.SetSetting(env.db, "registration_enabled", "false"); err != nil {
+		t.Fatal(err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register",
 		jsonBody(map[string]string{"email": "a@b.com", "password": "password123"}))
@@ -209,7 +215,9 @@ func TestRegister_RegistrationDisabled(t *testing.T) {
 
 func TestRegister_InviteFlow(t *testing.T) {
 	env := setupTestEnv(t)
-	models.SetSetting(env.db, "invite_required", "true")
+	if err := models.SetSetting(env.db, "invite_required", "true"); err != nil {
+		t.Fatal(err)
+	}
 
 	admin, _ := env.createTestUser(t, "admin@test.com", "password123", "superadmin")
 	invite := models.Invite{Code: "testcode", CreatedBy: admin.ID, Active: true}
@@ -464,7 +472,9 @@ func TestSite_List_OwnSitesOnly(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token1)
 	rec := env.doRequest(req)
 	var sites1 []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &sites1)
+	if err := json.Unmarshal(rec.Body.Bytes(), &sites1); err != nil {
+		t.Fatal(err)
+	}
 	if len(sites1) != 1 || sites1[0]["subdomain_slug"] != "user1site" {
 		t.Errorf("user1 sites: %v", sites1)
 	}
@@ -474,7 +484,9 @@ func TestSite_List_OwnSitesOnly(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token2)
 	rec = env.doRequest(req)
 	var sites2 []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &sites2)
+	if err := json.Unmarshal(rec.Body.Bytes(), &sites2); err != nil {
+		t.Fatal(err)
+	}
 	if len(sites2) != 1 || sites2[0]["subdomain_slug"] != "user2site" {
 		t.Errorf("user2 sites: %v", sites2)
 	}
@@ -520,9 +532,8 @@ func TestSite_UpdateSPAMode(t *testing.T) {
 	site := models.Site{UserID: user.ID, SubdomainSlug: "spa-test", Name: "SPA"}
 	env.db.Create(&site)
 
-	spa := true
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/sites/"+site.ID,
-		jsonBody(map[string]interface{}{"spa_mode": spa}))
+		jsonBody(map[string]interface{}{"spa_mode": true}))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := env.doRequest(req)
@@ -575,8 +586,12 @@ func multipartZip(t *testing.T, zipBuf *bytes.Buffer) (*bytes.Buffer, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	io.Copy(part, zipBuf)
-	writer.Close()
+	if _, err := io.Copy(part, zipBuf); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
 	return body, writer.FormDataContentType()
 }
 
@@ -685,7 +700,9 @@ func TestDeploy_ListDeployments(t *testing.T) {
 		Total       int                      `json:"total"`
 		Page        int                      `json:"page"`
 	}
-	json.Unmarshal(rec.Body.Bytes(), &result)
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
 	if len(result.Deployments) != 2 {
 		t.Errorf("got %d deployments, want 2", len(result.Deployments))
 	}
@@ -750,7 +767,9 @@ func TestAPIKey_List(t *testing.T) {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	var keys []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &keys)
+	if err := json.Unmarshal(rec.Body.Bytes(), &keys); err != nil {
+		t.Fatal(err)
+	}
 	if len(keys) != 1 {
 		t.Errorf("got %d keys, want 1", len(keys))
 	}
@@ -935,7 +954,9 @@ func TestAdmin_Invites(t *testing.T) {
 		t.Fatalf("list: status = %d", rec.Code)
 	}
 	var invites []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &invites)
+	if err := json.Unmarshal(rec.Body.Bytes(), &invites); err != nil {
+		t.Fatal(err)
+	}
 	if len(invites) != 1 {
 		t.Errorf("got %d invites, want 1", len(invites))
 	}
@@ -1323,8 +1344,8 @@ func TestDeploy_ErrorMessageNonLeakage(t *testing.T) {
 	body := new(bytes.Buffer)
 	writer := multipart.NewWriter(body)
 	part, _ := writer.CreateFormFile("file", "bad.zip")
-	part.Write([]byte("this is not a zip file"))
-	writer.Close()
+	_, _ = part.Write([]byte("this is not a zip file"))
+	_ = writer.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+site.ID+"/deploy", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -1354,8 +1375,10 @@ func TestServing_ContentType(t *testing.T) {
 	env.db.Save(&site)
 
 	deployPath := env.store.GetDeploymentPath(site.ID, "deploy1")
-	os.MkdirAll(deployPath, 0755)
-	os.WriteFile(filepath.Join(deployPath, "style.css"), []byte("body{}"), 0644)
+	if err := os.MkdirAll(deployPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(deployPath, "style.css"), []byte("body{}"), 0644)
 
 	req := httptest.NewRequest(http.MethodGet, "/style.css", nil)
 	req.Host = "ct-test.test.local"
@@ -1781,7 +1804,9 @@ func TestWorker_ListEnvVars_Success(t *testing.T) {
 	}
 
 	var vars []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &vars)
+	if err := json.Unmarshal(rec.Body.Bytes(), &vars); err != nil {
+		t.Fatal(err)
+	}
 	if len(vars) != 2 {
 		t.Errorf("got %d vars, want 2", len(vars))
 	}
@@ -1946,7 +1971,9 @@ func TestWorker_ListKVNamespaces_Success(t *testing.T) {
 	}
 
 	var namespaces []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &namespaces)
+	if err := json.Unmarshal(rec.Body.Bytes(), &namespaces); err != nil {
+		t.Fatal(err)
+	}
 	if len(namespaces) != 2 {
 		t.Errorf("got %d namespaces, want 2", len(namespaces))
 	}
@@ -2137,7 +2164,9 @@ func TestWorker_ListCronSchedules_Success(t *testing.T) {
 	}
 
 	var schedules []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &schedules)
+	if err := json.Unmarshal(rec.Body.Bytes(), &schedules); err != nil {
+		t.Fatal(err)
+	}
 	if len(schedules) != 2 {
 		t.Errorf("got %d schedules, want 2", len(schedules))
 	}
@@ -2207,7 +2236,9 @@ func TestWorker_GetLogs_Success(t *testing.T) {
 	}
 
 	var logs []map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &logs)
+	if err := json.Unmarshal(rec.Body.Bytes(), &logs); err != nil {
+		t.Fatal(err)
+	}
 	if len(logs) != 5 {
 		t.Errorf("got %d logs, want 5", len(logs))
 	}
@@ -2434,5 +2465,447 @@ func TestIsAllowedRedirectTarget(t *testing.T) {
 				t.Errorf("isAllowedRedirectTarget(%q, %q) = %v, want %v", tt.target, domain, result, tt.expected)
 			}
 		})
+	}
+}
+
+// ──────────────────────────────────────────────
+// RequireSiteOwner middleware tests
+// ──────────────────────────────────────────────
+
+func TestRequireSiteOwner_OwnerAllowed(t *testing.T) {
+	env := setupTestEnv(t)
+	user, token := env.createTestUser(t, "owner@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "rso-owner", Name: "RSO"}
+	env.db.Create(&site)
+
+	e := echo.New()
+	e.HTTPErrorHandler = CustomErrorHandler
+	db := env.db
+	var gotSite *models.Site
+	e.GET("/test/:id", func(c echo.Context) error {
+		s, _ := c.Get("site").(*models.Site)
+		gotSite = s
+		return c.String(http.StatusOK, "ok")
+	}, AuthMiddleware(db, env.jwtSecret), RequireSiteOwner(db))
+
+	req := httptest.NewRequest(http.MethodGet, "/test/"+site.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if gotSite == nil || gotSite.ID != site.ID {
+		t.Fatal("expected site to be set in context")
+	}
+}
+
+func TestRequireSiteOwner_AdminBypass(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, adminToken := env.createTestUser(t, "admin@t.com", "password123", "admin")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "rso-admin", Name: "RSO"}
+	env.db.Create(&site)
+
+	e := echo.New()
+	e.HTTPErrorHandler = CustomErrorHandler
+	db := env.db
+	e.GET("/test/:id", func(c echo.Context) error {
+		return c.String(http.StatusOK, "ok")
+	}, AuthMiddleware(db, env.jwtSecret), RequireSiteOwner(db))
+
+	req := httptest.NewRequest(http.MethodGet, "/test/"+site.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin: status = %d, want 200", rec.Code)
+	}
+}
+
+func TestRequireSiteOwner_Forbidden(t *testing.T) {
+	env := setupTestEnv(t)
+	owner, _ := env.createTestUser(t, "owner@t.com", "password123", "user")
+	_, otherToken := env.createTestUser(t, "other@t.com", "password123", "user")
+	site := models.Site{UserID: owner.ID, SubdomainSlug: "rso-forbid", Name: "RSO"}
+	env.db.Create(&site)
+
+	e := echo.New()
+	e.HTTPErrorHandler = CustomErrorHandler
+	db := env.db
+	e.GET("/test/:id", func(c echo.Context) error {
+		return c.String(http.StatusOK, "ok")
+	}, AuthMiddleware(db, env.jwtSecret), RequireSiteOwner(db))
+
+	req := httptest.NewRequest(http.MethodGet, "/test/"+site.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+otherToken)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("other user: status = %d, want 403", rec.Code)
+	}
+}
+
+func TestRequireSiteOwner_SiteNotFound(t *testing.T) {
+	env := setupTestEnv(t)
+	_, token := env.createTestUser(t, "user@t.com", "password123", "user")
+
+	e := echo.New()
+	e.HTTPErrorHandler = CustomErrorHandler
+	db := env.db
+	e.GET("/test/:id", func(c echo.Context) error {
+		return c.String(http.StatusOK, "ok")
+	}, AuthMiddleware(db, env.jwtSecret), RequireSiteOwner(db))
+
+	req := httptest.NewRequest(http.MethodGet, "/test/nonexistent-id", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestRequireSiteOwner_EmptyID(t *testing.T) {
+	env := setupTestEnv(t)
+	_, token := env.createTestUser(t, "user@t.com", "password123", "user")
+
+	e := echo.New()
+	e.HTTPErrorHandler = CustomErrorHandler
+	db := env.db
+	// Route with no :id param — middleware should be a no-op
+	e.GET("/test", func(c echo.Context) error {
+		return c.String(http.StatusOK, "ok")
+	}, AuthMiddleware(db, env.jwtSecret), RequireSiteOwner(db))
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (no-op when :id is empty)", rec.Code)
+	}
+}
+
+// ──────────────────────────────────────────────
+// CleanExpiredTokens + HashToken tests
+// ──────────────────────────────────────────────
+
+func TestCleanExpiredTokens(t *testing.T) {
+	db, err := models.InitDB(config.DBConfig{Driver: "sqlite", DSN: ":memory:"})
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+
+	expired := models.RevokedToken{TokenHash: "expired-hash", ExpiresAt: time.Now().Add(-1 * time.Hour)}
+	valid := models.RevokedToken{TokenHash: "valid-hash", ExpiresAt: time.Now().Add(1 * time.Hour)}
+	if result := db.Create(&expired); result.Error != nil {
+		t.Fatal(result.Error)
+	}
+	if result := db.Create(&valid); result.Error != nil {
+		t.Fatal(result.Error)
+	}
+
+	CleanExpiredTokens(db)
+
+	var count int64
+	db.Model(&models.RevokedToken{}).Count(&count)
+	if count != 1 {
+		t.Fatalf("expected 1 remaining token, got %d", count)
+	}
+
+	var remaining models.RevokedToken
+	db.First(&remaining)
+	if remaining.TokenHash != "valid-hash" {
+		t.Fatalf("expected valid-hash to remain, got %q", remaining.TokenHash)
+	}
+}
+
+func TestHashToken_Deterministic(t *testing.T) {
+	token := "test-jwt-token-12345"
+	h1 := HashToken(token)
+	h2 := HashToken(token)
+	if h1 != h2 {
+		t.Fatalf("HashToken not deterministic: %q != %q", h1, h2)
+	}
+	if len(h1) != 64 {
+		t.Fatalf("expected SHA-256 hex (64 chars), got %d chars", len(h1))
+	}
+	h3 := HashToken("different-token")
+	if h1 == h3 {
+		t.Fatal("different inputs produced same hash")
+	}
+}
+
+// ──────────────────────────────────────────────
+// Worker HTTP integration tests
+// ──────────────────────────────────────────────
+
+func setupTestEnvWithWorker(t *testing.T) *testEnv {
+	t.Helper()
+
+	db, err := models.InitDB(config.DBConfig{Driver: "sqlite", DSN: ":memory:"})
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+
+	cfg := &config.Config{
+		Domain:    "test.local",
+		JWTSecret: "test-jwt-secret-that-is-at-least-32-characters-long",
+		Registration: config.RegConfig{
+			Enabled: true,
+		},
+		Worker: config.WorkerConfig{
+			PoolSize:         2,
+			MemoryLimitMB:    64,
+			ExecutionTimeout: 5,
+			MaxFetchRequests: 5,
+			FetchTimeoutSec:  5,
+			MaxResponseBytes: 1 << 20, // 1MB
+			MaxLogRetention:  100,
+			MaxScriptSizeKB:  512,
+		},
+	}
+	if err := models.SeedDefaults(db, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	store := storage.NewManager(t.TempDir())
+	cache := storage.NewSiteRulesCache()
+
+	workerEngine := worker.NewEngine(cfg.Worker, db)
+	workerEngine.SetStore(store)
+	t.Cleanup(func() { workerEngine.Shutdown() })
+
+	e := echo.New()
+	e.HTTPErrorHandler = CustomErrorHandler
+	e.Use(SubdomainRouter(db, store, cache, cfg.Domain, workerEngine, nil))
+	RegisterRoutes(e, db, cfg, store, "0.1.0", workerEngine, nil, nil, nil, "")
+
+	return &testEnv{
+		e:         e,
+		db:        db,
+		store:     store,
+		cache:     cache,
+		jwtSecret: cfg.JWTSecret,
+		domain:    cfg.Domain,
+	}
+}
+
+func (env *testEnv) deployWorkerSite(t *testing.T, siteID, deployID, _, source string) {
+	t.Helper()
+	deployPath := env.store.GetDeploymentPath(siteID, deployID)
+	if err := os.MkdirAll(deployPath, 0755); err != nil {
+		t.Fatalf("mkdir deploy: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(deployPath, "_worker.js"), []byte(source), 0644); err != nil {
+		t.Fatalf("write _worker.js: %v", err)
+	}
+}
+
+func TestServing_WorkerFetchHandler(t *testing.T) {
+	env := setupTestEnvWithWorker(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker-test", Name: "Worker", HasWorker: true}
+	env.db.Create(&site)
+	v := 1
+	dk := "deploy1"
+	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
+	env.db.Save(&site)
+
+	env.deployWorkerSite(t, site.ID, "deploy1", "worker-test",
+		`export default { async fetch(request) { return new Response("worker ok", { status: 200 }); } }`)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "worker-test.test.local"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "worker ok") {
+		t.Errorf("body = %q, want 'worker ok'", rec.Body.String())
+	}
+}
+
+func TestServing_WorkerRequestHeaders(t *testing.T) {
+	env := setupTestEnvWithWorker(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker-hdr", Name: "WorkerHdr", HasWorker: true}
+	env.db.Create(&site)
+	v := 1
+	dk := "deploy1"
+	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
+	env.db.Save(&site)
+
+	env.deployWorkerSite(t, site.ID, "deploy1", "worker-hdr",
+		`export default { async fetch(request) {
+			const val = request.headers.get("x-test-header") || "missing";
+			return new Response(val, { status: 200 });
+		} }`)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "worker-hdr.test.local"
+	req.Header.Set("X-Test-Header", "hello-world")
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "hello-world") {
+		t.Errorf("body = %q, want 'hello-world'", rec.Body.String())
+	}
+}
+
+func TestServing_WorkerPostBody(t *testing.T) {
+	env := setupTestEnvWithWorker(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker-post", Name: "WorkerPost", HasWorker: true}
+	env.db.Create(&site)
+	v := 1
+	dk := "deploy1"
+	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
+	env.db.Save(&site)
+
+	env.deployWorkerSite(t, site.ID, "deploy1", "worker-post",
+		`export default { async fetch(request) {
+			const body = await request.text();
+			return new Response("got:" + body, { status: 200 });
+		} }`)
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("test-payload"))
+	req.Host = "worker-post.test.local"
+	req.Header.Set("Content-Type", "text/plain")
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "got:test-payload") {
+		t.Errorf("body = %q, want 'got:test-payload'", rec.Body.String())
+	}
+}
+
+func TestServing_WorkerErrorReturns500(t *testing.T) {
+	env := setupTestEnvWithWorker(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker-err", Name: "WorkerErr", HasWorker: true}
+	env.db.Create(&site)
+	v := 1
+	dk := "deploy1"
+	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
+	env.db.Save(&site)
+
+	env.deployWorkerSite(t, site.ID, "deploy1", "worker-err",
+		`export default { async fetch(request) { throw new Error("intentional failure"); } }`)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "worker-err.test.local"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestServing_WorkerLogsStored(t *testing.T) {
+	env := setupTestEnvWithWorker(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker-log", Name: "WorkerLog", HasWorker: true}
+	env.db.Create(&site)
+	v := 1
+	dk := "deploy1"
+	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
+	env.db.Save(&site)
+
+	env.deployWorkerSite(t, site.ID, "deploy1", "worker-log",
+		`export default { async fetch(request) {
+			console.log("worker log message");
+			return new Response("ok", { status: 200 });
+		} }`)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "worker-log.test.local"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+
+	// storeWorkerLogs runs in a goroutine; give it a moment
+	time.Sleep(200 * time.Millisecond)
+
+	var logs []models.WorkerLog
+	env.db.Where("site_id = ?", site.ID).Find(&logs)
+	if len(logs) == 0 {
+		t.Fatal("expected worker logs to be stored, got 0")
+	}
+
+	found := false
+	for _, l := range logs {
+		if strings.Contains(l.Message, "worker log message") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected 'worker log message' in logs, got %v", logs)
+	}
+}
+
+func TestServing_WorkerInternalFilesBlocked(t *testing.T) {
+	env := setupTestEnvWithWorker(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker-int", Name: "WorkerInt", HasWorker: true}
+	env.db.Create(&site)
+	v := 1
+	dk := "deploy1"
+	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
+	env.db.Save(&site)
+
+	env.deployWorkerSite(t, site.ID, "deploy1", "worker-int",
+		`export default { async fetch(request) { return new Response("should not reach here"); } }`)
+
+	req := httptest.NewRequest(http.MethodGet, "/_worker.js", nil)
+	req.Host = "worker-int.test.local"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for /_worker.js", rec.Code)
+	}
+}
+
+func TestServing_WorkerNilResponse(t *testing.T) {
+	env := setupTestEnvWithWorker(t)
+	user, _ := env.createTestUser(t, "u@t.com", "password123", "user")
+	site := models.Site{UserID: user.ID, SubdomainSlug: "worker-nil", Name: "WorkerNil", HasWorker: true}
+	env.db.Create(&site)
+	v := 1
+	dk := "deploy1"
+	site.ActiveVersion = &v
+	site.ActiveDeployID = &dk
+	env.db.Save(&site)
+
+	// Worker that returns a non-Response value (undefined)
+	env.deployWorkerSite(t, site.ID, "deploy1", "worker-nil",
+		`export default { async fetch(request) { return undefined; } }`)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "worker-nil.test.local"
+	rec := env.doRequest(req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 for nil worker response; body=%s", rec.Code, rec.Body.String())
 	}
 }

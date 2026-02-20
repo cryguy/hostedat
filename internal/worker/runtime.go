@@ -1,9 +1,17 @@
 package worker
 
 import (
+	"context"
+	"hash"
+	"io"
+	"net"
+	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 // cryptoKeyEntry holds imported key material and its associated hash algorithm.
@@ -25,6 +33,44 @@ type requestState struct {
 	env        *Env
 	cryptoKeys map[int64]*cryptoKeyEntry
 	nextKeyID  int64
+
+	// WebSocket bridge state (set when status 101 response is returned).
+	wsConn   *websocket.Conn
+	wsMu     sync.Mutex
+	wsClosed bool
+
+	// DigestStream state: per-request hash instances keyed by stream ID.
+	digestStreams map[string]hash.Hash
+	nextDigestID  int64
+
+	// EventSource state: per-request SSE connections keyed by source ID.
+	eventSources map[string]*eventSourceState
+	nextSourceID int64
+
+	// TCP socket state: per-request TCP connections keyed by socket ID.
+	tcpSockets       map[string]net.Conn
+	tcpSocketBuffers map[string]*tcpSocketBuffer
+	nextTCPSocketID  int64
+
+	// Compression stream state: per-request streaming compressors/decompressors.
+	compressStreams map[string]*compressStreamState
+	nextCompressID  int64
+
+	// In-flight fetch cancellation: maps fetchID -> cancel function.
+	fetchCancels map[string]context.CancelFunc
+	nextFetchID  int64
+}
+
+// eventSourceState holds state for a single EventSource SSE connection.
+type eventSourceState struct {
+	url        string
+	events     []sseEvent
+	mu         sync.Mutex
+	closed     bool
+	connected  bool
+	resp       *http.Response
+	body       io.ReadCloser
+	cancelFunc func()
 }
 
 var (
@@ -52,12 +98,15 @@ func getRequestState(id uint64) *requestState {
 }
 
 // clearRequestState removes the state for the given request ID and returns it.
+// It also cleans up any open TCP sockets.
 func clearRequestState(id uint64) *requestState {
 	v, ok := requestStates.LoadAndDelete(id)
 	if !ok {
 		return nil
 	}
-	return v.(*requestState)
+	state := v.(*requestState)
+	cleanupTCPSockets(state)
+	return state
 }
 
 // importCryptoKey stores key material scoped to the request and returns its ID.
@@ -98,4 +147,38 @@ func addLog(id uint64, level, message string) {
 		Message: message,
 		Time:    time.Now(),
 	})
+}
+
+// registerFetchCancel stores a cancel function for an in-flight fetch and
+// returns the unique fetchID string key. The cancel is keyed by reqID+fetchID.
+func registerFetchCancel(reqID uint64, cancel context.CancelFunc) string {
+	state := getRequestState(reqID)
+	if state == nil {
+		return ""
+	}
+	state.nextFetchID++
+	id := strconv.FormatInt(state.nextFetchID, 10)
+	if state.fetchCancels == nil {
+		state.fetchCancels = make(map[string]context.CancelFunc)
+	}
+	state.fetchCancels[id] = cancel
+	return id
+}
+
+// removeFetchCancel removes and returns the cancel function for a fetch.
+func removeFetchCancel(reqID uint64, fetchID string) context.CancelFunc {
+	state := getRequestState(reqID)
+	if state == nil || state.fetchCancels == nil {
+		return nil
+	}
+	cancel := state.fetchCancels[fetchID]
+	delete(state.fetchCancels, fetchID)
+	return cancel
+}
+
+// callFetchCancel calls the cancel function for the given fetch, if present.
+func callFetchCancel(reqID uint64, fetchID string) {
+	if cancel := removeFetchCancel(reqID, fetchID); cancel != nil {
+		cancel()
+	}
 }

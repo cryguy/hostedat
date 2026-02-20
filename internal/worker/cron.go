@@ -76,8 +76,8 @@ func (cr *CronRunner) tick(now time.Time) {
 
 		deployID := *site.ActiveDeployID
 
-		// Load bytecode if not cached (server restart scenario).
-		cr.ensureBytecode(site.ID, deployID)
+		// Load source if not cached (server restart scenario).
+		cr.ensureSource(site.ID, deployID)
 
 		// Build env.
 		env := BuildEnvFromDB(cr.db, site.ID, nil)
@@ -87,9 +87,9 @@ func (cr *CronRunner) tick(now time.Time) {
 	}
 }
 
-func (cr *CronRunner) ensureBytecode(siteID string, deployKey string) {
-	if err := cr.engine.EnsureBytecode(siteID, deployKey); err != nil {
-		log.Printf("cron: failed to ensure bytecode for site %s deploy %s: %v", siteID, deployKey, err)
+func (cr *CronRunner) ensureSource(siteID string, deployKey string) {
+	if err := cr.engine.EnsureSource(siteID, deployKey); err != nil {
+		log.Printf("cron: failed to ensure source for site %s deploy %s: %v", siteID, deployKey, err)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -76,7 +77,7 @@ func BrowserLogin(serverURL, cliVersion string) (apiKey string, err error) {
 		}
 
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, `<!DOCTYPE html><html><head><title>hostedat</title><style>
+		_, _ = fmt.Fprint(w, `<!DOCTYPE html><html><head><title>hostedat</title><style>
 body{font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;align-items:center;justify-content:center;min-height:100vh}
 .card{background:#171717;border:1px solid #262626;border-radius:12px;padding:2rem;text-align:center}
 </style></head><body><div class="card"><h2>Authenticated!</h2><p>You can close this tab.</p></div></body></html>`)
@@ -85,7 +86,12 @@ body{font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;align-i
 	})
 
 	srv := &http.Server{Handler: mux}
-	go srv.Serve(listener)
+	go func() {
+		if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			// non-fatal: server stops when Shutdown is called
+			_ = err
+		}
+	}()
 
 	// Open browser
 	loginURL := fmt.Sprintf("%s/api/v1/auth/cli?port=%d&state=%s&code_challenge=%s&code_challenge_method=S256",
@@ -98,11 +104,11 @@ body{font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;align-i
 	select {
 	case <-done:
 	case <-time.After(2 * time.Minute):
-		srv.Shutdown(context.Background())
+		_ = srv.Shutdown(context.Background())
 		return "", fmt.Errorf("login timed out (2 minutes)")
 	}
 
-	srv.Shutdown(context.Background())
+	_ = srv.Shutdown(context.Background())
 
 	if callbackErr != nil {
 		return "", callbackErr
@@ -118,7 +124,7 @@ body{font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;align-i
 	if err != nil {
 		return "", fmt.Errorf("failed to exchange code for token: %w", err)
 	}
-	defer tokenResp.Body.Close()
+	defer func() { _ = tokenResp.Body.Close() }()
 
 	var tokenResult struct {
 		Token string `json:"token"`
@@ -161,5 +167,5 @@ func openBrowser(url string) {
 	default:
 		cmd = exec.Command("xdg-open", url)
 	}
-	cmd.Start()
+	_ = cmd.Start()
 }

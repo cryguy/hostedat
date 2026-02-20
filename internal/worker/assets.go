@@ -1,16 +1,18 @@
 package worker
 
 import (
+	"encoding/json"
 	"fmt"
 	"mime"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/cryguy/hostedat/internal/storage"
-	"github.com/fastschema/qjs"
-	minio "github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7"
+	v8 "github.com/tommie/v8go"
 	"gorm.io/gorm"
 )
 
@@ -194,109 +196,113 @@ func contentType(filePath string) string {
 
 // buildAssetsBinding creates a JS object with a fetch(request) method
 // that delegates to the given AssetsFetcher. This is synchronous because
-// Fetch is local file I/O, and calling the Response constructor from a
-// goroutine causes WASM thread-safety crashes.
-func buildAssetsBinding(ctx *qjs.Context, fetcher AssetsFetcher) *qjs.Value {
-	assets := ctx.NewObject()
+// Fetch is local file I/O.
+func buildAssetsBinding(iso *v8.Isolate, ctx *v8.Context, fetcher AssetsFetcher) (*v8.Value, error) {
+	assets, err := newJSObject(iso, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("creating assets object: %w", err)
+	}
 
-	fetchFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
-
+	_ = assets.Set("fetch", v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
 		if len(args) == 0 {
-			return nil, fmt.Errorf("ASSETS.fetch requires a request argument")
+			return throwError(iso, "ASSETS.fetch requires a request argument")
 		}
 
-		// Convert JS Request to Go WorkerRequest.
-		jsReq := args[0]
-		urlVal := jsReq.GetPropertyStr("url")
-		methodVal := jsReq.GetPropertyStr("method")
+		// Extract request data via JS.
+		_ = ctx.Global().Set("__tmp_assets_req", args[0])
+		result, err := ctx.RunScript(`(function() {
+			var r = globalThis.__tmp_assets_req;
+			delete globalThis.__tmp_assets_req;
+			var headers = {};
+			if (r.headers && r.headers._map) {
+				var m = r.headers._map;
+				for (var k in m) { if (m.hasOwnProperty(k)) headers[k] = String(m[k]); }
+			}
+			var body = r._body != null ? String(r._body) : null;
+			return JSON.stringify({url: r.url || '', method: r.method || 'GET', headers: headers, body: body});
+		})()`, "assets_extract_req.js")
+		if err != nil {
+			return throwError(iso, fmt.Sprintf("ASSETS.fetch: extracting request: %s", err.Error()))
+		}
+
+		var reqData struct {
+			URL     string            `json:"url"`
+			Method  string            `json:"method"`
+			Headers map[string]string `json:"headers"`
+			Body    *string           `json:"body"`
+		}
+		if err := json.Unmarshal([]byte(result.String()), &reqData); err != nil {
+			return throwError(iso, fmt.Sprintf("ASSETS.fetch: parsing request: %s", err.Error()))
+		}
 
 		goReq := &WorkerRequest{
-			URL:     urlVal.String(),
-			Method:  methodVal.String(),
-			Headers: make(map[string]string),
+			URL:     reqData.URL,
+			Method:  reqData.Method,
+			Headers: reqData.Headers,
 		}
-		urlVal.Free()
-		methodVal.Free()
-
-		headersVal := jsReq.GetPropertyStr("headers")
-		if headersVal.IsObject() {
-			mapVal := headersVal.GetPropertyStr("_map")
-			if mapVal.IsObject() {
-				names, err := mapVal.GetOwnPropertyNames()
-				if err == nil {
-					for _, name := range names {
-						v := mapVal.GetPropertyStr(name)
-						goReq.Headers[name] = v.String()
-						v.Free()
-					}
-				}
-			}
-			mapVal.Free()
+		if reqData.Body != nil {
+			goReq.Body = []byte(*reqData.Body)
 		}
-		headersVal.Free()
-
-		bodyVal := jsReq.GetPropertyStr("_body")
-		if !bodyVal.IsNull() && !bodyVal.IsUndefined() {
-			goReq.Body = []byte(bodyVal.String())
-		}
-		bodyVal.Free()
 
 		resp, err := fetcher.Fetch(goReq)
 		if err != nil {
-			return nil, err
+			return throwError(iso, err.Error())
 		}
 
-		// Build JS Response from Go response on the JS thread.
-		headersObj := c.NewObject()
-		for k, v := range resp.Headers {
-			headersObj.SetPropertyStr(k, c.NewString(v))
-		}
-
-		initObj := c.NewObject()
-		initObj.SetPropertyStr("status", c.NewInt32(int32(resp.StatusCode)))
-		initObj.SetPropertyStr("headers", headersObj)
-
-		var bodyJS *qjs.Value
+		// Build Response via JS constructor.
+		headersJSON, _ := json.Marshal(resp.Headers)
 		if resp.Body != nil {
-			bodyJS = c.NewString(string(resp.Body))
+			bodyVal, _ := v8.NewValue(iso, string(resp.Body))
+			_ = ctx.Global().Set("__tmp_assets_body", bodyVal)
 		} else {
-			bodyJS = c.NewNull()
+			_ = ctx.Global().Set("__tmp_assets_body", v8.Null(iso))
+		}
+		statusVal, _ := v8.NewValue(iso, int32(resp.StatusCode))
+		_ = ctx.Global().Set("__tmp_assets_status", statusVal)
+		hdrsVal, _ := v8.NewValue(iso, string(headersJSON))
+		_ = ctx.Global().Set("__tmp_assets_headers", hdrsVal)
+
+		jsResp, err := ctx.RunScript(`(function() {
+			var body = globalThis.__tmp_assets_body;
+			var status = globalThis.__tmp_assets_status;
+			var hdrs = JSON.parse(globalThis.__tmp_assets_headers);
+			delete globalThis.__tmp_assets_body;
+			delete globalThis.__tmp_assets_status;
+			delete globalThis.__tmp_assets_headers;
+			return new Response(body, {status: status, headers: hdrs});
+		})()`, "assets_build_resp.js")
+		if err != nil {
+			return throwError(iso, fmt.Sprintf("ASSETS.fetch: creating Response: %s", err.Error()))
 		}
 
-		responseCtor := c.Global().GetPropertyStr("Response")
-		jsResp := responseCtor.CallConstructor(bodyJS, initObj)
-		responseCtor.Free()
+		return jsResp
+	}).GetFunction(ctx))
 
-		if jsResp.IsError() {
-			defer jsResp.Free()
-			return nil, fmt.Errorf("ASSETS.fetch: failed to create Response: %s", jsResp.String())
-		}
-
-		return jsResp, nil
-	}, false)
-	assets.SetPropertyStr("fetch", fetchFn)
-
-	return assets
+	return assets.Value, nil
 }
 
 // buildEnvObject creates the full env JS object passed to the worker's
 // fetch handler as the second argument.
-func buildEnvObject(ctx *qjs.Context, env *Env, db *gorm.DB, minioClient interface{}, presignClient interface{}, publicS3URL string) *qjs.Value {
-	envObj := ctx.NewObject()
+func buildEnvObject(iso *v8.Isolate, ctx *v8.Context, env *Env, db *gorm.DB, minioClient interface{}, presignClient interface{}, publicS3URL string) (*v8.Value, error) {
+	envObj, err := newJSObject(iso, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("creating env object: %w", err)
+	}
 
 	// Plain environment variables.
 	if env.Vars != nil {
 		for k, v := range env.Vars {
-			envObj.SetPropertyStr(k, ctx.NewString(v))
+			val, _ := v8.NewValue(iso, v)
+			_ = envObj.Set(k, val)
 		}
 	}
 
 	// Secrets (same shape, just from a different source).
 	if env.Secrets != nil {
 		for k, v := range env.Secrets {
-			envObj.SetPropertyStr(k, ctx.NewString(v))
+			val, _ := v8.NewValue(iso, v)
+			_ = envObj.Set(k, val)
 		}
 	}
 
@@ -304,7 +310,11 @@ func buildEnvObject(ctx *qjs.Context, env *Env, db *gorm.DB, minioClient interfa
 	if env.KVBindings != nil && db != nil {
 		for name, nsID := range env.KVBindings {
 			bridge := &KVBridge{DB: db, NamespaceID: nsID}
-			envObj.SetPropertyStr(name, buildKVBinding(ctx, bridge))
+			kvVal, err := buildKVBinding(iso, ctx, bridge)
+			if err != nil {
+				return nil, fmt.Errorf("building KV binding %q: %w", name, err)
+			}
+			_ = envObj.Set(name, kvVal)
 		}
 	}
 
@@ -323,34 +333,144 @@ func buildEnvObject(ctx *qjs.Context, env *Env, db *gorm.DB, minioClient interfa
 					BucketName:    bucketName,
 					PublicS3URL:   publicS3URL,
 				}
-				envObj.SetPropertyStr(name, buildStorageBinding(ctx, bridge))
+				storVal, err := buildStorageBinding(iso, ctx, bridge)
+				if err != nil {
+					return nil, fmt.Errorf("building storage binding %q: %w", name, err)
+				}
+				_ = envObj.Set(name, storVal)
 			}
+		}
+	}
+
+	// Queue bindings.
+	if env.QueueBindings != nil && db != nil {
+		bridge := &QueueBridge{DB: db}
+		for name, queueName := range env.QueueBindings {
+			qVal, err := buildQueueBinding(iso, ctx, bridge, queueName)
+			if err != nil {
+				return nil, fmt.Errorf("building queue binding %q: %w", name, err)
+			}
+			_ = envObj.Set(name, qVal)
+		}
+	}
+
+	// Service bindings (worker-to-worker RPC).
+	if env.ServiceBindings != nil && env.engine != nil {
+		bridge := &ServiceBindingBridge{Engine: env.engine, Env: env}
+		for name, config := range env.ServiceBindings {
+			sbVal, err := buildServiceBinding(iso, ctx, bridge, config)
+			if err != nil {
+				return nil, fmt.Errorf("building service binding %q: %w", name, err)
+			}
+			_ = envObj.Set(name, sbVal)
+		}
+	}
+
+	// D1 database bindings — each gets its own isolated SQLite database.
+	var d1Bridges []*D1Bridge
+	closeD1Bridges := func() {
+		for _, b := range d1Bridges {
+			_ = b.Close()
+		}
+	}
+	if env.D1Bindings != nil {
+		for name, dbID := range env.D1Bindings {
+			var bridge *D1Bridge
+			var err error
+			if env.d1DataDir != "" {
+				bridge, err = OpenD1Database(env.d1DataDir, dbID)
+			} else {
+				// Fallback to in-memory for tests or when no data dir is configured.
+				bridge, err = NewD1BridgeMemory(dbID)
+			}
+			if err != nil {
+				closeD1Bridges()
+				return nil, fmt.Errorf("opening D1 database %q: %w", name, err)
+			}
+			d1Bridges = append(d1Bridges, bridge)
+			d1Val, err := buildD1Binding(iso, ctx, bridge)
+			if err != nil {
+				closeD1Bridges()
+				return nil, fmt.Errorf("building D1 binding %q: %w", name, err)
+			}
+			_ = envObj.Set(name, d1Val)
+		}
+	}
+
+	// Durable Object bindings.
+	if env.DurableObjectBindings != nil && db != nil {
+		bridge := &DurableObjectBridge{DB: db}
+		for name, nsID := range env.DurableObjectBindings {
+			doVal, err := buildDurableObjectBinding(iso, ctx, bridge, nsID)
+			if err != nil {
+				closeD1Bridges()
+				return nil, fmt.Errorf("building durable object binding %q: %w", name, err)
+			}
+			_ = envObj.Set(name, doVal)
 		}
 	}
 
 	// ASSETS binding.
 	if env.Assets != nil {
-		envObj.SetPropertyStr("ASSETS", buildAssetsBinding(ctx, env.Assets))
+		assetsVal, err := buildAssetsBinding(iso, ctx, env.Assets)
+		if err != nil {
+			closeD1Bridges()
+			return nil, fmt.Errorf("building assets binding: %w", err)
+		}
+		_ = envObj.Set("ASSETS", assetsVal)
 	}
 
-	return envObj
+	return envObj.Value, nil
 }
 
 // buildExecContext creates the ctx JS object (third argument to fetch handler).
-// Currently provides a no-op waitUntil.
-func buildExecContext(ctx *qjs.Context) *qjs.Value {
-	execCtx := ctx.NewObject()
+// waitUntil(promise) collects promises into globalThis.__waitUntilPromises
+// which are drained after the response is returned.
+func buildExecContext(iso *v8.Isolate, ctx *v8.Context) (*v8.Value, error) {
+	execCtx, err := newJSObject(iso, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("creating exec context: %w", err)
+	}
 
-	waitUntilFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-		// No-op: we don't support background tasks beyond the request lifetime.
-		return this.Context().NewUndefined(), nil
-	}, false)
-	execCtx.SetPropertyStr("waitUntil", waitUntilFn)
+	// Initialize the promises array for this request.
+	if _, err := ctx.RunScript("globalThis.__waitUntilPromises = [];", "waituntil_init.js"); err != nil {
+		return nil, fmt.Errorf("initializing waitUntil array: %w", err)
+	}
 
-	passThroughOnExceptionFn := ctx.Function(func(this *qjs.This) (*qjs.Value, error) {
-		return this.Context().NewUndefined(), nil
-	}, false)
-	execCtx.SetPropertyStr("passThroughOnException", passThroughOnExceptionFn)
+	waitUntilFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
+		if len(args) > 0 {
+			_ = ctx.Global().Set("__tmp_wu_promise", args[0])
+			_, _ = ctx.RunScript("globalThis.__waitUntilPromises.push(Promise.resolve(globalThis.__tmp_wu_promise)); delete globalThis.__tmp_wu_promise;", "waituntil_push.js")
+		}
+		return v8.Undefined(iso)
+	})
+	_ = execCtx.Set("waitUntil", waitUntilFT.GetFunction(ctx))
 
-	return execCtx
+	passThroughFT := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		return v8.Undefined(iso)
+	})
+	_ = execCtx.Set("passThroughOnException", passThroughFT.GetFunction(ctx))
+
+	return execCtx.Value, nil
+}
+
+// drainWaitUntil awaits all promises collected by ctx.waitUntil().
+// It runs Promise.allSettled on the array so that rejections don't break
+// the response. Must be called on the isolate's goroutine.
+func drainWaitUntil(ctx *v8.Context, deadline time.Time) {
+	drainScript := `(async function() {
+		var promises = globalThis.__waitUntilPromises || [];
+		globalThis.__waitUntilPromises = [];
+		if (promises.length > 0) {
+			await Promise.allSettled(promises);
+		}
+	})()`
+	wuVal, err := ctx.RunScript(drainScript, "waituntil_drain.js")
+	if err != nil {
+		return
+	}
+	if wuVal != nil && wuVal.IsPromise() {
+		_, _ = awaitValue(ctx, wuVal, deadline)
+	}
 }

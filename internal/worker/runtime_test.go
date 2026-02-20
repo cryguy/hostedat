@@ -193,6 +193,161 @@ func TestHashFuncFromAlgo(t *testing.T) {
 	}
 }
 
+func TestCryptoHashFromAlgo(t *testing.T) {
+	tests := []struct {
+		algo string
+		want int // crypto.Hash value (0 means unsupported)
+	}{
+		{"SHA-1", 3},   // crypto.SHA1 = 3
+		{"sha-1", 3},
+		{"SHA-256", 5}, // crypto.SHA256 = 5
+		{"sha256", 5},
+		{"SHA-384", 6}, // crypto.SHA384 = 6
+		{"SHA-512", 7}, // crypto.SHA512 = 7
+		{"MD5", 0},     // unsupported
+		{"", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.algo, func(t *testing.T) {
+			got := cryptoHashFromAlgo(tt.algo)
+			if int(got) != tt.want {
+				t.Errorf("cryptoHashFromAlgo(%q) = %d, want %d", tt.algo, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRsaJWKAlg(t *testing.T) {
+	tests := []struct {
+		algo, hash, want string
+	}{
+		{"RSASSA-PKCS1-v1_5", "SHA-1", "RS1"},
+		{"RSASSA-PKCS1-v1_5", "SHA-256", "RS256"},
+		{"RSASSA-PKCS1-v1_5", "SHA-384", "RS384"},
+		{"RSASSA-PKCS1-v1_5", "SHA-512", "RS512"},
+		{"RSA-PSS", "SHA-256", "PS256"},
+		{"RSA-PSS", "SHA-384", "PS384"},
+		{"RSA-PSS", "SHA-512", "PS512"},
+		{"RSA-OAEP", "SHA-1", "RSA-OAEP"},
+		{"RSA-OAEP", "SHA-256", "RSA-OAEP-256"},
+		{"RSA-OAEP", "SHA-384", "RSA-OAEP-384"},
+		{"RSA-OAEP", "SHA-512", "RSA-OAEP-512"},
+		// Case insensitive
+		{"rsa-pss", "sha-256", "PS256"},
+		{"rsassa-pkcs1-v1_5", "sha256", "RS256"},
+		// Unsupported combinations
+		{"RSA-PSS", "SHA-1", ""},
+		{"HMAC", "SHA-256", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.algo+"_"+tt.hash, func(t *testing.T) {
+			got := rsaJWKAlg(tt.algo, tt.hash)
+			if got != tt.want {
+				t.Errorf("rsaJWKAlg(%q, %q) = %q, want %q", tt.algo, tt.hash, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPadBytes(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  []byte
+		length int
+		want   int // expected length of result
+	}{
+		{"no padding needed", []byte{1, 2, 3}, 3, 3},
+		{"already longer", []byte{1, 2, 3, 4}, 3, 4},
+		{"pad to 32", []byte{1, 2}, 32, 32},
+		{"empty input", []byte{}, 4, 4},
+		{"pad to 1", []byte{}, 1, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := padBytes(tt.input, tt.length)
+			if len(result) != tt.want {
+				t.Errorf("len(padBytes) = %d, want %d", len(result), tt.want)
+			}
+			// Verify original bytes are at the end.
+			if len(tt.input) > 0 && len(result) >= len(tt.input) {
+				for i, b := range tt.input {
+					pos := len(result) - len(tt.input) + i
+					if result[pos] != b {
+						t.Errorf("byte at pos %d = %d, want %d", pos, result[pos], b)
+					}
+				}
+			}
+			// Verify leading bytes are zero.
+			if len(result) > len(tt.input) {
+				for i := 0; i < len(result)-len(tt.input); i++ {
+					if result[i] != 0 {
+						t.Errorf("padding byte at %d = %d, want 0", i, result[i])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCurveFromName(t *testing.T) {
+	tests := []struct {
+		name    string
+		wantNil bool
+	}{
+		{"P-256", false},
+		{"P-384", false},
+		{"P-521", true}, // not supported
+		{"", true},
+		{"invalid", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			curve := curveFromName(tt.name)
+			if tt.wantNil && curve != nil {
+				t.Errorf("curveFromName(%q) should return nil", tt.name)
+			}
+			if !tt.wantNil && curve == nil {
+				t.Errorf("curveFromName(%q) should not return nil", tt.name)
+			}
+		})
+	}
+}
+
+func TestImportCryptoKeyFull(t *testing.T) {
+	id := newRequestState(10, nil)
+	defer clearRequestState(id)
+
+	entry := &cryptoKeyEntry{
+		algoName: "ECDSA",
+		hashAlgo: "SHA-256",
+		keyType:  "public",
+	}
+
+	keyID := importCryptoKeyFull(id, entry)
+	if keyID < 0 {
+		t.Fatalf("importCryptoKeyFull returned %d", keyID)
+	}
+
+	got := getCryptoKey(id, keyID)
+	if got == nil {
+		t.Fatal("getCryptoKey returned nil")
+	}
+	if got.algoName != "ECDSA" {
+		t.Errorf("algoName = %q, want ECDSA", got.algoName)
+	}
+}
+
+func TestImportCryptoKeyFull_NonexistentRequest(t *testing.T) {
+	keyID := importCryptoKeyFull(999999990, &cryptoKeyEntry{})
+	if keyID != -1 {
+		t.Errorf("importCryptoKeyFull on missing request = %d, want -1", keyID)
+	}
+}
+
 func TestNormalizeAlgo(t *testing.T) {
 	tests := []struct {
 		input, want string
@@ -213,6 +368,23 @@ func TestNormalizeAlgo(t *testing.T) {
 		{"SHA-512", "SHA-512"},
 		{"sha512", "SHA-512"},
 		{"SHA512", "SHA-512"},
+		// HMAC variants
+		{"hmac", "HMAC"}, {"HMAC", "HMAC"}, {"Hmac", "HMAC"},
+		// AES variants
+		{"aes-gcm", "AES-GCM"}, {"AES-GCM", "AES-GCM"}, {"Aes-Gcm", "AES-GCM"},
+		{"aes-cbc", "AES-CBC"}, {"AES-CBC", "AES-CBC"}, {"Aes-Cbc", "AES-CBC"},
+		// ECDSA variants
+		{"ecdsa", "ECDSA"}, {"ECDSA", "ECDSA"}, {"Ecdsa", "ECDSA"},
+		// Key derivation
+		{"hkdf", "HKDF"}, {"HKDF", "HKDF"}, {"Hkdf", "HKDF"},
+		{"pbkdf2", "PBKDF2"}, {"PBKDF2", "PBKDF2"}, {"Pbkdf2", "PBKDF2"},
+		// RSA variants
+		{"rsa-oaep", "RSA-OAEP"}, {"RSA-OAEP", "RSA-OAEP"}, {"Rsa-Oaep", "RSA-OAEP"},
+		{"rsassa-pkcs1-v1_5", "RSASSA-PKCS1-v1_5"}, {"RSASSA-PKCS1-v1_5", "RSASSA-PKCS1-v1_5"}, {"RSASSA-PKCS1-V1_5", "RSASSA-PKCS1-v1_5"},
+		{"rsa-pss", "RSA-PSS"}, {"RSA-PSS", "RSA-PSS"}, {"Rsa-Pss", "RSA-PSS"},
+		// Ed25519 variants
+		{"ed25519", "Ed25519"}, {"Ed25519", "Ed25519"}, {"ED25519", "Ed25519"},
+		// Unknown passthrough
 		{"unknown", "unknown"}, // passthrough
 		{"", ""},               // passthrough
 	}

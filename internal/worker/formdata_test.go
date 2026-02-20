@@ -244,3 +244,173 @@ func TestFormData_FileBasics(t *testing.T) {
 		t.Error("File should have lastModified property")
 	}
 }
+
+func TestFormData_BlobArrayBuffer(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const blob = new Blob(["hello"]);
+    const buf = await blob.arrayBuffer();
+    const arr = new Uint8Array(buf);
+    return Response.json({
+      length: arr.length,
+      first: arr[0],
+      last: arr[arr.length - 1],
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Length int `json:"length"`
+		First  int `json:"first"`
+		Last   int `json:"last"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.Length != 5 {
+		t.Errorf("length = %d, want 5", data.Length)
+	}
+	if data.First != 104 { // 'h'
+		t.Errorf("first = %d, want 104 ('h')", data.First)
+	}
+}
+
+func TestFormData_Entries(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const fd = new FormData();
+    fd.append("x", "1");
+    fd.append("y", "2");
+    const entries = [];
+    for (const [key, value] of fd) {
+      entries.push(key + "=" + value);
+    }
+    return Response.json({ entries });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Entries []string `json:"entries"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Entries) != 2 {
+		t.Errorf("entries length = %d, want 2", len(data.Entries))
+	}
+}
+
+func TestFormData_Keys(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  fetch(request, env) {
+    const fd = new FormData();
+    fd.append("a", "1");
+    fd.append("b", "2");
+    fd.append("c", "3");
+    const keys = [...fd.keys()];
+    const values = [...fd.values()];
+    return Response.json({ keys, values });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Keys   []string `json:"keys"`
+		Values []string `json:"values"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Keys) != 3 {
+		t.Errorf("keys = %v", data.Keys)
+	}
+	if len(data.Values) != 3 {
+		t.Errorf("values = %v", data.Values)
+	}
+}
+
+func TestFormData_BlobNoType(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const blob = new Blob(["data"]);
+    const text = await blob.text();
+    return Response.json({
+      text,
+      type: blob.type,
+      size: blob.size,
+    });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Text string `json:"text"`
+		Type string `json:"type"`
+		Size int    `json:"size"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.Text != "data" {
+		t.Errorf("text = %q", data.Text)
+	}
+	if data.Type != "" {
+		t.Errorf("type should be empty, got %q", data.Type)
+	}
+	if data.Size != 4 {
+		t.Errorf("size = %d, want 4", data.Size)
+	}
+}
+
+func TestFormData_FileSlice(t *testing.T) {
+	db := testDB(t)
+	e := newTestEngine(t, db)
+
+	source := `export default {
+  async fetch(request, env) {
+    const file = new File(["0123456789"], "numbers.txt");
+    const sliced = file.slice(3, 7);
+    const text = await sliced.text();
+    return Response.json({ text, size: sliced.size });
+  },
+};`
+
+	r := execJS(t, e, source, defaultEnv(), getReq("http://localhost/"))
+	assertOK(t, r)
+
+	var data struct {
+		Text string `json:"text"`
+		Size int    `json:"size"`
+	}
+	if err := json.Unmarshal(r.Response.Body, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.Text != "3456" {
+		t.Errorf("sliced text = %q, want '3456'", data.Text)
+	}
+	if data.Size != 4 {
+		t.Errorf("size = %d, want 4", data.Size)
+	}
+}

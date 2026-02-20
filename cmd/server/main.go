@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"io/fs"
 	"log"
@@ -23,7 +24,7 @@ import (
 	"github.com/cryguy/hostedat/web"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	minio "github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"golang.org/x/time/rate"
 )
@@ -91,7 +92,7 @@ func main() {
 			if err := mgr.Start(); err != nil {
 				log.Fatalf("Failed to start SeaweedFS: %v", err)
 			}
-			defer mgr.Stop()
+			defer func() { _ = mgr.Stop() }()
 			iamClient = mgr.Client
 
 			// Use auto-configured credentials if not explicitly set.
@@ -161,7 +162,7 @@ func main() {
 	e.HideBanner = true
 	e.HTTPErrorHandler = api.CustomErrorHandler
 
-	e.Use(middleware.Logger())
+	e.Use(middleware.RequestLogger())
 	e.Use(middleware.Recover())
 
 	// Security headers
@@ -215,7 +216,7 @@ func main() {
 		// Try serving the exact file first
 		path := r.URL.Path
 		if f, err := httpFS.Open(path); err == nil {
-			f.Close()
+			_ = f.Close()
 			fileServer.ServeHTTP(w, r)
 			return
 		}
@@ -249,7 +250,7 @@ func main() {
 		}
 
 		go func() {
-			if err := server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Fatalf("Server failed: %v", err)
 			}
 		}()
@@ -265,7 +266,7 @@ func main() {
 		log.Printf("Starting hostedat %s (%s) (no TLS) on %s for domain %s", version, commit, cfg.Listen, cfg.Domain)
 
 		go func() {
-			if err := e.Start(cfg.Listen); err != nil && err != http.ErrServerClosed {
+			if err := e.Start(cfg.Listen); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Fatalf("Server failed: %v", err)
 			}
 		}()

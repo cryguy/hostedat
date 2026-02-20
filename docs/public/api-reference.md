@@ -337,7 +337,7 @@ curl -X DELETE https://example.com/api/v1/sites/abc123def456 \
 
 Deploy a zip file to a site. Accepts multipart form data. Rate-limited to 2 req/s per IP.
 
-If `_worker.js` is present in the zip, it is compiled to QuickJS bytecode. If `_worker.js` exceeds the configured size limit, the deploy is rejected.
+If `_worker.js` is present in the zip, it is validated and cached for V8 execution. If `_worker.js` exceeds the configured size limit, the deploy is rejected.
 
 **Auth:** JWT or API key (must own site or be admin)
 

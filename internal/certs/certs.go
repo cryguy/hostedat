@@ -1,6 +1,7 @@
 package certs
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 
@@ -39,7 +40,7 @@ func SetupTLS(cfg Config) (*tls.Config, error) {
 	domains := []string{cfg.Domain, "*." + cfg.Domain}
 
 	magic := certmagic.NewDefault()
-	if err := magic.ManageSync(nil, domains); err != nil {
+	if err := magic.ManageSync(context.TODO(), domains); err != nil {
 		return nil, fmt.Errorf("managing certificates: %w", err)
 	}
 

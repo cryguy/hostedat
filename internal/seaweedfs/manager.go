@@ -77,9 +77,9 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("setting up S3 credentials: %w", err)
 	}
 
-	weedBinary := m.Config.BinaryPath
-	if weedBinary == "" {
-		weedBinary = "weed"
+	weedBinary, err := EnsureBinary(m.Config)
+	if err != nil {
+		return fmt.Errorf("ensuring weed binary: %w", err)
 	}
 
 	m.cmd = exec.Command(weedBinary, "server", "-s3",

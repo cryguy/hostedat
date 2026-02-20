@@ -3,7 +3,7 @@ package worker
 import (
 	"fmt"
 
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 )
 
 // abortJS defines EventTarget, Event, AbortSignal, and AbortController as
@@ -108,15 +108,57 @@ if (typeof DOMException === 'undefined') {
 	};
 }
 
+class ScheduledEvent extends Event {
+	constructor(scheduledTime, cron) {
+		super('scheduled');
+		this.scheduledTime = scheduledTime;
+		this.cron = cron;
+		this._waitUntilPromises = [];
+	}
+	waitUntil(promise) {
+		this._waitUntilPromises.push(Promise.resolve(promise));
+	}
+}
+
+class CustomEvent extends Event {
+	constructor(type, options) {
+		super(type, options);
+		this.detail = (options && options.detail !== undefined) ? options.detail : null;
+	}
+}
+
+AbortSignal.any = function(signals) {
+	if (!Array.isArray(signals)) signals = Array.from(signals);
+	const controller = new AbortController();
+	for (var i = 0; i < signals.length; i++) {
+		if (signals[i].aborted) {
+			controller.abort(signals[i].reason);
+			return controller.signal;
+		}
+	}
+	function onAbort(ev) {
+		controller.abort(ev.target.reason);
+		for (var j = 0; j < signals.length; j++) {
+			signals[j].removeEventListener('abort', onAbort);
+		}
+	}
+	for (var i = 0; i < signals.length; i++) {
+		signals[i].addEventListener('abort', onAbort);
+	}
+	return controller.signal;
+};
+
 globalThis.Event = Event;
 globalThis.EventTarget = EventTarget;
 globalThis.AbortSignal = AbortSignal;
 globalThis.AbortController = AbortController;
+globalThis.ScheduledEvent = ScheduledEvent;
+globalThis.CustomEvent = CustomEvent;
 `
 
 // setupAbort evaluates the AbortController/AbortSignal polyfills.
-func setupAbort(rt *qjs.Runtime) error {
-	if _, err := rt.Eval("abort.js", qjs.Code(abortJS)); err != nil {
+func setupAbort(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
+	if _, err := ctx.RunScript(abortJS, "abort.js"); err != nil {
 		return fmt.Errorf("evaluating abort.js: %w", err)
 	}
 	return nil

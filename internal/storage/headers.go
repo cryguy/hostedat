@@ -19,7 +19,7 @@ func ParseHeaders(filePath string) ([]HeaderRule, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var rules []HeaderRule
 	var current *HeaderRule

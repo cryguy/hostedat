@@ -39,14 +39,15 @@ type ObjectStorageAuthConfig struct {
 }
 
 type WorkerConfig struct {
-	PoolSize         int `yaml:"pool_size"`
-	MemoryLimitMB    int `yaml:"memory_limit_mb"`
-	ExecutionTimeout int `yaml:"execution_timeout"`
-	MaxFetchRequests int `yaml:"max_fetch_requests"`
-	FetchTimeoutSec  int `yaml:"fetch_timeout_sec"`
-	MaxResponseBytes int `yaml:"max_response_bytes"`
-	MaxLogRetention  int `yaml:"max_log_retention"`
-	MaxScriptSizeKB  int `yaml:"max_script_size_kb"`
+	PoolSize         int    `yaml:"pool_size"`
+	MemoryLimitMB    int    `yaml:"memory_limit_mb"`
+	ExecutionTimeout int    `yaml:"execution_timeout"`
+	MaxFetchRequests int    `yaml:"max_fetch_requests"`
+	FetchTimeoutSec  int    `yaml:"fetch_timeout_sec"`
+	MaxResponseBytes int    `yaml:"max_response_bytes"`
+	MaxLogRetention  int    `yaml:"max_log_retention"`
+	MaxScriptSizeKB  int    `yaml:"max_script_size_kb"`
+	DataDir          string `yaml:"data_dir"`
 }
 
 type DBConfig struct {

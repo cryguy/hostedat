@@ -1,16 +1,17 @@
 package worker
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
 
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 )
 
 // webAPIsJS defines the Web API classes (Headers, Request, Response, URL,
-// TextEncoder, TextDecoder) in JavaScript. Go-backed helpers like __parseURL
+// URLSearchParams, TextEncoder, TextDecoder) in JavaScript. Go-backed helpers like __parseURL
 // are registered separately and called from inside these classes.
 const webAPIsJS = `
 class Headers {
@@ -57,6 +58,9 @@ class URL {
 		this.searchParams._url = this;
 	}
 	toString() { return this.href; }
+	static canParse(url, base) {
+		try { new URL(url, base); return true; } catch { return false; }
+	}
 }
 
 class URLSearchParams {
@@ -102,12 +106,41 @@ class Request {
 		if (init.headers) this.headers = new Headers(init.headers);
 		if (init.body !== undefined) this._body = init.body;
 	}
+	get body() {
+		if (this._body === null || this._body === undefined) return null;
+		if (this._body instanceof ReadableStream) return this._body;
+		const content = this._body;
+		const stream = new ReadableStream({
+			start(controller) {
+				if (typeof content === 'string') {
+					controller.enqueue(new TextEncoder().encode(content));
+				} else if (content instanceof ArrayBuffer) {
+					controller.enqueue(new Uint8Array(content));
+				} else if (ArrayBuffer.isView(content)) {
+					controller.enqueue(new Uint8Array(content.buffer, content.byteOffset, content.byteLength));
+				} else {
+					controller.enqueue(new TextEncoder().encode(String(content)));
+				}
+				controller.close();
+			}
+		});
+		this._body = stream;
+		return stream;
+	}
+	get bodyUsed() {
+		if (this._body instanceof ReadableStream) return this._body._locked;
+		return false;
+	}
 	async text() { return this._body !== null && this._body !== undefined ? String(this._body) : ''; }
 	async json() { return JSON.parse(await this.text()); }
 	async arrayBuffer() {
 		const t = await this.text();
 		const enc = new TextEncoder();
 		return enc.encode(t).buffer;
+	}
+	async bytes() {
+		const t = await this.text();
+		return new TextEncoder().encode(t);
 	}
 	clone() { return new Request(this); }
 }
@@ -121,6 +154,32 @@ class Response {
 		this.headers = new Headers(init.headers);
 		this.ok = this.status >= 200 && this.status < 300;
 		this.url = init.url || '';
+		this.webSocket = init.webSocket || null;
+	}
+	get body() {
+		if (this._body === null || this._body === undefined) return null;
+		if (this._body instanceof ReadableStream) return this._body;
+		const content = this._body;
+		const stream = new ReadableStream({
+			start(controller) {
+				if (typeof content === 'string') {
+					controller.enqueue(new TextEncoder().encode(content));
+				} else if (content instanceof ArrayBuffer) {
+					controller.enqueue(new Uint8Array(content));
+				} else if (ArrayBuffer.isView(content)) {
+					controller.enqueue(new Uint8Array(content.buffer, content.byteOffset, content.byteLength));
+				} else {
+					controller.enqueue(new TextEncoder().encode(String(content)));
+				}
+				controller.close();
+			}
+		});
+		this._body = stream;
+		return stream;
+	}
+	get bodyUsed() {
+		if (this._body instanceof ReadableStream) return this._body._locked;
+		return false;
 	}
 	async text() { return this._body !== null && this._body !== undefined ? String(this._body) : ''; }
 	async json() { return JSON.parse(await this.text()); }
@@ -128,6 +187,10 @@ class Response {
 		const t = await this.text();
 		const enc = new TextEncoder();
 		return enc.encode(t).buffer;
+	}
+	async bytes() {
+		const t = await this.text();
+		return new TextEncoder().encode(t);
 	}
 	clone() {
 		return new Response(this._body, {
@@ -145,7 +208,15 @@ class Response {
 	}
 	static redirect(url, status) {
 		status = status || 302;
+		if ([301, 302, 303, 307, 308].indexOf(status) === -1) {
+			throw new RangeError('Invalid redirect status: ' + status);
+		}
 		return new Response(null, { status, headers: { location: url } });
+	}
+	static error() {
+		const r = new Response(null, { status: 0, statusText: '' });
+		r.type = 'error';
+		return r;
 	}
 }
 
@@ -260,8 +331,8 @@ USP.sort = function() {
 `
 
 // setupURLSearchParamsExt evaluates the URLSearchParams extension polyfill.
-func setupURLSearchParamsExt(rt *qjs.Runtime) error {
-	if _, err := rt.Eval("urlsearchparams_ext.js", qjs.Code(urlSearchParamsExtJS)); err != nil {
+func setupURLSearchParamsExt(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
+	if _, err := ctx.RunScript(urlSearchParamsExtJS, "urlsearchparams_ext.js"); err != nil {
 		return fmt.Errorf("evaluating urlsearchparams_ext.js: %w", err)
 	}
 	return nil
@@ -269,15 +340,13 @@ func setupURLSearchParamsExt(rt *qjs.Runtime) error {
 
 // setupWebAPIs registers Go-backed helpers and evaluates the JS class
 // definitions that form the Web API surface available to workers.
-func setupWebAPIs(rt *qjs.Runtime) error {
-	ctx := rt.Context()
-
+func setupWebAPIs(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
 	// Register Go-backed URL parser.
-	ctx.SetFunc("__parseURL", func(this *qjs.This) (*qjs.Value, error) {
-		c := this.Context()
-		args := this.Args()
+	ft := v8.NewFunctionTemplate(iso, func(info *v8.FunctionCallbackInfo) *v8.Value {
+		args := info.Args()
 		if len(args) < 1 {
-			return c.NewString(`{"error":"URL constructor requires at least 1 argument"}`), nil
+			val, _ := v8.NewValue(iso, `{"error":"URL constructor requires at least 1 argument"}`)
+			return val
 		}
 
 		rawURL := args[0].String()
@@ -289,15 +358,18 @@ func setupWebAPIs(rt *qjs.Runtime) error {
 		parsed, err := parseURL(rawURL, base)
 		if err != nil {
 			errJSON := fmt.Sprintf(`{"error":%q}`, err.Error())
-			return c.NewString(errJSON), nil
+			val, _ := v8.NewValue(iso, errJSON)
+			return val
 		}
 
 		data, _ := json.Marshal(parsed)
-		return c.NewString(string(data)), nil
+		val, _ := v8.NewValue(iso, string(data))
+		return val
 	})
+	_ = ctx.Global().Set("__parseURL", ft.GetFunction(ctx))
 
 	// Evaluate the JS class definitions.
-	_, err := rt.Eval("webapi.js", qjs.Code(webAPIsJS))
+	_, err := ctx.RunScript(webAPIsJS, "webapi.js")
 	return err
 }
 
@@ -369,78 +441,146 @@ func parseURL(rawURL, base string) (*urlParsed, error) {
 	}, nil
 }
 
-// goRequestToJS converts a Go WorkerRequest into a JS Request object by
-// invoking the Request constructor defined in webAPIsJS.
-func goRequestToJS(ctx *qjs.Context, req *WorkerRequest) (*qjs.Value, error) {
-	// Build the init object.
-	init := ctx.NewObject()
-	init.SetPropertyStr("method", ctx.NewString(req.Method))
-
-	headersObj := ctx.NewObject()
+// goRequestToJS converts a Go WorkerRequest into a JS Request object.
+func goRequestToJS(iso *v8.Isolate, ctx *v8.Context, req *WorkerRequest) (*v8.Value, error) {
+	// Lowercase headers for the JS Headers constructor.
+	lowerHeaders := make(map[string]string, len(req.Headers))
 	for k, v := range req.Headers {
-		headersObj.SetPropertyStr(strings.ToLower(k), ctx.NewString(v))
+		lowerHeaders[strings.ToLower(k)] = v
 	}
-	init.SetPropertyStr("headers", headersObj)
+	headersJSON, _ := json.Marshal(lowerHeaders)
 
-	if req.Body != nil && len(req.Body) > 0 {
-		init.SetPropertyStr("body", ctx.NewString(string(req.Body)))
+	// Set temporary globals for the constructor call.
+	urlVal, _ := v8.NewValue(iso, req.URL)
+	_ = ctx.Global().Set("__tmp_url", urlVal)
+	methodVal, _ := v8.NewValue(iso, req.Method)
+	_ = ctx.Global().Set("__tmp_method", methodVal)
+	headersStr, _ := v8.NewValue(iso, string(headersJSON))
+	_ = ctx.Global().Set("__tmp_headers_json", headersStr)
+
+	var bodyScript string
+	if len(req.Body) > 0 {
+		bodyVal, _ := v8.NewValue(iso, string(req.Body))
+		_ = ctx.Global().Set("__tmp_body", bodyVal)
+		bodyScript = "init.body = globalThis.__tmp_body;"
 	}
 
-	// Call: new Request(url, init)
-	requestCtor := ctx.Global().GetPropertyStr("Request")
-	defer requestCtor.Free()
+	script := fmt.Sprintf(`(function() {
+		var init = {
+			method: globalThis.__tmp_method,
+			headers: JSON.parse(globalThis.__tmp_headers_json),
+		};
+		%s
+		var req = new Request(globalThis.__tmp_url, init);
+		delete globalThis.__tmp_url;
+		delete globalThis.__tmp_method;
+		delete globalThis.__tmp_headers_json;
+		delete globalThis.__tmp_body;
+		return req;
+	})()`, bodyScript)
 
-	jsReq := requestCtor.CallConstructor(ctx.NewString(req.URL), init)
-	if jsReq.IsError() {
-		return nil, fmt.Errorf("failed to create JS Request: %s", jsReq.String())
-	}
-
-	return jsReq, nil
+	return ctx.RunScript(script, "goRequestToJS.js")
 }
 
 // jsResponseToGo extracts a Go WorkerResponse from a JS Response value.
-func jsResponseToGo(ctx *qjs.Context, val *qjs.Value) (*WorkerResponse, error) {
-	if val.IsNull() || val.IsUndefined() {
+func jsResponseToGo(ctx *v8.Context, val *v8.Value) (*WorkerResponse, error) {
+	if val == nil || val.IsNull() || val.IsUndefined() {
 		return nil, fmt.Errorf("worker returned null/undefined instead of Response")
 	}
 
-	status := val.GetPropertyStr("status")
-	statusCode := int(status.Int32())
-	status.Free()
-
-	// Extract headers from headers._map
-	headersVal := val.GetPropertyStr("headers")
-	headersMap := headersVal.GetPropertyStr("_map")
-	goHeaders := make(map[string]string)
-
-	if headersMap.IsObject() {
-		names, err := headersMap.GetOwnPropertyNames()
-		if err == nil {
-			for _, name := range names {
-				v := headersMap.GetPropertyStr(name)
-				goHeaders[name] = v.String()
-				v.Free()
+	// Use JS to extract all response data as JSON in one call.
+	_ = ctx.Global().Set("__tmp_resp", val)
+	result, err := ctx.RunScript(`(function() {
+		var r = globalThis.__tmp_resp;
+		delete globalThis.__tmp_resp;
+		var headers = {};
+		if (r.headers && r.headers._map) {
+			var m = r.headers._map;
+			for (var k in m) {
+				if (m.hasOwnProperty(k)) headers[k] = m[k];
 			}
 		}
+		var hasWebSocket = !!(r.webSocket);
+		if (hasWebSocket) {
+			globalThis.__ws_check_resp = r.webSocket;
+		}
+		var body = '';
+		var bodyIsBase64 = false;
+		if (r._body !== null && r._body !== undefined) {
+			if (r._body instanceof ReadableStream) {
+				var _q = r._body._queue;
+				var _allBytes = [];
+				for (var _i = 0; _i < _q.length; _i++) {
+					var _chunk = _q[_i];
+					if (typeof _chunk === 'string') {
+						var _enc = new TextEncoder();
+						var _bytes = _enc.encode(_chunk);
+						for (var _k = 0; _k < _bytes.length; _k++) _allBytes.push(_bytes[_k]);
+					} else if (_chunk instanceof Uint8Array || ArrayBuffer.isView(_chunk)) {
+						var _arr = new Uint8Array(_chunk.buffer || _chunk, _chunk.byteOffset || 0, _chunk.byteLength || _chunk.length);
+						for (var _j = 0; _j < _arr.length; _j++) _allBytes.push(_arr[_j]);
+					} else if (_chunk instanceof ArrayBuffer) {
+						var _arr2 = new Uint8Array(_chunk);
+						for (var _j2 = 0; _j2 < _arr2.length; _j2++) _allBytes.push(_arr2[_j2]);
+					} else {
+						var _s = String(_chunk);
+						for (var _j3 = 0; _j3 < _s.length; _j3++) _allBytes.push(_s.charCodeAt(_j3) & 0xFF);
+					}
+				}
+				r._body._queue = [];
+				if (_allBytes.length > 0) {
+					body = __bufferSourceToB64(new Uint8Array(_allBytes));
+					bodyIsBase64 = true;
+				}
+			} else if (r._body instanceof ArrayBuffer) {
+				body = __bufferSourceToB64(r._body);
+				bodyIsBase64 = true;
+			} else if (ArrayBuffer.isView(r._body)) {
+				body = __bufferSourceToB64(r._body);
+				bodyIsBase64 = true;
+			} else {
+				body = String(r._body);
+			}
+		}
+		return JSON.stringify({
+			status: r.status || 200,
+			headers: headers,
+			body: body,
+			bodyIsBase64: bodyIsBase64,
+			hasWebSocket: hasWebSocket,
+		});
+	})()`, "jsResponseToGo.js")
+	if err != nil {
+		return nil, fmt.Errorf("extracting response: %w", err)
 	}
-	headersMap.Free()
-	headersVal.Free()
 
-	// Read body directly from _body property to avoid async .text() Promise
-	// which causes WASM memory issues when freeing the awaited Promise.
+	var resp struct {
+		Status       int               `json:"status"`
+		Headers      map[string]string `json:"headers"`
+		Body         string            `json:"body"`
+		BodyIsBase64 bool              `json:"bodyIsBase64"`
+		HasWebSocket bool              `json:"hasWebSocket"`
+	}
+	if err := json.Unmarshal([]byte(result.String()), &resp); err != nil {
+		return nil, fmt.Errorf("parsing response JSON: %w", err)
+	}
+
 	var body []byte
-	bodyVal := val.GetPropertyStr("_body")
-	if !bodyVal.IsNull() && !bodyVal.IsUndefined() {
-		bodyStr := bodyVal.String()
-		if bodyStr != "" {
-			body = []byte(bodyStr)
+	if resp.Body != "" {
+		if resp.BodyIsBase64 {
+			body, err = base64.StdEncoding.DecodeString(resp.Body)
+			if err != nil {
+				return nil, fmt.Errorf("decoding base64 body: %w", err)
+			}
+		} else {
+			body = []byte(resp.Body)
 		}
 	}
-	bodyVal.Free()
 
 	return &WorkerResponse{
-		StatusCode: statusCode,
-		Headers:    goHeaders,
-		Body:       body,
+		StatusCode:   resp.Status,
+		Headers:      resp.Headers,
+		Body:         body,
+		HasWebSocket: resp.HasWebSocket,
 	}, nil
 }

@@ -3,17 +3,12 @@ package worker
 import (
 	"fmt"
 
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 )
 
 // encodingJS implements global atob() and btoa() as pure JavaScript.
-//
-// These MUST be JS-only (no Go-backed functions) because binary strings
-// containing null bytes (0x00) get truncated when crossing the QJS ↔ Go
-// boundary: QJS's JS_ToCString returns a null-terminated C string, so Go's
-// String() method sees a shorter value. By keeping encode/decode entirely
-// in the JS engine, binary strings are handled correctly regardless of
-// content.
+// Using a pure-JS implementation avoids any boundary-crossing issues
+// with binary strings containing null bytes.
 const encodingJS = `
 (function() {
 	const _e = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -110,8 +105,8 @@ const encodingJS = `
 `
 
 // setupEncoding evaluates the pure-JS atob/btoa implementations.
-func setupEncoding(rt *qjs.Runtime) error {
-	if _, err := rt.Eval("encoding.js", qjs.Code(encodingJS)); err != nil {
+func setupEncoding(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
+	if _, err := ctx.RunScript(encodingJS, "encoding.js"); err != nil {
 		return fmt.Errorf("evaluating encoding.js: %w", err)
 	}
 	return nil

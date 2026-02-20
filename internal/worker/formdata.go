@@ -3,7 +3,7 @@ package worker
 import (
 	"fmt"
 
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 )
 
 // formdataJS implements Blob, File, and FormData as pure JS polyfills.
@@ -157,9 +157,38 @@ globalThis.FormData = FormData;
 `
 
 // setupFormData evaluates the FormData/Blob/File polyfills.
-func setupFormData(rt *qjs.Runtime) error {
-	if _, err := rt.Eval("formdata.js", qjs.Code(formdataJS)); err != nil {
+func setupFormData(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
+	if _, err := ctx.RunScript(formdataJS, "formdata.js"); err != nil {
 		return fmt.Errorf("evaluating formdata.js: %w", err)
+	}
+	return nil
+}
+
+// blobExtJS adds stream() and bytes() methods to Blob.prototype.
+// Must be evaluated AFTER both setupFormData (Blob) and setupStreams (ReadableStream).
+const blobExtJS = `
+Blob.prototype.stream = function() {
+	var blob = this;
+	return new ReadableStream({
+		start: function(controller) {
+			blob.arrayBuffer().then(function(buf) {
+				controller.enqueue(new Uint8Array(buf));
+				controller.close();
+			});
+		}
+	});
+};
+Blob.prototype.bytes = function() {
+	return this.arrayBuffer().then(function(buf) {
+		return new Uint8Array(buf);
+	});
+};
+`
+
+// setupBlobExt evaluates the Blob.stream()/bytes() polyfills.
+func setupBlobExt(_ *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
+	if _, err := ctx.RunScript(blobExtJS, "blob_ext.js"); err != nil {
+		return fmt.Errorf("evaluating blob_ext.js: %w", err)
 	}
 	return nil
 }

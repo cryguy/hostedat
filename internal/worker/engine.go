@@ -1,11 +1,11 @@
 package worker
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
+	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,9 +13,15 @@ import (
 	"github.com/cryguy/hostedat/internal/config"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
-	"github.com/fastschema/qjs"
+	v8 "github.com/tommie/v8go"
 	"gorm.io/gorm"
 )
+
+// wsConnectionTimeout is the maximum duration for a WebSocket connection.
+const wsConnectionTimeout = 5 * time.Minute
+
+// maxWSMessageBytes is the maximum size of a single WebSocket message (64 KB).
+const maxWSMessageBytes = 64 * 1024
 
 // poolKey uniquely identifies a compiled worker deployment for a site.
 type poolKey struct {
@@ -23,10 +29,10 @@ type poolKey struct {
 	DeployKey string
 }
 
-// sitePool wraps a qjs.Pool with an invalidation flag so that stale pools
+// sitePool wraps a v8Pool with an invalidation flag so that stale pools
 // are replaced transparently on the next Execute call.
 type sitePool struct {
-	pool    *qjs.Pool
+	pool    *v8Pool
 	invalid bool
 	mu      sync.RWMutex
 }
@@ -45,24 +51,23 @@ func (sp *sitePool) markInvalid() {
 
 // S3Client abstracts the minio.Client methods used by worker storage bindings.
 type S3Client interface {
-	GetObject(ctx context.Context, bucketName, objectName string, opts interface{}) (interface{}, error)
+	GetObject(ctx interface{}, bucketName, objectName string, opts interface{}) (interface{}, error)
 }
 
 // Engine manages per-site worker pools and executes JS worker scripts.
 type Engine struct {
 	pools              sync.Map // poolKey -> *sitePool
-	bytecodes          sync.Map // poolKey -> []byte
+	sources            sync.Map // poolKey -> string (JS source)
 	config             config.WorkerConfig
 	db                 *gorm.DB
 	store              *storage.Manager
-	minioClient        interface{} // *minio.Client; stored as interface{} because the minio package is only imported by cmd/server
-	presignMinioClient interface{} // *minio.Client configured with the public S3 endpoint for presigned URL generation
-	publicS3URL        string      // public-facing S3 URL for object URLs (e.g. https://storage.example.com)
+	minioClient        interface{} // *minio.Client
+	presignMinioClient interface{} // *minio.Client for presigned URL generation
+	publicS3URL        string
 	logDone            chan struct{}
 }
 
 // NewEngine creates an Engine with the given configuration and database handle.
-// It starts a background goroutine for log retention cleanup.
 func NewEngine(cfg config.WorkerConfig, db *gorm.DB) *Engine {
 	e := &Engine{
 		config:  cfg,
@@ -73,7 +78,7 @@ func NewEngine(cfg config.WorkerConfig, db *gorm.DB) *Engine {
 	return e
 }
 
-// SetStore sets the storage manager for bytecode reload on server restart.
+// SetStore sets the storage manager for source reload on server restart.
 func (e *Engine) SetStore(store *storage.Manager) {
 	e.store = store
 }
@@ -84,8 +89,6 @@ func (e *Engine) SetMinioClient(client interface{}) {
 }
 
 // SetPresignMinioClient sets the minio-go client used for presigned URL generation.
-// This client should be configured with the public S3 endpoint so SigV4 signatures
-// are generated for the externally reachable Host.
 func (e *Engine) SetPresignMinioClient(client interface{}) {
 	e.presignMinioClient = client
 }
@@ -113,12 +116,11 @@ func (e *Engine) logRetentionLoop() {
 	}
 }
 
-// EnsureBytecode loads bytecode from disk if not already in memory.
-// This handles the server restart scenario where pools and bytecodes are lost
-// but the compiled bytecode.bin files remain on disk.
-func (e *Engine) EnsureBytecode(siteID string, deployKey string) error {
+// EnsureSource loads the worker JS source into memory if not already cached.
+// Handles the server restart scenario where in-memory caches are lost.
+func (e *Engine) EnsureSource(siteID string, deployKey string) error {
 	key := poolKey{SiteID: siteID, DeployKey: deployKey}
-	if _, ok := e.bytecodes.Load(key); ok {
+	if _, ok := e.sources.Load(key); ok {
 		return nil
 	}
 
@@ -126,59 +128,37 @@ func (e *Engine) EnsureBytecode(siteID string, deployKey string) error {
 		return fmt.Errorf("storage manager not set")
 	}
 
-	// Try reading cached bytecode from disk.
-	bcPath := filepath.Join(e.store.GetWorkerBytecodeDir(siteID, deployKey), "bytecode.bin")
-	bytecode, err := os.ReadFile(bcPath)
-	if err == nil && len(bytecode) > 0 {
-		e.bytecodes.Store(key, bytecode)
-		return nil
-	}
-
-	// Fallback: recompile from source.
 	source, err := e.store.GetWorkerScript(siteID, deployKey)
 	if err != nil {
-		return fmt.Errorf("no bytecode or source for site %s deploy %s: %w", siteID, deployKey, err)
+		return fmt.Errorf("no source for site %s deploy %s: %w", siteID, deployKey, err)
 	}
 
-	if _, err := e.CompileAndCache(siteID, deployKey, source); err != nil {
-		return fmt.Errorf("recompiling worker: %w", err)
-	}
-
+	e.sources.Store(key, source)
 	return nil
 }
 
-// CompileAndCache compiles a worker script into QuickJS bytecode and stores
-// it for later pool creation. The source must be a valid ES module that
-// exports a default object with a fetch() handler.
+// CompileAndCache validates that a worker script compiles and stores the
+// source for later pool creation. Returns the source bytes for disk storage.
 func (e *Engine) CompileAndCache(siteID string, deployKey string, source string) ([]byte, error) {
 	key := poolKey{SiteID: siteID, DeployKey: deployKey}
 
-	rt, err := qjs.New(qjs.Option{
-		Context:            context.Background(),
-		CloseOnContextDone: true, // Must match pool option to initialize global Wazero config correctly.
-		MemoryLimit:        e.config.MemoryLimitMB * 1024 * 1024,
-		MaxStackSize:       1024 * 1024,
-		MaxExecutionTime:   e.config.ExecutionTimeout,
-		GCThreshold:        256 * 1024,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("creating compile runtime: %w", err)
-	}
-	defer rt.Close()
+	// Validate the source compiles in a temporary isolate.
+	iso := v8.NewIsolate()
+	defer iso.Dispose()
 
-	bytecode, err := rt.Compile("worker.js", qjs.Code(source), qjs.TypeModule())
-	if err != nil {
+	wrapped := wrapESModule(source)
+	if _, err := iso.CompileUnboundScript(wrapped, "worker.js", v8.CompileOptions{}); err != nil {
 		return nil, fmt.Errorf("compiling worker script: %w", err)
 	}
 
-	e.bytecodes.Store(key, bytecode)
-	return bytecode, nil
+	e.sources.Store(key, source)
+	return []byte(source), nil
 }
 
-// GetOrCreatePool returns the runtime pool for the given site/version,
-// creating it if necessary. Each runtime in the pool has the Web APIs,
-// console, and fetch injected, and the compiled worker bytecode evaluated.
-func (e *Engine) GetOrCreatePool(siteID string, deployKey string, env *Env) (*qjs.Pool, error) {
+// getOrCreatePool returns the worker pool for the given site/deploy,
+// creating it if necessary. Each worker in the pool has all Web APIs,
+// console, fetch, crypto, and the compiled worker script loaded.
+func (e *Engine) getOrCreatePool(siteID string, deployKey string) (*v8Pool, error) {
 	key := poolKey{SiteID: siteID, DeployKey: deployKey}
 
 	// Check for a valid existing pool.
@@ -187,74 +167,97 @@ func (e *Engine) GetOrCreatePool(siteID string, deployKey string, env *Env) (*qj
 		if sp.isValid() {
 			return sp.pool, nil
 		}
-		// Stale pool -- remove and create a new one.
 		e.pools.Delete(key)
+		sp.pool.dispose()
 	}
 
-	// Load bytecode.
-	bcVal, ok := e.bytecodes.Load(key)
+	// Load source.
+	srcVal, ok := e.sources.Load(key)
 	if !ok {
-		return nil, fmt.Errorf("no compiled bytecode for site %s deploy %s", siteID, deployKey)
+		return nil, fmt.Errorf("no source for site %s deploy %s", siteID, deployKey)
 	}
-	bytecode := bcVal.([]byte)
+	source := srcVal.(string)
 
 	cfg := e.config
-	option := qjs.Option{
-		Context:            context.Background(),
-		CloseOnContextDone: true, // Required for rt.Close() to interrupt running WASM execution.
-		MemoryLimit:        cfg.MemoryLimitMB * 1024 * 1024,
-		MaxStackSize:       1024 * 1024,
-		MaxExecutionTime:   cfg.ExecutionTimeout,
-		GCThreshold:        256 * 1024,
+
+	setupFns := []setupFunc{
+		// Web APIs: Headers, Request, Response, URL, URLSearchParams, TextEncoder/Decoder
+		setupWebAPIs,
+		setupURLSearchParamsExt,
+		// Globals: structuredClone, performance.now(), navigator, queueMicrotask
+		setupGlobals,
+		// Encoding: atob, btoa
+		setupEncoding,
+		// Timers: setTimeout, setInterval, clearTimeout, clearInterval (real event loop)
+		setupTimers,
+		// Abort: AbortController, AbortSignal, Event, EventTarget, DOMException
+		setupAbort,
+		// reportError/ErrorEvent: global error reporting (requires EventTarget)
+		setupReportError,
+		// Crypto: crypto.getRandomValues, crypto.subtle, crypto.randomUUID
+		setupCrypto,
+		// Crypto extensions: JWK, ECDSA, AES-CBC, generateKey
+		setupCryptoExt,
+		// Crypto: HKDF, PBKDF2 deriveBits/deriveKey
+		setupCryptoDerive,
+		// Crypto: RSA-OAEP, RSASSA-PKCS1-v1_5, RSA-PSS
+		setupCryptoRSA,
+		// Crypto: Ed25519 sign/verify
+		setupCryptoEd25519,
+		// Crypto: AES-CTR encrypt/decrypt, AES-KW wrapKey/unwrapKey
+		setupCryptoAesCtrKw,
+		// Crypto: ECDH and X25519 key agreement
+		setupCryptoECDH,
+		// URLPattern: URL pattern matching API
+		setupURLPattern,
+		// Streams: ReadableStream, WritableStream, TransformStream
+		setupStreams,
+		// TextStreams: TextEncoderStream, TextDecoderStream, IdentityTransformStream
+		setupTextStreams,
+		// FormData: FormData, Blob, File
+		setupFormData,
+		// Blob extensions: Blob.stream(), Blob.bytes() (requires Blob + ReadableStream)
+		setupBlobExt,
+		// Compression: CompressionStream, DecompressionStream
+		setupCompression,
+		// Body types: patches Request/Response for non-string bodies
+		setupBodyTypes,
+		// WebSocket: WebSocketPair, WebSocket class
+		setupWebSocket,
+		// HTMLRewriter: streaming HTML transformation
+		setupHTMLRewriter,
+		// Console: log/info/warn/error/debug capture
+		setupConsole,
+		// Console extensions: time, count, assert, table, trace, group
+		setupConsoleExt,
+		// Fetch: Go-backed fetch() with SSRF protection
+		func(iso *v8.Isolate, ctx *v8.Context, _ *eventLoop) error {
+			return setupFetch(iso, ctx, cfg)
+		},
+		// BYOB Reader: ReadableStreamBYOBReader, ReadableByteStreamController
+		setupBYOBReader,
+		// MessageChannel: MessageChannel, MessagePort
+		setupMessageChannel,
+		// Unhandled Rejection: PromiseRejectionEvent, unhandledrejection tracking
+		setupUnhandledRejection,
+		// Scheduler: scheduler.wait()
+		setupScheduler,
+		// DigestStream: crypto.DigestStream for streaming hash computation
+		setupDigestStream,
+		// EventSource: Server-Sent Events client
+		setupEventSource,
+		// TCP Sockets: connect() for outbound TCP connections
+		setupTCPSocket,
+		// D1: SQL database bindings (per-binding setup in buildEnvObject)
+		setupD1,
+		// Cache: Cache API (caches.default, caches.open)
+		setupCache,
 	}
 
-	pool := qjs.NewPool(cfg.PoolSize, option,
-		// Setup function 1: Web APIs (Headers, Request, Response, URL, etc.)
-		setupWebAPIs,
-		// Setup function 1b: URLSearchParams mutations + URL sync
-		setupURLSearchParamsExt,
-		// Setup function 2: globals (structuredClone, performance, navigator, queueMicrotask)
-		setupGlobals,
-		// Setup function 3: encoding (atob, btoa)
-		setupEncoding,
-		// Setup function 4: timers (setTimeout, setInterval, clearTimeout, clearInterval)
-		setupTimers,
-		// Setup function 5: abort (AbortController, AbortSignal, Event, EventTarget, DOMException)
-		setupAbort,
-		// Setup function 6: crypto (crypto.getRandomValues, crypto.subtle, crypto.randomUUID)
-		setupCrypto,
-		// Setup function 6b: crypto extensions (JWK, ECDSA, AES-CBC, generateKey)
-		setupCryptoExt,
-		// Setup function 7: streams (ReadableStream, WritableStream, TransformStream)
-		setupStreams,
-		// Setup function 8: formdata (FormData, Blob, File)
-		setupFormData,
-		// Setup function 9: body type coercion (patches Request/Response for non-string bodies)
-		setupBodyTypes,
-		// Setup function 11: console capture
-		setupConsole,
-		// Setup function 12: fetch()
-		func(rt *qjs.Runtime) error {
-			return setupFetch(rt, cfg)
-		},
-		// Setup function 13: load worker module and extract default export
-		func(rt *qjs.Runtime) error {
-			// Load registers the compiled module in the runtime.
-			if _, err := rt.Load("worker.js", qjs.Bytecode(bytecode)); err != nil {
-				return fmt.Errorf("loading worker bytecode: %w", err)
-			}
-			// Import the default export from the registered module.
-			moduleVal, err := rt.Eval("__worker_import__.js",
-				qjs.Code(`import mod from 'worker.js'; export default mod;`),
-				qjs.TypeModule(),
-			)
-			if err != nil {
-				return fmt.Errorf("importing worker module: %w", err)
-			}
-			rt.Context().Global().SetPropertyStr("__worker_module__", moduleVal)
-			return nil
-		},
-	)
+	pool, err := newV8Pool(cfg.PoolSize, source, setupFns, e.config.MemoryLimitMB)
+	if err != nil {
+		return nil, fmt.Errorf("creating v8 pool: %w", err)
+	}
 
 	sp := &sitePool{pool: pool}
 	e.pools.Store(key, sp)
@@ -267,39 +270,43 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 	start := time.Now()
 	result = &WorkerResult{}
 
-	// Ensure bytecode is loaded (handles server restart).
-	if err := e.EnsureBytecode(siteID, deployKey); err != nil {
+	// Set engine and DB references so buildEnvObject can wire up service bindings
+	// and global APIs like Cache can access the database.
+	env.engine = e
+	env.db = e.db
+	env.d1DataDir = e.config.DataDir
+
+	// Ensure source is loaded (handles server restart).
+	if err := e.EnsureSource(siteID, deployKey); err != nil {
 		result.Error = err
 		result.Duration = time.Since(start)
 		return result
 	}
 
-	pool, err := e.GetOrCreatePool(siteID, deployKey, env)
+	pool, err := e.getOrCreatePool(siteID, deployKey)
 	if err != nil {
 		result.Error = err
 		result.Duration = time.Since(start)
 		return result
 	}
 
-	rt, err := pool.Get()
+	w, err := pool.get()
 	if err != nil {
-		result.Error = fmt.Errorf("acquiring runtime from pool: %w", err)
+		result.Error = fmt.Errorf("acquiring worker from pool: %w", err)
 		result.Duration = time.Since(start)
 		return result
 	}
 
-	// Watchdog: cancel the runtime's context if execution exceeds timeout.
-	// Wazero's CloseOnContextDone inserts periodic checks during WASM execution;
-	// when the context is cancelled, the running function call is interrupted.
+	// keepWorker is set to true when a WebSocket upgrade response is detected,
+	// preventing the deferred cleanup from returning the worker to the pool.
+	var keepWorker bool
+
+	// Watchdog: iso.TerminateExecution() is the one thread-safe V8 call.
 	var timedOut atomic.Bool
 	timeout := time.Duration(e.config.ExecutionTimeout) * time.Millisecond
-	reqCtx, cancelReq := context.WithCancel(context.Background())
-	origCtx := rt.Context().Context
-	rt.Context().Context = reqCtx
-
 	watchdog := time.AfterFunc(timeout, func() {
 		timedOut.Store(true)
-		cancelReq()
+		w.iso.TerminateExecution()
 	})
 
 	var panicked bool
@@ -314,15 +321,17 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 			}
 		}
 		result.Duration = time.Since(start)
-		// Only return healthy runtimes to the pool. Discard if the watchdog
-		// fired, if a timeout occurred, or if the runtime panicked.
+		// WebSocket: worker is managed by WebSocketHandler.Bridge().
+		if keepWorker {
+			return
+		}
+		// Only return healthy workers to the pool.
 		if stopped && !timedOut.Load() && !panicked {
-			rt.Context().Context = origCtx
-			cancelReq() // Release context resources.
-			pool.Put(rt)
+			pool.put(w)
 		} else {
-			log.Printf("worker: discarding runtime for site %s deploy %s (timed out or panicked)", siteID, deployKey)
-			// Invalidate the pool so the next request rebuilds it with full capacity.
+			log.Printf("worker: discarding worker for site %s deploy %s (timed out or panicked)", siteID, deployKey)
+			w.ctx.Close()
+			w.iso.Dispose()
 			key := poolKey{SiteID: siteID, DeployKey: deployKey}
 			if val, ok := e.pools.Load(key); ok {
 				sp := val.(*sitePool)
@@ -331,30 +340,49 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 		}
 	}()
 
-	ctx := rt.Context()
+	iso := w.iso
+	ctx := w.ctx
 
 	// Set up per-request state.
 	reqID := newRequestState(e.config.MaxFetchRequests, env)
-	ctx.Global().SetPropertyStr("__requestID", ctx.NewInt64(int64(reqID)))
+	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
+	if err := ctx.Global().Set("__requestID", reqIDVal); err != nil {
+		clearRequestState(reqID)
+		result.Error = fmt.Errorf("setting request ID: %w", err)
+		return result
+	}
 
 	// Build the JS arguments: request, env, ctx.
-	jsReq, err := goRequestToJS(ctx, req)
+	jsReq, err := goRequestToJS(iso, ctx, req)
 	if err != nil {
 		clearRequestState(reqID)
 		result.Error = fmt.Errorf("building JS request: %w", err)
 		return result
 	}
 
-	jsEnv := buildEnvObject(ctx, env, e.db, e.minioClient, e.presignMinioClient, e.publicS3URL)
-	jsCtx := buildExecContext(ctx)
+	jsEnv, err := buildEnvObject(iso, ctx, env, e.db, e.minioClient, e.presignMinioClient, e.publicS3URL)
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("building JS env: %w", err)
+		return result
+	}
+
+	jsCtx, err := buildExecContext(iso, ctx)
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("building JS context: %w", err)
+		return result
+	}
 
 	// Call __worker_module__.fetch(request, env, ctx).
-	// Note: qjs Eval with TypeModule() returns the default export directly,
-	// not a module namespace object, so __worker_module__ IS the default export.
-	defaultExport := ctx.Global().GetPropertyStr("__worker_module__")
-
-	if defaultExport.IsUndefined() || defaultExport.IsNull() {
-		defaultExport.Free()
+	moduleVal, err := ctx.Global().Get("__worker_module__")
+	if err != nil || moduleVal.IsUndefined() || moduleVal.IsNull() {
 		state := clearRequestState(reqID)
 		if state != nil {
 			result.Logs = state.logs
@@ -363,50 +391,115 @@ func (e *Engine) Execute(siteID string, deployKey string, env *Env, req *WorkerR
 		return result
 	}
 
-	fetchResult, err := defaultExport.InvokeJS("fetch", jsReq, jsEnv, jsCtx)
-	defaultExport.Free()
+	moduleObj, err := moduleVal.AsObject()
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("worker module is not an object: %w", err)
+		return result
+	}
+
+	fetchVal, err := moduleObj.Get("fetch")
+	if err != nil || fetchVal.IsUndefined() {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("worker module has no fetch handler")
+		return result
+	}
+
+	fetchFn, err := fetchVal.AsFunction()
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("worker fetch is not a function: %w", err)
+		return result
+	}
+
+	fetchResult, err := fetchFn.Call(moduleObj, jsReq, jsEnv, jsCtx)
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		if timedOut.Load() {
+			result.Error = fmt.Errorf("worker execution timed out (limit: %v)", timeout)
+		} else {
+			result.Error = fmt.Errorf("invoking worker fetch: %w", err)
+		}
+		return result
+	}
+
+	// Pump microtasks to settle any immediately-resolved promises.
+	ctx.PerformMicrotaskCheckpoint()
+
+	// Drain event loop (fire timers, each followed by microtask checkpoint).
+	deadline := start.Add(timeout)
+	if w.eventLoop.hasPending() {
+		w.eventLoop.drain(iso, ctx, deadline)
+	}
+
+	// Await the result if it's a Promise.
+	fetchResult, err = awaitValue(ctx, fetchResult, deadline)
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("awaiting worker response: %w", err)
+		return result
+	}
+
+	// Convert JS Response to Go.
+	resp, err := jsResponseToGo(ctx, fetchResult)
 
 	if err != nil {
 		state := clearRequestState(reqID)
 		if state != nil {
 			result.Logs = state.logs
 		}
-		result.Error = fmt.Errorf("invoking worker fetch: %w", err)
+		result.Error = fmt.Errorf("converting worker response: %w", err)
 		return result
 	}
 
-	// The fetch handler returns a Promise<Response>.
-	if fetchResult.IsPromise() {
-		awaited, err := fetchResult.Await()
-		// Do NOT Free the Promise here — in the QuickJS WASM build, freeing
-		// a resolved Promise can cause out-of-bounds memory access when the
-		// resolved value was created by static constructors (e.g. Response.json).
-		// The Promise will be garbage-collected by QuickJS on the next GC cycle.
-		if err != nil {
-			state := clearRequestState(reqID)
-			if state != nil {
-				result.Logs = state.logs
-			}
-			result.Error = fmt.Errorf("awaiting worker response: %w", err)
-			return result
-		}
-		fetchResult = awaited
-	}
+	// Drain waitUntil promises after the response is ready.
+	drainWaitUntil(ctx, deadline)
 
-	// Convert JS Response to Go.
-	resp, err := jsResponseToGo(ctx, fetchResult)
-	// Same caution: only Free non-Promise results. For awaited Promises the
-	// resolved value shares internal WASM memory with the Promise and must
-	// be left for GC.  Sync results are safe to Free immediately.
+	// WebSocket upgrade: if the response is 101 with a webSocket, hold the
+	// worker for the bridge loop instead of returning it to the pool.
+	if resp.HasWebSocket && resp.StatusCode == 101 {
+		// Store the server WebSocket reference for the bridge.
+		_, _ = ctx.RunScript(`
+			if (globalThis.__ws_check_resp && globalThis.__ws_check_resp._peer) {
+				globalThis.__ws_active_server = globalThis.__ws_check_resp._peer;
+			}
+			delete globalThis.__ws_check_resp;
+		`, "ws_setup_bridge.js")
+
+		state := getRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+
+		keepWorker = true
+		result.Response = resp
+		result.WebSocket = &WebSocketHandler{
+			worker:  w,
+			pool:    pool,
+			reqID:   reqID,
+			timeout: wsConnectionTimeout,
+		}
+		return result
+	}
 
 	state := clearRequestState(reqID)
 	if state != nil {
 		result.Logs = state.logs
-	}
-
-	if err != nil {
-		result.Error = fmt.Errorf("converting worker response: %w", err)
-		return result
 	}
 
 	result.Response = resp
@@ -418,30 +511,35 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 	start := time.Now()
 	result = &WorkerResult{}
 
-	pool, err := e.GetOrCreatePool(siteID, deployKey, env)
+	env.engine = e
+	env.db = e.db
+	env.d1DataDir = e.config.DataDir
+
+	if err := e.EnsureSource(siteID, deployKey); err != nil {
+		result.Error = err
+		result.Duration = time.Since(start)
+		return result
+	}
+
+	pool, err := e.getOrCreatePool(siteID, deployKey)
 	if err != nil {
 		result.Error = err
 		result.Duration = time.Since(start)
 		return result
 	}
 
-	rt, err := pool.Get()
+	w, err := pool.get()
 	if err != nil {
-		result.Error = fmt.Errorf("acquiring runtime from pool: %w", err)
+		result.Error = fmt.Errorf("acquiring worker from pool: %w", err)
 		result.Duration = time.Since(start)
 		return result
 	}
 
-	// Watchdog: cancel the runtime's context if execution exceeds timeout.
 	var timedOut atomic.Bool
 	timeout := time.Duration(e.config.ExecutionTimeout) * time.Millisecond
-	reqCtx, cancelReq := context.WithCancel(context.Background())
-	origCtx := rt.Context().Context
-	rt.Context().Context = reqCtx
-
 	watchdog := time.AfterFunc(timeout, func() {
 		timedOut.Store(true)
-		cancelReq()
+		w.iso.TerminateExecution()
 	})
 
 	var panicked bool
@@ -457,12 +555,11 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 		}
 		result.Duration = time.Since(start)
 		if stopped && !timedOut.Load() && !panicked {
-			rt.Context().Context = origCtx
-			cancelReq()
-			pool.Put(rt)
+			pool.put(w)
 		} else {
-			log.Printf("worker: discarding scheduled runtime for site %s deploy %s (timed out or panicked)", siteID, deployKey)
-			// Invalidate pool so next call rebuilds it with full capacity.
+			log.Printf("worker: discarding scheduled worker for site %s deploy %s (timed out or panicked)", siteID, deployKey)
+			w.ctx.Close()
+			w.iso.Dispose()
 			key := poolKey{SiteID: siteID, DeployKey: deployKey}
 			if val, ok := e.pools.Load(key); ok {
 				sp := val.(*sitePool)
@@ -471,26 +568,53 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 		}
 	}()
 
-	ctx := rt.Context()
+	iso := w.iso
+	ctx := w.ctx
 
 	// Set up per-request state.
 	reqID := newRequestState(e.config.MaxFetchRequests, env)
-	ctx.Global().SetPropertyStr("__requestID", ctx.NewInt64(int64(reqID)))
+	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
+	_ = ctx.Global().Set("__requestID", reqIDVal)
 
-	// Build the scheduled event.
-	event := ctx.NewObject()
-	event.SetPropertyStr("scheduledTime", ctx.NewFloat64(float64(time.Now().UnixMilli())))
-	event.SetPropertyStr("cron", ctx.NewString(cron))
+	// Build the scheduled event using the ScheduledEvent class.
+	scheduledTimeMs := float64(time.Now().UnixMilli())
+	eventScript := fmt.Sprintf(`new ScheduledEvent(%f, %q)`, scheduledTimeMs, cron)
+	eventVal, err := ctx.RunScript(eventScript, "scheduled_event.js")
+	if err != nil {
+		clearRequestState(reqID)
+		result.Error = fmt.Errorf("creating ScheduledEvent: %w", err)
+		return result
+	}
+	event, err := eventVal.AsObject()
+	if err != nil {
+		clearRequestState(reqID)
+		result.Error = fmt.Errorf("ScheduledEvent is not an object: %w", err)
+		return result
+	}
 
-	jsEnv := buildEnvObject(ctx, env, e.db, e.minioClient, e.presignMinioClient, e.publicS3URL)
-	jsCtx := buildExecContext(ctx)
+	jsEnv, err := buildEnvObject(iso, ctx, env, e.db, e.minioClient, e.presignMinioClient, e.publicS3URL)
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("building JS env: %w", err)
+		return result
+	}
+
+	jsCtx, err := buildExecContext(iso, ctx)
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("building JS context: %w", err)
+		return result
+	}
 
 	// Call __worker_module__.scheduled(event, env, ctx).
-	// Note: qjs Eval with TypeModule() returns the default export directly.
-	defaultExport := ctx.Global().GetPropertyStr("__worker_module__")
-
-	if defaultExport.IsUndefined() || defaultExport.IsNull() {
-		defaultExport.Free()
+	moduleVal, err := ctx.Global().Get("__worker_module__")
+	if err != nil || moduleVal.IsUndefined() || moduleVal.IsNull() {
 		state := clearRequestState(reqID)
 		if state != nil {
 			result.Logs = state.logs
@@ -499,9 +623,37 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 		return result
 	}
 
-	schedResult, err := defaultExport.InvokeJS("scheduled", event, jsEnv, jsCtx)
-	defaultExport.Free()
+	moduleObj, err := moduleVal.AsObject()
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("worker module is not an object: %w", err)
+		return result
+	}
 
+	scheduledVal, err := moduleObj.Get("scheduled")
+	if err != nil || scheduledVal.IsUndefined() {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("worker module has no scheduled handler")
+		return result
+	}
+
+	scheduledFn, err := scheduledVal.AsFunction()
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("worker scheduled is not a function: %w", err)
+		return result
+	}
+
+	schedResult, err := scheduledFn.Call(moduleObj, event, jsEnv, jsCtx)
 	if err != nil {
 		state := clearRequestState(reqID)
 		if state != nil {
@@ -511,11 +663,16 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 		return result
 	}
 
+	// Pump microtasks and drain event loop.
+	ctx.PerformMicrotaskCheckpoint()
+	deadline := start.Add(timeout)
+	if w.eventLoop.hasPending() {
+		w.eventLoop.drain(iso, ctx, deadline)
+	}
+
 	// Await if the handler returns a promise.
-	// Do NOT Free Promise/awaited values — see Execute() comment for rationale.
 	if schedResult != nil && schedResult.IsPromise() {
-		_, err := schedResult.Await()
-		if err != nil {
+		if _, err := awaitValue(ctx, schedResult, deadline); err != nil {
 			state := clearRequestState(reqID)
 			if state != nil {
 				result.Logs = state.logs
@@ -525,6 +682,9 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 		}
 	}
 
+	// Drain waitUntil promises after the handler completes.
+	drainWaitUntil(ctx, deadline)
+
 	state := clearRequestState(reqID)
 	if state != nil {
 		result.Logs = state.logs
@@ -532,29 +692,219 @@ func (e *Engine) ExecuteScheduled(siteID string, deployKey string, env *Env, cro
 	return result
 }
 
-// InvalidatePool marks the pool for the given site/version as invalid.
+// ExecuteTail runs the worker's tail handler for log forwarding.
+func (e *Engine) ExecuteTail(siteID string, deployKey string, env *Env, events []TailEvent) (result *WorkerResult) {
+	start := time.Now()
+	result = &WorkerResult{}
+
+	env.engine = e
+	env.db = e.db
+	env.d1DataDir = e.config.DataDir
+
+	if err := e.EnsureSource(siteID, deployKey); err != nil {
+		result.Error = err
+		result.Duration = time.Since(start)
+		return result
+	}
+
+	pool, err := e.getOrCreatePool(siteID, deployKey)
+	if err != nil {
+		result.Error = err
+		result.Duration = time.Since(start)
+		return result
+	}
+
+	w, err := pool.get()
+	if err != nil {
+		result.Error = fmt.Errorf("acquiring worker from pool: %w", err)
+		result.Duration = time.Since(start)
+		return result
+	}
+
+	var timedOut atomic.Bool
+	timeout := time.Duration(e.config.ExecutionTimeout) * time.Millisecond
+	watchdog := time.AfterFunc(timeout, func() {
+		timedOut.Store(true)
+		w.iso.TerminateExecution()
+	})
+
+	var panicked bool
+	defer func() {
+		stopped := watchdog.Stop()
+		if r := recover(); r != nil {
+			panicked = true
+			if timedOut.Load() {
+				result.Error = fmt.Errorf("worker execution timed out (limit: %v)", timeout)
+			} else {
+				result.Error = fmt.Errorf("worker panic: %v", r)
+			}
+		}
+		result.Duration = time.Since(start)
+		if stopped && !timedOut.Load() && !panicked {
+			pool.put(w)
+		} else {
+			log.Printf("worker: discarding tail worker for site %s deploy %s (timed out or panicked)", siteID, deployKey)
+			w.ctx.Close()
+			w.iso.Dispose()
+			key := poolKey{SiteID: siteID, DeployKey: deployKey}
+			if val, ok := e.pools.Load(key); ok {
+				sp := val.(*sitePool)
+				sp.markInvalid()
+			}
+		}
+	}()
+
+	iso := w.iso
+	ctx := w.ctx
+
+	// Set up per-request state.
+	reqID := newRequestState(e.config.MaxFetchRequests, env)
+	reqIDVal, _ := v8.NewValue(iso, strconv.FormatUint(reqID, 10))
+	_ = ctx.Global().Set("__requestID", reqIDVal)
+
+	// Serialize tail events to JSON and inject into JS context.
+	eventsJSON, err := json.Marshal(events)
+	if err != nil {
+		clearRequestState(reqID)
+		result.Error = fmt.Errorf("marshaling tail events: %w", err)
+		return result
+	}
+	eventsScript := fmt.Sprintf(`JSON.parse(%q)`, string(eventsJSON))
+	jsEvents, err := ctx.RunScript(eventsScript, "tail_events.js")
+	if err != nil {
+		clearRequestState(reqID)
+		result.Error = fmt.Errorf("creating tail events array: %w", err)
+		return result
+	}
+
+	jsEnv, err := buildEnvObject(iso, ctx, env, e.db, e.minioClient, e.presignMinioClient, e.publicS3URL)
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("building JS env: %w", err)
+		return result
+	}
+
+	jsCtx, err := buildExecContext(iso, ctx)
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("building JS context: %w", err)
+		return result
+	}
+
+	// Call __worker_module__.tail(events, env, ctx).
+	moduleVal, err := ctx.Global().Get("__worker_module__")
+	if err != nil || moduleVal.IsUndefined() || moduleVal.IsNull() {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("worker module has no default export")
+		return result
+	}
+
+	moduleObj, err := moduleVal.AsObject()
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("worker module is not an object: %w", err)
+		return result
+	}
+
+	tailVal, err := moduleObj.Get("tail")
+	if err != nil || tailVal.IsUndefined() {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("worker module has no tail handler")
+		return result
+	}
+
+	tailFn, err := tailVal.AsFunction()
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		result.Error = fmt.Errorf("worker tail is not a function: %w", err)
+		return result
+	}
+
+	tailResult, err := tailFn.Call(moduleObj, jsEvents, jsEnv, jsCtx)
+	if err != nil {
+		state := clearRequestState(reqID)
+		if state != nil {
+			result.Logs = state.logs
+		}
+		if timedOut.Load() {
+			result.Error = fmt.Errorf("worker execution timed out (limit: %v)", timeout)
+		} else {
+			result.Error = fmt.Errorf("invoking worker tail: %w", err)
+		}
+		return result
+	}
+
+	// Pump microtasks and drain event loop.
+	ctx.PerformMicrotaskCheckpoint()
+	deadline := start.Add(timeout)
+	if w.eventLoop.hasPending() {
+		w.eventLoop.drain(iso, ctx, deadline)
+	}
+
+	// Await if the handler returns a promise.
+	if tailResult != nil && tailResult.IsPromise() {
+		if _, err := awaitValue(ctx, tailResult, deadline); err != nil {
+			state := clearRequestState(reqID)
+			if state != nil {
+				result.Logs = state.logs
+			}
+			result.Error = fmt.Errorf("awaiting tail handler: %w", err)
+			return result
+		}
+	}
+
+	// Drain waitUntil promises after the handler completes.
+	drainWaitUntil(ctx, deadline)
+
+	state := clearRequestState(reqID)
+	if state != nil {
+		result.Logs = state.logs
+	}
+	return result
+}
+
+// InvalidatePool marks the pool for the given site/deploy as invalid.
 // The next Execute call will create a fresh pool.
 func (e *Engine) InvalidatePool(siteID string, deployKey string) {
 	key := poolKey{SiteID: siteID, DeployKey: deployKey}
 	if val, ok := e.pools.LoadAndDelete(key); ok {
 		sp := val.(*sitePool)
 		sp.markInvalid()
+		sp.pool.dispose()
 	}
-	e.bytecodes.Delete(key)
+	e.sources.Delete(key)
 }
 
-// Shutdown invalidates all pools, clears all cached bytecode, and stops
-// the log retention goroutine.
+// Shutdown invalidates all pools and clears all cached sources.
 func (e *Engine) Shutdown() {
 	close(e.logDone)
 	e.pools.Range(func(key, val any) bool {
 		sp := val.(*sitePool)
 		sp.markInvalid()
+		sp.pool.dispose()
 		e.pools.Delete(key)
 		return true
 	})
-	e.bytecodes.Range(func(key, _ any) bool {
-		e.bytecodes.Delete(key)
+	e.sources.Range(func(key, _ any) bool {
+		e.sources.Delete(key)
 		return true
 	})
 }
@@ -564,9 +914,8 @@ func (e *Engine) MaxResponseBytes() int {
 	return e.config.MaxResponseBytes
 }
 
-// BuildEnvFromDB loads environment variables, secrets, and KV bindings for
-// a site from the database. Pass an AssetsFetcher to enable env.ASSETS,
-// or nil if assets are not available (e.g., cron context).
+// BuildEnvFromDB loads environment variables, secrets, and KV/storage bindings
+// for a site from the database.
 func BuildEnvFromDB(db *gorm.DB, siteID string, assets AssetsFetcher) *Env {
 	env := &Env{
 		Vars:       make(map[string]string),
@@ -598,5 +947,84 @@ func BuildEnvFromDB(db *gorm.DB, siteID string, assets AssetsFetcher) *Env {
 		env.StorageBindings[b.Name] = b.BucketName
 	}
 
+	// D1 database bindings — prefixed with siteID for isolation.
+	env.D1Bindings = make(map[string]string)
+	var d1Databases []models.D1Database
+	db.Where("site_id = ?", siteID).Find(&d1Databases)
+	for _, d := range d1Databases {
+		env.D1Bindings[d.Name] = siteID + "_" + d.DatabaseID
+	}
+
+	// Durable Object namespace bindings — prefixed with siteID for isolation.
+	env.DurableObjectBindings = make(map[string]string)
+	var doNamespaces []models.DurableObjectNamespace
+	db.Where("site_id = ?", siteID).Find(&doNamespaces)
+	for _, ns := range doNamespaces {
+		env.DurableObjectBindings[ns.Name] = siteID + ":" + ns.NamespaceID
+	}
+
 	return env
+}
+
+// awaitValue resolves a potentially-promise value by pumping V8's microtask
+// queue. Uses JS-side Promise.resolve().then() to capture the result,
+// avoiding the need for a direct AsPromise() API.
+func awaitValue(ctx *v8.Context, val *v8.Value, deadline time.Time) (*v8.Value, error) {
+	if val == nil || !val.IsPromise() {
+		return val, nil
+	}
+
+	// Use JS Promise.then() to capture the resolved/rejected value into globals.
+	if err := ctx.Global().Set("__await_input", val); err != nil {
+		return nil, fmt.Errorf("setting await input: %w", err)
+	}
+
+	_, err := ctx.RunScript(`
+		delete globalThis.__awaited_result;
+		delete globalThis.__awaited_state;
+		Promise.resolve(globalThis.__await_input).then(
+			r => { globalThis.__awaited_result = r; globalThis.__awaited_state = 'fulfilled'; },
+			e => { globalThis.__awaited_result = e; globalThis.__awaited_state = 'rejected'; }
+		);
+		delete globalThis.__await_input;
+	`, "await.js")
+	if err != nil {
+		return nil, fmt.Errorf("setting up promise await: %w", err)
+	}
+
+	// Pump microtasks until the promise settles.
+	for {
+		ctx.PerformMicrotaskCheckpoint()
+
+		stateVal, err := ctx.Global().Get("__awaited_state")
+		if err != nil {
+			return nil, fmt.Errorf("checking promise state: %w", err)
+		}
+		if !stateVal.IsUndefined() {
+			break
+		}
+
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("promise resolution timed out")
+		}
+		runtime.Gosched()
+	}
+
+	stateVal, _ := ctx.Global().Get("__awaited_state")
+	resultVal, _ := ctx.Global().Get("__awaited_result")
+
+	// Clean up globals.
+	_, _ = ctx.RunScript("delete globalThis.__awaited_result; delete globalThis.__awaited_state;", "cleanup.js")
+
+	if stateVal.String() == "rejected" {
+		return nil, fmt.Errorf("promise rejected: %s", resultVal.String())
+	}
+
+	return resultVal, nil
+}
+
+// newJSObject creates a new empty JavaScript object.
+func newJSObject(iso *v8.Isolate, ctx *v8.Context) (*v8.Object, error) {
+	tmpl := v8.NewObjectTemplate(iso)
+	return tmpl.NewInstance(ctx)
 }

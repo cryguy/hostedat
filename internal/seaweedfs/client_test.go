@@ -20,7 +20,7 @@ func mockSeaweedFS(t *testing.T) (*httptest.Server, *Client) {
 				return
 			}
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("<CreateUserResponse/>"))
+			_, _ = w.Write([]byte("<CreateUserResponse/>"))
 
 		case "DeleteUser":
 			if r.FormValue("UserName") == "" {
@@ -28,7 +28,7 @@ func mockSeaweedFS(t *testing.T) (*httptest.Server, *Client) {
 				return
 			}
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("<DeleteUserResponse/>"))
+			_, _ = w.Write([]byte("<DeleteUserResponse/>"))
 
 		case "CreateAccessKey":
 			userName := r.FormValue("UserName")
@@ -42,7 +42,7 @@ func mockSeaweedFS(t *testing.T) (*httptest.Server, *Client) {
 			resp.Result.AccessKey.UserName = userName
 			data, _ := xml.Marshal(resp)
 			w.WriteHeader(http.StatusOK)
-			w.Write(data)
+			_, _ = w.Write(data)
 
 		case "DeleteAccessKey":
 			if r.FormValue("AccessKeyId") == "" {
@@ -50,7 +50,7 @@ func mockSeaweedFS(t *testing.T) (*httptest.Server, *Client) {
 				return
 			}
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("<DeleteAccessKeyResponse/>"))
+			_, _ = w.Write([]byte("<DeleteAccessKeyResponse/>"))
 
 		case "PutUserPolicy":
 			if r.FormValue("UserName") == "" || r.FormValue("PolicyName") == "" || r.FormValue("PolicyDocument") == "" {
@@ -58,7 +58,7 @@ func mockSeaweedFS(t *testing.T) (*httptest.Server, *Client) {
 				return
 			}
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("<PutUserPolicyResponse/>"))
+			_, _ = w.Write([]byte("<PutUserPolicyResponse/>"))
 
 		default:
 			http.Error(w, "unknown action: "+action, http.StatusBadRequest)

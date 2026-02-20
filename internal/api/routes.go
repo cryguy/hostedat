@@ -9,7 +9,7 @@ import (
 	"github.com/cryguy/hostedat/internal/worker"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	minio "github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7"
 	"golang.org/x/time/rate"
 	"gorm.io/gorm"
 )
