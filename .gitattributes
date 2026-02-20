@@ -1,0 +1,9 @@
+# Force LF line endings for files that must run in Unix environments
+*.sh        text eol=lf
+Makefile    text eol=lf
+*.mk        text eol=lf
+
+# Go source files — LF for consistency
+*.go        text eol=lf
+*.mod       text eol=lf
+*.sum       text eol=lf
