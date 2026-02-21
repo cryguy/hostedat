@@ -42,6 +42,46 @@ func setupTestEnv(t *testing.T) *testEnv {
 	return setupTestEnvWithMinVersion(t, "")
 }
 
+func setupTestEnvWithDataDir(t *testing.T, dataDir string) *testEnv {
+	t.Helper()
+
+	db, err := models.InitDB(config.DBConfig{Driver: "sqlite", DSN: ":memory:"})
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+
+	cfg := &config.Config{
+		Domain:    "test.local",
+		JWTSecret: "test-jwt-secret-that-is-at-least-32-characters-long",
+		Registration: config.RegConfig{
+			Enabled: true,
+		},
+		Worker: config.WorkerConfig{
+			DataDir: dataDir,
+		},
+	}
+	if err := models.SeedDefaults(db, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	store := storage.NewManager(t.TempDir())
+	cache := storage.NewSiteRulesCache()
+
+	e := echo.New()
+	e.HTTPErrorHandler = CustomErrorHandler
+	e.Use(SubdomainRouter(db, store, cache, cfg.Domain, nil, nil, nil))
+	RegisterRoutes(e, db, cfg, store, "0.1.0", nil, nil, nil, nil, "")
+
+	return &testEnv{
+		e:         e,
+		db:        db,
+		store:     store,
+		cache:     cache,
+		jwtSecret: cfg.JWTSecret,
+		domain:    cfg.Domain,
+	}
+}
+
 func setupTestEnvWithMinVersion(t *testing.T, minVersion string) *testEnv {
 	t.Helper()
 
@@ -67,7 +107,7 @@ func setupTestEnvWithMinVersion(t *testing.T, minVersion string) *testEnv {
 
 	e := echo.New()
 	e.HTTPErrorHandler = CustomErrorHandler
-	e.Use(SubdomainRouter(db, store, cache, cfg.Domain, nil, nil))
+	e.Use(SubdomainRouter(db, store, cache, cfg.Domain, nil, nil, nil))
 	RegisterRoutes(e, db, cfg, store, "0.1.0", nil, nil, nil, nil, "")
 
 	return &testEnv{
@@ -2691,7 +2731,7 @@ func setupTestEnvWithWorker(t *testing.T) *testEnv {
 
 	e := echo.New()
 	e.HTTPErrorHandler = CustomErrorHandler
-	e.Use(SubdomainRouter(db, store, cache, cfg.Domain, workerEngine, nil))
+	e.Use(SubdomainRouter(db, store, cache, cfg.Domain, workerEngine, nil, nil))
 	RegisterRoutes(e, db, cfg, store, "0.1.0", workerEngine, nil, nil, nil, "")
 
 	return &testEnv{
@@ -3104,7 +3144,8 @@ func TestWorker_ListD1Databases_AccessDenied(t *testing.T) {
 }
 
 func TestWorker_DeleteD1Database_Success(t *testing.T) {
-	env := setupTestEnv(t)
+	dataDir := t.TempDir()
+	env := setupTestEnvWithDataDir(t, dataDir)
 	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
 	site := models.Site{UserID: user.ID, SubdomainSlug: "d1test", Name: "D1Test"}
 	env.db.Create(&site)
@@ -3113,8 +3154,6 @@ func TestWorker_DeleteD1Database_Success(t *testing.T) {
 	env.db.Create(&d1)
 
 	// Create a fake SQLite file to verify cleanup
-	dataDir := t.TempDir()
-	t.Setenv("HOSTEDAT_DATA_DIR", dataDir)
 	d1Dir := filepath.Join(dataDir, "d1")
 	os.MkdirAll(d1Dir, 0o755)
 	dbFile := filepath.Join(d1Dir, d1.DatabaseID+".sqlite3")
@@ -3434,7 +3473,8 @@ func TestWorker_DeleteDONamespace_AccessDenied(t *testing.T) {
 // ──────────────────────────────────────────────
 
 func TestSite_Delete_CascadesD1Databases(t *testing.T) {
-	env := setupTestEnv(t)
+	dataDir := t.TempDir()
+	env := setupTestEnvWithDataDir(t, dataDir)
 	user, token := env.createTestUser(t, "u@t.com", "password123", "user")
 	site := models.Site{UserID: user.ID, SubdomainSlug: "cascade-d1", Name: "CascadeD1"}
 	env.db.Create(&site)
@@ -3443,8 +3483,6 @@ func TestSite_Delete_CascadesD1Databases(t *testing.T) {
 	env.db.Create(&d1)
 
 	// Create a fake SQLite file to verify cleanup
-	dataDir := t.TempDir()
-	t.Setenv("HOSTEDAT_DATA_DIR", dataDir)
 	d1Dir := filepath.Join(dataDir, "d1")
 	os.MkdirAll(d1Dir, 0o755)
 	dbFile := filepath.Join(d1Dir, d1.DatabaseID+".sqlite3")

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/cryguy/worker"
+	gonanoid "github.com/matoous/go-nanoid/v2"
 	"gorm.io/gorm"
 )
 
@@ -30,9 +31,13 @@ func (q *QueueMessage) BeforeCreate(_ *gorm.DB) error {
 	return nil
 }
 
-// generateQueueID creates a simple unique ID for queue messages.
+// generateQueueID creates a unique ID for queue messages.
 func generateQueueID() string {
-	return fmt.Sprintf("qm_%d", time.Now().UnixNano())
+	id, err := gonanoid.Generate("abcdefghijklmnopqrstuvwxyz0123456789", 12)
+	if err != nil {
+		return fmt.Sprintf("qm_%d", time.Now().UnixNano())
+	}
+	return "qm_" + id
 }
 
 // GORMQueueSender implements worker.QueueSender using GORM.

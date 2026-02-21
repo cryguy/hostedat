@@ -109,6 +109,9 @@ func Load(path string) (*Config, error) {
 	if cfg.Worker.MaxScriptSizeKB == 0 {
 		cfg.Worker.MaxScriptSizeKB = 1024
 	}
+	if cfg.Worker.DataDir == "" {
+		cfg.Worker.DataDir = "./data"
+	}
 
 	// Object storage defaults
 	if cfg.ObjectStorage.Enabled {

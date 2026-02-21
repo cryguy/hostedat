@@ -6,20 +6,6 @@ import (
 	"testing"
 )
 
-func TestGetDataDir_Default(t *testing.T) {
-	t.Setenv("HOSTEDAT_DATA_DIR", "")
-	if dir := GetDataDir(); dir != "./data" {
-		t.Errorf("GetDataDir() = %q, want %q", dir, "./data")
-	}
-}
-
-func TestGetDataDir_FromEnv(t *testing.T) {
-	t.Setenv("HOSTEDAT_DATA_DIR", "/custom/data")
-	if dir := GetDataDir(); dir != "/custom/data" {
-		t.Errorf("GetDataDir() = %q, want %q", dir, "/custom/data")
-	}
-}
-
 func TestGetD1Path(t *testing.T) {
 	got := GetD1Path("/data", "mydb123")
 	want := filepath.Join("/data", "d1", "mydb123.sqlite3")

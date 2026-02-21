@@ -1,5 +1,3 @@
-//go:build integration
-
 package api
 
 import (
@@ -11,9 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -174,10 +170,7 @@ func putObject(t *testing.T, client *minio.Client, bucket, key, value string) {
 func minioClientForEndpoint(endpoint, accessKey, secretKey string) (*minio.Client, error) {
 	host := strings.TrimPrefix(strings.TrimPrefix(endpoint, "http://"), "https://")
 	useSSL := strings.HasPrefix(endpoint, "https://")
-	creds := credentials.NewAnonymousCredentials()
-	if accessKey != "" && secretKey != "" {
-		creds = credentials.NewStaticV4(accessKey, secretKey, "")
-	}
+	creds := credentials.NewStaticV4(accessKey, secretKey, "")
 	return minio.New(host, &minio.Options{Secure: useSSL, Region: "us-east-1", Creds: creds})
 }
 
@@ -207,31 +200,21 @@ func newAuthedIntegrationContext(t *testing.T, method, path string, body interfa
 func resolveWeedBinary(t *testing.T) string {
 	t.Helper()
 
-	if env := strings.TrimSpace(os.Getenv("HOSTEDAT_WEED_BIN")); env != "" {
+	// Honour explicit override if set.
+	if env := os.Getenv("HOSTEDAT_WEED_BIN"); env != "" {
 		if _, err := os.Stat(env); err == nil {
 			return env
 		}
-		if _, err := exec.LookPath(env); err == nil {
-			return env
-		}
-		t.Skipf("integration requires HOSTEDAT_WEED_BIN; not found: %s", env)
 	}
 
-	if runtime.GOOS == "windows" {
-		candidates := []string{"./weed.exe", filepath.Join("..", "..", "weed.exe")}
-		for _, p := range candidates {
-			if _, err := os.Stat(p); err == nil {
-				return p
-			}
-		}
-		t.Skip("integration requires weed.exe (set HOSTEDAT_WEED_BIN)")
+	// Use a shared cache directory so the binary is downloaded once and
+	// reused across test runs.
+	cacheDir := filepath.Join(os.TempDir(), "hostedat-weed-cache")
+	bin, err := seaweedfs.EnsureBinary(config.ObjectStorageConfig{DataDir: cacheDir})
+	if err != nil {
+		t.Fatalf("downloading weed binary: %v", err)
 	}
-
-	if _, err := exec.LookPath("weed"); err == nil {
-		return "weed"
-	}
-	t.Skip("integration requires 'weed' in PATH (or set HOSTEDAT_WEED_BIN)")
-	return ""
+	return bin
 }
 
 func mustFreePort(t *testing.T) int {

@@ -261,3 +261,80 @@ func TestGORMQueueConsumer_DefaultBatchSize(t *testing.T) {
 		t.Errorf("expected 3 messages with batchSize -1, got %d", len(msgs))
 	}
 }
+
+func TestGenerateQueueID_Uniqueness(t *testing.T) {
+	const count = 1000
+	seen := make(map[string]struct{}, count)
+
+	for i := 0; i < count; i++ {
+		id := generateQueueID()
+		if _, exists := seen[id]; exists {
+			t.Fatalf("duplicate ID generated at iteration %d: %s", i, id)
+		}
+		seen[id] = struct{}{}
+	}
+}
+
+func TestGenerateQueueID_Format(t *testing.T) {
+	const validChars = "abcdefghijklmnopqrstuvwxyz0123456789"
+	validSet := make(map[byte]bool, len(validChars))
+	for i := 0; i < len(validChars); i++ {
+		validSet[validChars[i]] = true
+	}
+
+	for i := 0; i < 100; i++ {
+		id := generateQueueID()
+
+		// Must start with "qm_" prefix.
+		if len(id) < 4 || id[:3] != "qm_" {
+			t.Fatalf("ID %q does not start with 'qm_'", id)
+		}
+
+		// Suffix must be 12 lowercase alphanumeric characters.
+		suffix := id[3:]
+		if len(suffix) != 12 {
+			t.Errorf("ID suffix length = %d, want 12 (full ID: %q)", len(suffix), id)
+			continue
+		}
+		for j := 0; j < len(suffix); j++ {
+			if !validSet[suffix[j]] {
+				t.Errorf("ID %q contains invalid character %q at position %d", id, suffix[j], j+3)
+			}
+		}
+	}
+}
+
+func TestGORMQueueSender_SiteIsolation(t *testing.T) {
+	db := setupQueueTestDB(t)
+
+	senderA := &GORMQueueSender{DB: db, SiteID: "siteA", QueueName: "shared-queue"}
+	senderB := &GORMQueueSender{DB: db, SiteID: "siteB", QueueName: "shared-queue"}
+
+	senderA.Send(`{"from":"A"}`, "json")
+	senderB.Send(`{"from":"B"}`, "json")
+
+	consumerA := &GORMQueueConsumer{DB: db, SiteID: "siteA"}
+	consumerB := &GORMQueueConsumer{DB: db, SiteID: "siteB"}
+
+	msgsA, err := consumerA.Consume("shared-queue", 10)
+	if err != nil {
+		t.Fatalf("Consume siteA: %v", err)
+	}
+	if len(msgsA) != 1 {
+		t.Errorf("siteA should see 1 message, got %d", len(msgsA))
+	}
+	if len(msgsA) > 0 && msgsA[0].Body != `{"from":"A"}` {
+		t.Errorf("siteA message body = %q", msgsA[0].Body)
+	}
+
+	msgsB, err := consumerB.Consume("shared-queue", 10)
+	if err != nil {
+		t.Fatalf("Consume siteB: %v", err)
+	}
+	if len(msgsB) != 1 {
+		t.Errorf("siteB should see 1 message, got %d", len(msgsB))
+	}
+	if len(msgsB) > 0 && msgsB[0].Body != `{"from":"B"}` {
+		t.Errorf("siteB message body = %q", msgsB[0].Body)
+	}
+}

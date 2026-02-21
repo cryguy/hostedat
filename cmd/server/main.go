@@ -159,6 +159,8 @@ func main() {
 		}
 	}
 
+	rulesCache := storage.NewSiteRulesCache()
+
 	// Build env factory for cron and service bindings.
 	envFactory := func(siteID string) *worker.Env {
 		return workeradapter.BuildEnvFromDB(workeradapter.BuildEnvOptions{
@@ -167,12 +169,18 @@ func main() {
 			PresignClient: presignClient,
 			PublicS3URL:   "https://storage." + cfg.Domain,
 			D1DataDir:     cfg.Worker.DataDir,
+			Store:         store,
+			Cache:         rulesCache,
 		}, siteID, nil)
 	}
 
 	// Start cron runner
 	cronRunner := workeradapter.NewCronRunner(db, workerEngine, envFactory)
 	defer cronRunner.Shutdown()
+
+	// Start log retention runner
+	logRetention := workeradapter.NewLogRetentionRunner(db, cfg.Worker.MaxLogRetention)
+	defer logRetention.Stop()
 
 	e := echo.New()
 	e.HideBanner = true
@@ -228,10 +236,15 @@ func main() {
 	// Global rate limiter: 20 req/s per IP
 	e.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(20))))
 
-	rulesCache := storage.NewSiteRulesCache()
+	workerDeps := &api.WorkerDeps{
+		MinioClient:   s3Client,
+		PresignClient: presignClient,
+		PublicS3URL:   "https://storage." + cfg.Domain,
+		D1DataDir:     cfg.Worker.DataDir,
+	}
 
 	// Subdomain router must come before API routes
-	e.Use(api.SubdomainRouter(db, store, rulesCache, cfg.Domain, workerEngine, s3Proxy))
+	e.Use(api.SubdomainRouter(db, store, rulesCache, cfg.Domain, workerEngine, s3Proxy, workerDeps))
 
 	api.RegisterRoutes(e, db, cfg, store, version, workerEngine, s3Client, presignClient, iamClient, cfg.ObjectStorage.Region)
 

@@ -26,14 +26,14 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	})
 
 	authHandler := &AuthHandler{DB: db, JWTSecret: cfg.JWTSecret}
-	siteHandler := &SiteHandler{DB: db, Storage: store, S3Client: s3Client, IAMClient: iamClient}
+	siteHandler := &SiteHandler{DB: db, Storage: store, S3Client: s3Client, IAMClient: iamClient, DataDir: cfg.Worker.DataDir}
 	deployHandler := &DeployHandler{DB: db, Storage: store, MaxScriptSizeKB: cfg.Worker.MaxScriptSizeKB}
 	if workerEngine != nil {
 		deployHandler.WorkerEngine = workerEngine
 	}
 	apiKeyHandler := &APIKeyHandler{DB: db}
 	adminHandler := &AdminHandler{DB: db, Storage: store, S3Client: s3Client, IAMClient: iamClient}
-	workerHandler := &WorkerHandler{DB: db}
+	workerHandler := &WorkerHandler{DB: db, DataDir: cfg.Worker.DataDir}
 
 	// Public auth routes — stricter rate limit (5 req/s per IP)
 	// Auth is Bearer-token only (JWT/API key), never cookies, so CSRF is not applicable.

@@ -12,11 +12,21 @@ import (
 	"github.com/coder/websocket"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
-	"github.com/cryguy/worker"
 	"github.com/cryguy/hostedat/internal/workeradapter"
+	"github.com/cryguy/worker"
 	"github.com/labstack/echo/v4"
+	"github.com/minio/minio-go/v7"
 	"gorm.io/gorm"
 )
+
+// WorkerDeps bundles worker-related dependencies needed by the HTTP serving
+// chain to build complete worker environments.
+type WorkerDeps struct {
+	MinioClient   *minio.Client
+	PresignClient *minio.Client
+	PublicS3URL   string
+	D1DataDir     string
+}
 
 // internalFiles are files that should never be served directly to visitors.
 // These are configuration/runtime files similar to Cloudflare Pages behavior.
@@ -76,8 +86,8 @@ func isAllowedRedirectTarget(target, domain string) bool {
 
 // SubdomainRouter inspects the Host header and routes subdomain requests
 // to the static site handler. Bare-domain requests pass through to the API.
-func SubdomainRouter(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, domain string, workerEngine *worker.Engine, s3Proxy http.Handler) echo.MiddlewareFunc {
-	handler := staticSiteHandler(db, store, cache, domain, workerEngine)
+func SubdomainRouter(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, domain string, workerEngine *worker.Engine, s3Proxy http.Handler, workerDeps *WorkerDeps) echo.MiddlewareFunc {
+	handler := staticSiteHandler(db, store, cache, domain, workerEngine, workerDeps)
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -133,7 +143,7 @@ func SubdomainRouter(db *gorm.DB, store *storage.Manager, cache *storage.SiteRul
 	}
 }
 
-func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, domain string, workerEngine *worker.Engine) echo.HandlerFunc {
+func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, domain string, workerEngine *worker.Engine, workerDeps *WorkerDeps) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		subdomain, _ := c.Get("subdomain").(string)
 		if subdomain == "" {
@@ -160,7 +170,7 @@ func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteR
 
 		// Worker intercept: if site has a worker, execute it before static pipeline
 		if site.HasWorker && workerEngine != nil {
-			return handleWorkerRequest(c, db, store, cache, &site, deployID, domain, workerEngine)
+			return handleWorkerRequest(c, db, store, cache, &site, deployID, domain, workerEngine, workerDeps)
 		}
 
 		deployPath := store.GetDeploymentPath(site.ID, deployID)
@@ -238,7 +248,7 @@ func loadRules(cache *storage.SiteRulesCache, siteID string, deployID string, de
 	return rules
 }
 
-func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, site *models.Site, deployID string, domain string, workerEngine *worker.Engine) error {
+func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, site *models.Site, deployID string, domain string, workerEngine *worker.Engine, workerDeps *WorkerDeps) error {
 	// Build WorkerRequest from Echo context.
 	req := c.Request()
 	headers := make(map[string]string)
@@ -275,7 +285,7 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 	}
 
 	// Build Env: load env vars, secrets, KV bindings from DB.
-	env := buildWorkerEnv(db, store, cache, site, deployID, domain)
+	env := buildWorkerEnv(db, store, cache, site, deployID, domain, workerDeps)
 
 	// Execute worker.
 	result := workerEngine.Execute(site.ID, deployID, env, workerReq)
@@ -318,8 +328,15 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 	return c.Blob(resp.StatusCode, ct, resp.Body)
 }
 
-func buildWorkerEnv(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, site *models.Site, deployID string, domain string) *worker.Env {
-	return workeradapter.BuildEnvFromDB(workeradapter.BuildEnvOptions{DB: db, Store: store, Cache: cache}, site.ID, &workeradapter.StaticAssetsFetcher{
+func buildWorkerEnv(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, site *models.Site, deployID string, domain string, deps *WorkerDeps) *worker.Env {
+	opts := workeradapter.BuildEnvOptions{DB: db, Store: store, Cache: cache}
+	if deps != nil {
+		opts.MinioClient = deps.MinioClient
+		opts.PresignClient = deps.PresignClient
+		opts.PublicS3URL = deps.PublicS3URL
+		opts.D1DataDir = deps.D1DataDir
+	}
+	return workeradapter.BuildEnvFromDB(opts, site.ID, &workeradapter.StaticAssetsFetcher{
 		Store:     store,
 		Cache:     cache,
 		SiteID:    site.ID,

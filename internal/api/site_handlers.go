@@ -32,6 +32,7 @@ type SiteHandler struct {
 	Storage   *storage.Manager
 	S3Client  *minio.Client     // optional; nil when object storage is disabled
 	IAMClient *seaweedfs.Client // optional; nil when object storage is disabled
+	DataDir   string
 }
 
 type createSiteRequest struct {
@@ -236,7 +237,7 @@ func (h *SiteHandler) Delete(c echo.Context) error {
 	_ = h.Storage.DeleteSite(siteID)
 
 	// Remove D1 SQLite database files from disk.
-	dataDir := workeradapter.GetDataDir()
+	dataDir := h.DataDir
 	for _, d1 := range d1Databases {
 		dbPath := workeradapter.GetD1Path(dataDir, d1.DatabaseID)
 		if err := workeradapter.DeleteFile(dbPath); err != nil {
