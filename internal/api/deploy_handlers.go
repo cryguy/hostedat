@@ -13,7 +13,7 @@ import (
 
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
-	"github.com/cryguy/hostedat/internal/worker"
+	"github.com/cryguy/worker"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )

@@ -5,7 +5,8 @@ import (
 	"net/http"
 
 	"github.com/cryguy/hostedat/internal/models"
-	"github.com/cryguy/hostedat/internal/worker"
+	"github.com/cryguy/worker"
+	"github.com/cryguy/hostedat/internal/workeradapter"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
@@ -419,9 +420,9 @@ func (h *WorkerHandler) DeleteD1Database(c echo.Context) error {
 	}
 
 	// Remove the SQLite file from disk (best-effort)
-	dataDir := worker.GetDataDir()
-	dbPath := worker.GetD1Path(dataDir, database.DatabaseID)
-	_ = worker.DeleteFile(dbPath)
+	dataDir := workeradapter.GetDataDir()
+	dbPath := workeradapter.GetD1Path(dataDir, database.DatabaseID)
+	_ = workeradapter.DeleteFile(dbPath)
 
 	return c.NoContent(http.StatusNoContent)
 }

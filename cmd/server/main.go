@@ -20,8 +20,9 @@ import (
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/seaweedfs"
 	"github.com/cryguy/hostedat/internal/storage"
-	"github.com/cryguy/hostedat/internal/worker"
+	"github.com/cryguy/hostedat/internal/workeradapter"
 	"github.com/cryguy/hostedat/web"
+	"github.com/cryguy/worker"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/minio/minio-go/v7"
@@ -65,12 +66,19 @@ func main() {
 		log.Fatalf("Failed to seed defaults: %v", err)
 	}
 
-	// Create worker engine
-	workerEngine := worker.NewEngine(cfg.Worker, db)
-	defer workerEngine.Shutdown()
-
 	store := storage.NewManager(cfg.StoragePath)
-	workerEngine.SetStore(store)
+
+	// Create worker engine
+	workerEngine := worker.NewEngine(worker.EngineConfig{
+		PoolSize:         cfg.Worker.PoolSize,
+		MemoryLimitMB:    cfg.Worker.MemoryLimitMB,
+		ExecutionTimeout: cfg.Worker.ExecutionTimeout,
+		MaxFetchRequests: cfg.Worker.MaxFetchRequests,
+		FetchTimeoutSec:  cfg.Worker.FetchTimeoutSec,
+		MaxResponseBytes: cfg.Worker.MaxResponseBytes,
+		MaxScriptSizeKB:  cfg.Worker.MaxScriptSizeKB,
+	}, store)
+	defer workerEngine.Shutdown()
 
 	// One-time migration: backfill ActiveDeployID and rename deploy directories.
 	if err := storage.MigrateDeployPaths(db, store); err != nil {
@@ -128,8 +136,6 @@ func main() {
 			log.Printf("Warning: failed to create S3 client: %v", err)
 		} else {
 			s3Client = minioClient
-			workerEngine.SetMinioClient(minioClient)
-			workerEngine.SetPublicS3URL("https://storage." + cfg.Domain)
 
 			// Create a presign-only minio client configured with the public
 			// S3 endpoint so presigned URLs are signed with the correct Host.
@@ -144,7 +150,6 @@ func main() {
 				log.Printf("Warning: failed to create presign S3 client: %v", err)
 			} else {
 				presignClient = pc
-				workerEngine.SetPresignMinioClient(pc)
 			}
 
 			// Wrap S3 proxy to serve public bucket objects without auth.
@@ -154,8 +159,19 @@ func main() {
 		}
 	}
 
+	// Build env factory for cron and service bindings.
+	envFactory := func(siteID string) *worker.Env {
+		return workeradapter.BuildEnvFromDB(workeradapter.BuildEnvOptions{
+			DB:            db,
+			MinioClient:   s3Client,
+			PresignClient: presignClient,
+			PublicS3URL:   "https://storage." + cfg.Domain,
+			D1DataDir:     cfg.Worker.DataDir,
+		}, siteID, nil)
+	}
+
 	// Start cron runner
-	cronRunner := worker.NewCronRunner(db, workerEngine)
+	cronRunner := workeradapter.NewCronRunner(db, workerEngine, envFactory)
 	defer cronRunner.Shutdown()
 
 	e := echo.New()

@@ -20,7 +20,7 @@ import (
 	"github.com/cryguy/hostedat/internal/config"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
-	"github.com/cryguy/hostedat/internal/worker"
+	"github.com/cryguy/worker"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
@@ -2678,8 +2678,15 @@ func setupTestEnvWithWorker(t *testing.T) *testEnv {
 	store := storage.NewManager(t.TempDir())
 	cache := storage.NewSiteRulesCache()
 
-	workerEngine := worker.NewEngine(cfg.Worker, db)
-	workerEngine.SetStore(store)
+	workerEngine := worker.NewEngine(worker.EngineConfig{
+		PoolSize:         cfg.Worker.PoolSize,
+		MemoryLimitMB:    cfg.Worker.MemoryLimitMB,
+		ExecutionTimeout: cfg.Worker.ExecutionTimeout,
+		MaxFetchRequests: cfg.Worker.MaxFetchRequests,
+		FetchTimeoutSec:  cfg.Worker.FetchTimeoutSec,
+		MaxResponseBytes: cfg.Worker.MaxResponseBytes,
+		MaxScriptSizeKB:  cfg.Worker.MaxScriptSizeKB,
+	}, store)
 	t.Cleanup(func() { workerEngine.Shutdown() })
 
 	e := echo.New()

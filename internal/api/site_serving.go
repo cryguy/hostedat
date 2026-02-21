@@ -12,7 +12,8 @@ import (
 	"github.com/coder/websocket"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
-	"github.com/cryguy/hostedat/internal/worker"
+	"github.com/cryguy/worker"
+	"github.com/cryguy/hostedat/internal/workeradapter"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
@@ -318,7 +319,7 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 }
 
 func buildWorkerEnv(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, site *models.Site, deployID string, domain string) *worker.Env {
-	return worker.BuildEnvFromDB(db, site.ID, &worker.StaticAssetsFetcher{
+	return workeradapter.BuildEnvFromDB(workeradapter.BuildEnvOptions{DB: db, Store: store, Cache: cache}, site.ID, &workeradapter.StaticAssetsFetcher{
 		Store:     store,
 		Cache:     cache,
 		SiteID:    site.ID,
