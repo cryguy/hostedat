@@ -37,6 +37,9 @@ func BuildEnvFromDB(opts BuildEnvOptions, siteID string, assets worker.AssetsFet
 		env.Dispatcher = opts.Dispatcher
 	}
 
+	// Cache API binding — site-scoped, always available.
+	env.Cache = &GORMCacheStore{DB: opts.DB, SiteID: siteID}
+
 	// Load environment variables and secrets.
 	var envVars []models.WorkerEnvVar
 	opts.DB.Where("site_id = ?", siteID).Find(&envVars)

@@ -37,8 +37,8 @@ func TestGORMKVStore_PutAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if val != "value1" {
-		t.Errorf("Get = %q, want %q", val, "value1")
+	if val == nil || *val != "value1" {
+		t.Errorf("Get = %v, want %q", val, "value1")
 	}
 }
 
@@ -50,8 +50,8 @@ func TestGORMKVStore_GetNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if val != "" {
-		t.Errorf("expected empty for missing key, got %q", val)
+	if val != nil {
+		t.Errorf("expected nil for missing key, got %q", *val)
 	}
 }
 
@@ -72,8 +72,8 @@ func TestGORMKVStore_GetExpired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if val != "" {
-		t.Errorf("expected empty for expired key, got %q", val)
+	if val != nil {
+		t.Errorf("expected nil for expired key, got %q", *val)
 	}
 
 	// Verify cleanup.
@@ -158,8 +158,8 @@ func TestGORMKVStore_PutUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if val != "v2" {
-		t.Errorf("expected updated value %q, got %q", "v2", val)
+	if val == nil || *val != "v2" {
+		t.Errorf("expected updated value %q, got %v", "v2", val)
 	}
 }
 
@@ -176,8 +176,8 @@ func TestGORMKVStore_PutWithTTL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if val != "ttl-value" {
-		t.Errorf("Get = %q, want %q", val, "ttl-value")
+	if val == nil || *val != "ttl-value" {
+		t.Errorf("Get = %v, want %q", val, "ttl-value")
 	}
 }
 
@@ -207,8 +207,8 @@ func TestGORMKVStore_Delete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get after delete: %v", err)
 	}
-	if val != "" {
-		t.Errorf("expected empty after delete, got %q", val)
+	if val != nil {
+		t.Errorf("expected nil after delete, got %q", *val)
 	}
 }
 
@@ -360,8 +360,8 @@ func TestGORMKVStore_NamespaceIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get ns2: %v", err)
 	}
-	if val != "" {
-		t.Errorf("ns2 should not see ns1 key, got %q", val)
+	if val != nil {
+		t.Errorf("ns2 should not see ns1 key, got %q", *val)
 	}
 }
 

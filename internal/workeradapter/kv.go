@@ -25,23 +25,23 @@ type GORMKVStore struct {
 	NamespaceID string
 }
 
-// Get retrieves a value by key, returning "" if not found or expired.
-func (kv *GORMKVStore) Get(key string) (string, error) {
+// Get retrieves a value by key, returning nil if not found or expired.
+func (kv *GORMKVStore) Get(key string) (*string, error) {
 	var entry models.KVEntry
 	err := kv.DB.Where("namespace_id = ? AND key = ?", kv.NamespaceID, key).First(&entry).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return "", nil
+			return nil, nil
 		}
-		return "", err
+		return nil, err
 	}
 
 	if entry.ExpiresAt != nil && entry.ExpiresAt.Before(time.Now()) {
 		kv.DB.Delete(&entry)
-		return "", nil
+		return nil, nil
 	}
 
-	return entry.Value, nil
+	return &entry.Value, nil
 }
 
 // GetWithMetadata retrieves a value and its metadata by key.

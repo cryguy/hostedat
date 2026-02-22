@@ -114,6 +114,11 @@ func TestBuildWorkerEnv_PopulatesAllBindings(t *testing.T) {
 		t.Error("missing DurableObject binding COUNTER")
 	}
 
+	// --- Cache ---
+	if env.Cache == nil {
+		t.Fatal("Cache should not be nil")
+	}
+
 	// --- Storage (nil without MinioClient) ---
 	if env.Storage != nil {
 		t.Error("Storage should be nil when MinioClient is nil in WorkerDeps")
@@ -171,6 +176,9 @@ func TestBuildWorkerEnv_NilDeps(t *testing.T) {
 	}
 	if env.Storage != nil {
 		t.Error("Storage should be nil with nil deps")
+	}
+	if env.Cache == nil {
+		t.Fatal("Cache should not be nil even with nil deps")
 	}
 }
 
