@@ -60,6 +60,7 @@ worker:
   max_response_bytes: 10485760  # 10 MB max response body
   max_log_retention: 7       # Days to keep worker logs
   max_script_size_kb: 1024   # Max _worker.js file size
+  data_dir: ./data             # Storage for D1 databases, Durable Objects, Queues
 
 # S3-compatible object storage (backed by SeaweedFS)
 object_storage:
@@ -68,6 +69,7 @@ object_storage:
   data_dir: ./data/seaweedfs       # SeaweedFS data directory
   binary_path: ./weed              # SeaweedFS binary path (managed mode)
   region: us-east-1
+  # s3_endpoint: http://127.0.0.1:8333  # Override for external SeaweedFS (managed: false)
   auth:
     require_sigv4: true            # Reject unsigned proxy requests
     access_key_id: ""              # Optional static S3 credentials
@@ -116,7 +118,7 @@ object_storage:
   <h3>database.dsn</h3>
   <table>
     <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
-    <tbody><tr><td><code>string</code></td><td><code>./data/hostedat.db</code></td><td>Yes</td></tr></tbody>
+    <tbody><tr><td><code>string</code></td><td>&mdash;</td><td>Yes</td></tr></tbody>
   </table>
   <p>Data source name. Format depends on the driver:</p>
   <ul>
@@ -224,6 +226,13 @@ object_storage:
   </table>
   <p>Maximum <code>_worker.js</code> file size in kilobytes. Deployments with larger worker scripts will be rejected.</p>
 
+  <h3>worker.data_dir</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
+    <tbody><tr><td><code>string</code></td><td><code>./data</code></td><td>No</td></tr></tbody>
+  </table>
+  <p>Directory for worker data storage, including D1 database files, Durable Object state, and Queue data. D1 databases are stored at <code>&lt;data_dir&gt;/d1/&lt;siteID&gt;_&lt;databaseID&gt;.sqlite3</code>.</p>
+
   <h3>object_storage.enabled</h3>
   <table>
     <thead><tr><th>Type</th><th>Default</th></tr></thead>
@@ -251,6 +260,13 @@ object_storage:
     <tbody><tr><td><code>string</code></td><td><code>./weed</code></td></tr></tbody>
   </table>
   <p>Path to the SeaweedFS binary. Only used in managed mode. Use <code>./weed.exe</code> on Windows.</p>
+
+  <h3>object_storage.s3_endpoint</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Default</th><th>Required</th></tr></thead>
+    <tbody><tr><td><code>string</code></td><td><code>http://127.0.0.1:8333</code></td><td>No</td></tr></tbody>
+  </table>
+  <p>S3 endpoint URL for the SeaweedFS instance. Only relevant when <code>managed</code> is <code>false</code> — use this to point hostedat at an external SeaweedFS S3 gateway.</p>
 
   <h3>object_storage.region</h3>
   <table>

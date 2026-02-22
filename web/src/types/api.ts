@@ -14,6 +14,7 @@ export interface Site {
   spa_mode: boolean
   has_worker: boolean
   active_version: number | null
+  active_deploy_id?: string
   created_at: string
 }
 
@@ -113,6 +114,32 @@ export interface StorageBucket {
   bucket_name: string
   public: boolean
   created_at: string
+}
+
+export interface D1Database {
+  id: string
+  site_id: string
+  name: string
+  database_id: string
+  created_at: string
+}
+
+export interface D1DatabaseListResponse {
+  items: D1Database[]
+  total: number
+}
+
+export interface DurableObjectNamespace {
+  id: string
+  site_id: string
+  name: string
+  namespace_id: string
+  created_at: string
+}
+
+export interface DurableObjectNamespaceListResponse {
+  items: DurableObjectNamespace[]
+  total: number
 }
 
 export interface S3Credential {

@@ -13,6 +13,10 @@ import type {
   KVNamespace,
   CronSchedule,
   WorkerLog,
+  D1Database,
+  D1DatabaseListResponse,
+  DurableObjectNamespace,
+  DurableObjectNamespaceListResponse,
   StorageBucket,
   S3Credential,
 } from "@/types/api"
@@ -225,7 +229,7 @@ export const workers = {
     })
   },
   deleteEnv(siteId: string, varId: string) {
-    return request<{ message: string }>(`/sites/${siteId}/worker/env/${varId}`, { method: "DELETE" })
+    return request<void>(`/sites/${siteId}/worker/env/${varId}`, { method: "DELETE" })
   },
   listKV(siteId: string) {
     return request<KVNamespace[]>(`/sites/${siteId}/worker/kv`)
@@ -237,7 +241,7 @@ export const workers = {
     })
   },
   deleteKV(siteId: string, nsId: string) {
-    return request<{ message: string }>(`/sites/${siteId}/worker/kv/${nsId}`, { method: "DELETE" })
+    return request<void>(`/sites/${siteId}/worker/kv/${nsId}`, { method: "DELETE" })
   },
   listCrons(siteId: string) {
     return request<CronSchedule[]>(`/sites/${siteId}/worker/crons`)
@@ -249,10 +253,34 @@ export const workers = {
     })
   },
   deleteCron(siteId: string, cronId: string) {
-    return request<{ message: string }>(`/sites/${siteId}/worker/crons/${cronId}`, { method: "DELETE" })
+    return request<void>(`/sites/${siteId}/worker/crons/${cronId}`, { method: "DELETE" })
   },
   getLogs(siteId: string) {
     return request<WorkerLog[]>(`/sites/${siteId}/worker/logs`)
+  },
+  listD1(siteId: string) {
+    return request<D1DatabaseListResponse>(`/sites/${siteId}/worker/d1`)
+  },
+  createD1(siteId: string, name: string) {
+    return request<D1Database>(`/sites/${siteId}/worker/d1`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    })
+  },
+  deleteD1(siteId: string, d1Id: string) {
+    return request<void>(`/sites/${siteId}/worker/d1/${d1Id}`, { method: "DELETE" })
+  },
+  listDurableObjects(siteId: string) {
+    return request<DurableObjectNamespaceListResponse>(`/sites/${siteId}/worker/do`)
+  },
+  createDurableObject(siteId: string, name: string) {
+    return request<DurableObjectNamespace>(`/sites/${siteId}/worker/do`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    })
+  },
+  deleteDurableObject(siteId: string, doId: string) {
+    return request<void>(`/sites/${siteId}/worker/do/${doId}`, { method: "DELETE" })
   },
 }
 
