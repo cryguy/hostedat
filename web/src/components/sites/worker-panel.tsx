@@ -2,6 +2,8 @@ import { Code } from "lucide-react"
 import { Separator } from "@/components/ui/separator"
 import { WorkerEnvVars } from "./worker-env-vars"
 import { WorkerKV } from "./worker-kv"
+import { WorkerD1 } from "./worker-d1"
+import { WorkerDurableObjects } from "./worker-durable-objects"
 import { WorkerCrons } from "./worker-crons"
 import { WorkerLogs } from "./worker-logs"
 
@@ -46,6 +48,26 @@ export function WorkerPanel({ siteId, hasWorker }: WorkerPanelProps) {
           Persistent key-value storage accessible via <code className="bg-muted px-1.5 py-0.5 rounded text-xs">env.YOUR_NAMESPACE</code> in your worker.
         </p>
         <WorkerKV siteId={siteId} />
+      </div>
+
+      <Separator />
+
+      <div>
+        <h3 className="text-lg font-semibold mb-2">D1 Databases</h3>
+        <p className="text-sm text-muted-foreground mb-4">
+          Per-site SQLite databases accessible via <code className="bg-muted px-1.5 py-0.5 rounded text-xs">env.YOUR_DB</code> in your worker.
+        </p>
+        <WorkerD1 siteId={siteId} />
+      </div>
+
+      <Separator />
+
+      <div>
+        <h3 className="text-lg font-semibold mb-2">Durable Objects</h3>
+        <p className="text-sm text-muted-foreground mb-4">
+          Persistent, transactional key-value storage accessible via <code className="bg-muted px-1.5 py-0.5 rounded text-xs">env.YOUR_DO</code> in your worker.
+        </p>
+        <WorkerDurableObjects siteId={siteId} />
       </div>
 
       <Separator />

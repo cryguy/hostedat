@@ -20,8 +20,13 @@ import (
 // Manager handles the SeaweedFS subprocess lifecycle in managed mode.
 type Manager struct {
 	Config config.ObjectStorageConfig
-	Client *Client
+	Client *Client // IAM client (pointed at the S3/IAM endpoint)
 	cmd    *exec.Cmd
+
+	// FilerEndpoint is the filer HTTP address.
+	FilerEndpoint string
+
+	s3HealthClient *Client // used to check S3 readiness
 
 	// AccessKeyID and SecretAccessKey are the admin credentials used to
 	// authenticate with the managed SeaweedFS instance. They are either
@@ -64,10 +69,12 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("parsing S3 endpoint port: %w", err)
 	}
 
-	// Pick non-conflicting ports for master and volume services.
+	// Pick non-conflicting ports for master, volume, and filer services.
+	// IAM is embedded in the S3 server (no separate port needed).
 	masterPort := s3Port + 1
 	volumePort := s3Port + 2
-	if err := ensurePortsAvailable(s3Port, masterPort, volumePort); err != nil {
+	filerPort := s3Port + 3
+	if err := ensurePortsAvailable(s3Port, masterPort, volumePort, filerPort); err != nil {
 		return err
 	}
 
@@ -87,6 +94,9 @@ func (m *Manager) Start() error {
 		fmt.Sprintf("-s3.port=%d", s3Port),
 		fmt.Sprintf("-master.port=%d", masterPort),
 		fmt.Sprintf("-volume.port=%d", volumePort),
+		fmt.Sprintf("-filer.port=%d", filerPort),
+		"-s3.iam.readOnly=false",
+		"-s3.port.iceberg=0",
 		"-volume.max=0",
 		"-ip=127.0.0.1",
 		"-s3.config="+s3ConfigPath,
@@ -97,9 +107,16 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("starting SeaweedFS: %w", err)
 	}
 
-	m.Client = NewClient(m.Config.S3Endpoint)
+	m.FilerEndpoint = fmt.Sprintf("http://127.0.0.1:%d", filerPort)
 
-	if err := m.waitForHealth(30 * time.Second); err != nil {
+	// The IAM API is embedded in the S3 server, so the IAM client
+	// points at the same endpoint and signs requests with SigV4.
+	m.Client = NewClientWithAuth(m.Config.S3Endpoint, m.AccessKeyID, m.SecretAccessKey, m.Config.Region)
+
+	// Wait for the S3 endpoint (not IAM) to become healthy, since S3
+	// is what callers (minio client) actually connect to.
+	m.s3HealthClient = NewClient(m.Config.S3Endpoint)
+	if err := m.waitForHealth(45 * time.Second); err != nil {
 		_ = m.Stop()
 		return fmt.Errorf("SeaweedFS failed to become healthy: %w", err)
 	}
@@ -215,18 +232,18 @@ func (m *Manager) Stop() error {
 	}
 }
 
-// IsHealthy returns true if SeaweedFS responds to health checks.
+// IsHealthy returns true if the SeaweedFS S3 endpoint responds to health checks.
 func (m *Manager) IsHealthy() bool {
-	if m.Client == nil {
+	if m.s3HealthClient == nil {
 		return false
 	}
-	return m.Client.Health() == nil
+	return m.s3HealthClient.Health() == nil
 }
 
 func (m *Manager) waitForHealth(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if m.Client.Health() == nil {
+		if m.s3HealthClient.Health() == nil {
 			return nil
 		}
 		time.Sleep(500 * time.Millisecond)

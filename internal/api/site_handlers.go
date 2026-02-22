@@ -13,7 +13,7 @@ import (
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/seaweedfs"
 	"github.com/cryguy/hostedat/internal/storage"
-	"github.com/cryguy/hostedat/internal/worker"
+	"github.com/cryguy/hostedat/internal/workeradapter"
 	"github.com/labstack/echo/v4"
 	"github.com/minio/minio-go/v7"
 	"gorm.io/gorm"
@@ -32,6 +32,7 @@ type SiteHandler struct {
 	Storage   *storage.Manager
 	S3Client  *minio.Client     // optional; nil when object storage is disabled
 	IAMClient *seaweedfs.Client // optional; nil when object storage is disabled
+	DataDir   string
 }
 
 type createSiteRequest struct {
@@ -236,10 +237,10 @@ func (h *SiteHandler) Delete(c echo.Context) error {
 	_ = h.Storage.DeleteSite(siteID)
 
 	// Remove D1 SQLite database files from disk.
-	dataDir := worker.GetDataDir()
+	dataDir := h.DataDir
 	for _, d1 := range d1Databases {
-		dbPath := worker.GetD1Path(dataDir, d1.DatabaseID)
-		if err := worker.DeleteFile(dbPath); err != nil {
+		dbPath := workeradapter.GetD1Path(dataDir, d1.DatabaseID)
+		if err := workeradapter.DeleteFile(dbPath); err != nil {
 			log.Printf("warning: failed to remove D1 database file %s: %v", dbPath, err)
 		}
 	}

@@ -135,7 +135,7 @@ Include a `404.html` in your upload and it will be served for requests that don'
 
 Workers let you run server-side JavaScript on your site. Include a `_worker.js` file in your upload to handle requests dynamically — the API is compatible with Cloudflare Workers.
 
-Workers run in a sandboxed V8 JavaScript engine via [tommie/v8go](https://github.com/tommie/v8go). The server binary requires `CGO_ENABLED=1` (the default on Linux/macOS). V8 prebuilt libraries are available for Linux (amd64, arm64), macOS (amd64, arm64), and Android — Windows is not supported for the server binary. The CLI remains pure Go and works on all platforms including Windows.
+Workers run in the standalone [`github.com/cryguy/worker`](https://github.com/cryguy/worker) runtime, which uses a sandboxed V8 JavaScript engine via [tommie/v8go](https://github.com/tommie/v8go). The server binary requires `CGO_ENABLED=1` (the default on Linux/macOS). V8 prebuilt libraries are available for Linux (amd64, arm64), macOS (amd64, arm64), and Android — Windows is not supported for the server binary. The CLI remains pure Go and works on all platforms including Windows.
 
 ### Basic Worker
 
@@ -271,6 +271,7 @@ worker:
   max_response_bytes: 10485760  # 10 MB max response body
   max_log_retention: 7       # Days to keep worker logs
   max_script_size_kb: 1024   # Max _worker.js file size
+  data_dir: ./data           # D1 database storage directory
 ```
 
 ## Building
@@ -302,7 +303,7 @@ internal/auth/     Authentication (JWT, API keys)
 internal/config/   Configuration loading
 internal/client/   API client (used by CLI)
 internal/certs/    TLS certificate management
-internal/worker/   Server-side JS engine (V8 via tommie/v8go)
+internal/workeradapter/  Worker adapter layer (bridges hostedat models to github.com/cryguy/worker)
 web/               React + Vite frontend
 docs/              Documentation site (Astro)
 scripts/           Build and release scripts
