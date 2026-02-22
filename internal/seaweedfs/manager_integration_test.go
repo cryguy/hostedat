@@ -1,14 +1,10 @@
-//go:build integration
-
 package seaweedfs
 
 import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -113,31 +109,21 @@ func TestManagerIntegration_IAMFlow(t *testing.T) {
 func resolveWeedBinary(t *testing.T) string {
 	t.Helper()
 
-	if env := strings.TrimSpace(os.Getenv("HOSTEDAT_WEED_BIN")); env != "" {
+	// Honour explicit override if set.
+	if env := os.Getenv("HOSTEDAT_WEED_BIN"); env != "" {
 		if _, err := os.Stat(env); err == nil {
 			return env
 		}
-		if _, err := exec.LookPath(env); err == nil {
-			return env
-		}
-		t.Skipf("integration requires HOSTEDAT_WEED_BIN; not found: %s", env)
 	}
 
-	if runtime.GOOS == "windows" {
-		candidates := []string{"./weed.exe", filepath.Join("..", "..", "weed.exe")}
-		for _, p := range candidates {
-			if _, err := os.Stat(p); err == nil {
-				return p
-			}
-		}
-		t.Skip("integration requires weed.exe (set HOSTEDAT_WEED_BIN)")
+	// Use a shared cache directory so the binary is downloaded once and
+	// reused across test runs.
+	cacheDir := filepath.Join(os.TempDir(), "hostedat-weed-cache")
+	bin, err := EnsureBinary(config.ObjectStorageConfig{DataDir: cacheDir})
+	if err != nil {
+		t.Fatalf("downloading weed binary: %v", err)
 	}
-
-	if _, err := exec.LookPath("weed"); err == nil {
-		return "weed"
-	}
-	t.Skip("integration requires 'weed' in PATH (or set HOSTEDAT_WEED_BIN)")
-	return ""
+	return bin
 }
 
 func mustFreePort(t *testing.T) int {

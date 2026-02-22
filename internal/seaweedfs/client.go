@@ -1,12 +1,18 @@
 package seaweedfs
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
+
+	"github.com/minio/minio-go/v7/pkg/signer"
 )
 
 // Client wraps the SeaweedFS IAM-compatible API for credential management.
@@ -14,12 +20,34 @@ import (
 type Client struct {
 	Endpoint   string // e.g. "http://127.0.0.1:8333"
 	HTTPClient *http.Client
+
+	// Credentials for SigV4-signed IAM requests. When set, all IAM
+	// requests are signed with AWS Signature V4 using service "s3"
+	// (SeaweedFS shares its S3 auth layer with the IAM endpoint).
+	AccessKeyID     string
+	SecretAccessKey string
+	Region          string
 }
 
-// NewClient creates a SeaweedFS IAM client.
+// NewClient creates an unauthenticated SeaweedFS IAM client.
+// Use NewClientWithAuth for managed instances that require SigV4 signing.
 func NewClient(endpoint string) *Client {
 	return &Client{
 		Endpoint: endpoint,
+		HTTPClient: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+	}
+}
+
+// NewClientWithAuth creates a SeaweedFS IAM client that signs requests
+// with AWS Signature V4 using the provided S3 admin credentials.
+func NewClientWithAuth(endpoint, accessKey, secretKey, region string) *Client {
+	return &Client{
+		Endpoint:        endpoint,
+		AccessKeyID:     accessKey,
+		SecretAccessKey: secretKey,
+		Region:          region,
 		HTTPClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -46,7 +74,28 @@ type createAccessKeyResponse struct {
 }
 
 func (c *Client) doIAM(params url.Values) ([]byte, error) {
-	resp, err := c.HTTPClient.PostForm(c.Endpoint, params)
+	payload := []byte(params.Encode())
+	// Ensure the URL has a path ("/") so SigV4 canonical URI is correct.
+	endpoint := c.Endpoint
+	if !strings.HasSuffix(endpoint, "/") {
+		endpoint += "/"
+	}
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("building IAM request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.ContentLength = int64(len(payload))
+
+	// Sign the request if credentials are configured.
+	if c.AccessKeyID != "" && c.SecretAccessKey != "" {
+		// Pre-compute the payload hash so SignV4 doesn't consume the body reader.
+		h := sha256.Sum256(payload)
+		req.Header.Set("X-Amz-Content-Sha256", hex.EncodeToString(h[:]))
+		req = signer.SignV4(*req, c.AccessKeyID, c.SecretAccessKey, "", c.Region)
+	}
+
+	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("IAM request: %w", err)
 	}
