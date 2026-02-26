@@ -32,6 +32,20 @@ func NewS3Proxy(s3Endpoint string, requireSigV4 bool) http.Handler {
 	// client (or presigned URL) was signed for. The proxy routes to the
 	// backend via req.URL.Host (set by the default Director).
 
+	// Strip CORS headers from the upstream S3 response. Echo's CORS
+	// middleware already sets these on the outer response; if the backend
+	// also returns them the values get duplicated (e.g. two identical
+	// Access-Control-Allow-Origin values) which browsers reject.
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		resp.Header.Del("Access-Control-Allow-Origin")
+		resp.Header.Del("Access-Control-Allow-Methods")
+		resp.Header.Del("Access-Control-Allow-Headers")
+		resp.Header.Del("Access-Control-Expose-Headers")
+		resp.Header.Del("Access-Control-Allow-Credentials")
+		resp.Header.Del("Access-Control-Max-Age")
+		return nil
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if requireSigV4 && !hasSigV4Signature(req) {
 			http.Error(w, "missing SigV4 authentication", http.StatusForbidden)
