@@ -5,7 +5,7 @@ go 1.25
 require (
 	github.com/caddyserver/certmagic v0.25.1
 	github.com/coder/websocket v1.8.14
-	github.com/cryguy/worker/v2 v2.0.1
+	github.com/cryguy/worker/v2 v2.1.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/labstack/echo/v4 v4.15.0
@@ -16,7 +16,6 @@ require (
 	golang.org/x/crypto v0.47.0
 	golang.org/x/time v0.14.0
 	gopkg.in/yaml.v3 v3.0.1
-	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.1
 )
 
@@ -38,7 +37,6 @@ require (
 	github.com/libdns/libdns v1.1.1 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mattn/go-sqlite3 v1.14.22 // indirect
 	github.com/mholt/acmez/v3 v3.1.4 // indirect
 	github.com/miekg/dns v1.1.69 // indirect
 	github.com/minio/crc64nvme v1.1.1 // indirect

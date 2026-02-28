@@ -31,7 +31,7 @@ func downloadURL(version, goos, goarch string) (string, error) {
 	case goos == "darwin" && goarch == "arm64":
 		filename = "darwin_arm64.tar.gz"
 	case goos == "windows" && goarch == "amd64":
-		filename = "windows_amd64.exe.zip"
+		filename = "windows_amd64.zip"
 	default:
 		return "", fmt.Errorf("unsupported platform: %s/%s", goos, goarch)
 	}

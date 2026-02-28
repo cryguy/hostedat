@@ -5,7 +5,7 @@ import (
 
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/worker/v2"
-	"gorm.io/driver/sqlite"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
