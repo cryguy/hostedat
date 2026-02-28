@@ -1,6 +1,6 @@
 # hostedat Worker Runtime
 
-The worker runtime executes JavaScript using V8 (via v8go, CGO bindings to the V8 engine). Workers are Cloudflare Workers-compatible in structure, but not all Cloudflare APIs are available. This document describes exactly what is available.
+The worker runtime executes JavaScript using one of two engines: **V8** (JIT-compiled via v8go, recommended for Linux/macOS) or **QuickJS** (interpreted, available on all platforms including Windows). Both engines provide the same Workers API. Workers are Cloudflare Workers-compatible in structure, but not all Cloudflare APIs are available. This document describes exactly what is available.
 
 ---
 

@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/cryguy/hostedat/internal/storage"
-	"github.com/cryguy/worker"
+	"github.com/cryguy/worker/v2"
 )
 
 // Compile-time interface check.

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cryguy/worker"
+	"github.com/cryguy/worker/v2"
 	gonanoid "github.com/matoous/go-nanoid/v2"
 	"gorm.io/gorm"
 )

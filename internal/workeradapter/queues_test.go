@@ -3,7 +3,7 @@ package workeradapter
 import (
 	"testing"
 
-	"github.com/cryguy/worker"
+	"github.com/cryguy/worker/v2"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )

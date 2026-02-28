@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/cryguy/hostedat/internal/models"
-	"github.com/cryguy/worker"
+	"github.com/cryguy/worker/v2"
 	"gorm.io/gorm"
 )
 

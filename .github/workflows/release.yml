@@ -14,6 +14,7 @@ permissions:
   contents: write
 
 jobs:
+  # All Darwin builds require macOS for lipo (universal binaries) and CGO (V8).
   build-darwin:
     runs-on: self-hosted-macos
     steps:
@@ -27,14 +28,28 @@ jobs:
         with:
           node-version: 20
 
-      - name: Build Darwin universal binaries
-        run: make build-darwin
+      - name: Build QuickJS Darwin binaries + universal
+        run: make build-darwin build-darwin-lipo
 
-      - name: Verify universal binaries
+      - name: Build V8 Darwin binaries + universal
+        run: make build-darwin-v8
+
+      - name: Verify Darwin binaries
         run: |
+          echo "==> QuickJS Darwin"
+          file dist/hostedat-server-darwin-amd64
+          file dist/hostedat-server-darwin-arm64
           file dist/hostedat-server-darwin-universal
-          file dist/hostedat-darwin-universal
           lipo -info dist/hostedat-server-darwin-universal
+          file dist/hostedat-darwin-amd64
+          file dist/hostedat-darwin-arm64
+          file dist/hostedat-darwin-universal
+          lipo -info dist/hostedat-darwin-universal
+          echo "==> V8 Darwin"
+          file dist/hostedat-server-v8-darwin-amd64
+          file dist/hostedat-server-v8-darwin-arm64
+          file dist/hostedat-server-v8-darwin-universal
+          lipo -info dist/hostedat-server-v8-darwin-universal
 
       - uses: actions/upload-artifact@v4
         with:
@@ -55,7 +70,7 @@ jobs:
         with:
           node-version: 20
 
-      - name: Ensure ARM64 cross-compiler
+      - name: Ensure ARM64 cross-compiler (for V8 Linux)
         run: |
           if ! command -v aarch64-linux-gnu-gcc &>/dev/null; then
             sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
@@ -67,11 +82,30 @@ jobs:
           name: binaries-darwin
           path: dist
 
-      - name: Build Linux binaries
-        run: make build-linux
+      - name: Build QuickJS Linux + Windows binaries
+        run: make build-linux build-windows
 
-      - name: Build Windows CLI
-        run: make build-cli-windows
+      - name: Build V8 Linux binaries
+        run: make build-linux-v8
+
+      - name: Verify binaries
+        run: |
+          echo "==> QuickJS (Linux + Windows)"
+          file dist/hostedat-server-linux-amd64
+          file dist/hostedat-server-linux-arm64
+          file dist/hostedat-server-windows-amd64.exe
+          file dist/hostedat-server-windows-arm64.exe
+          echo "==> QuickJS (Darwin — from artifact)"
+          file dist/hostedat-server-darwin-amd64
+          file dist/hostedat-server-darwin-arm64
+          file dist/hostedat-server-darwin-universal
+          echo "==> V8 (Linux)"
+          file dist/hostedat-server-v8-linux-amd64
+          file dist/hostedat-server-v8-linux-arm64
+          echo "==> V8 (Darwin — from artifact)"
+          file dist/hostedat-server-v8-darwin-amd64
+          file dist/hostedat-server-v8-darwin-arm64
+          file dist/hostedat-server-v8-darwin-universal
 
       - name: Determine version
         id: version
@@ -119,10 +153,11 @@ jobs:
               *-arm64*) arch="arm64" ;;
             esac
 
-            type=""
+            type="" engine="quickjs"
             case "$filename" in
-              hostedat-server*) type="server" ;;
-              hostedat-*)       type="cli" ;;
+              hostedat-server-v8*) type="server"; engine="v8" ;;
+              hostedat-server*)    type="server" ;;
+              hostedat-*)          type="cli" ;;
             esac
 
             [ -z "$os" ] || [ -z "$arch" ] || [ -z "$type" ] && continue
@@ -137,11 +172,12 @@ jobs:
                 "os": "$os",
                 "arch": "$arch",
                 "type": "$type",
+                "engine": "$engine",
                 "size": $size,
                 "sha256": "$sha256"
               }
           ENTRY
-            echo "  $filename ($type, $os/$arch, ${size} bytes)"
+            echo "  $filename ($type/$engine, $os/$arch, ${size} bytes)"
           done
 
           echo '  ]' >> "$MANIFEST"

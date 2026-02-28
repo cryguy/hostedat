@@ -13,7 +13,7 @@ import (
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
 	"github.com/cryguy/hostedat/internal/workeradapter"
-	"github.com/cryguy/worker"
+	"github.com/cryguy/worker/v2"
 	"github.com/labstack/echo/v4"
 	"github.com/minio/minio-go/v7"
 	"gorm.io/gorm"

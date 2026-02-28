@@ -6,6 +6,7 @@ interface DownloadFile {
   os: string;
   arch: string;
   type: 'cli' | 'server';
+  engine?: 'v8' | 'quickjs';
   size: number;
   sha256: string;
 }
@@ -45,7 +46,7 @@ function osLabel(os: string): string {
 }
 
 function archLabel(arch: string): string {
-  const labels: Record<string, string> = { amd64: 'x86_64', arm64: 'ARM64' };
+  const labels: Record<string, string> = { amd64: 'x86_64', arm64: 'ARM64', universal: 'Universal' };
   return labels[arch] || arch;
 }
 
@@ -59,7 +60,8 @@ function osIcon(os: string): string {
 }
 
 const cliFiles = manifest?.files.filter(f => f.type === 'cli') || [];
-const serverFiles = manifest?.files.filter(f => f.type === 'server') || [];
+const serverV8Files = manifest?.files.filter(f => f.type === 'server' && f.engine === 'v8') || [];
+const serverQJSFiles = manifest?.files.filter(f => f.type === 'server' && (f.engine === 'quickjs' || !f.engine)) || [];
 
 // Sort: linux first, then darwin, then windows; amd64 before arm64, universal last per OS
 const osOrder = ['linux', 'darwin', 'windows'];
@@ -162,15 +164,19 @@ const sortFiles = (files: DownloadFile[]) =>
           </div>
         </section>
 
-        <!-- Server Downloads -->
+        <!-- Server Downloads: V8 (Recommended) -->
+        {serverV8Files.length > 0 && (
         <section class="mb-20">
           <div class="flex items-center gap-3 mb-6">
             <div class="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center">
               <svg class="w-4 h-4 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
             </div>
             <div>
-              <h2 class="text-xl font-semibold text-zinc-100">Server</h2>
-              <p class="text-xs text-zinc-600">The <code class="text-emerald-400/70 bg-emerald-500/5 px-1 rounded">hostedat-server</code> hosting platform binary</p>
+              <div class="flex items-center gap-2">
+                <h2 class="text-xl font-semibold text-zinc-100">Server (V8)</h2>
+                <span class="inline-flex items-center px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-semibold uppercase tracking-wider text-emerald-400">Recommended</span>
+              </div>
+              <p class="text-xs text-zinc-600">JIT-compiled JavaScript via V8 engine — best worker performance. Linux and macOS only.</p>
             </div>
           </div>
 
@@ -187,8 +193,77 @@ const sortFiles = (files: DownloadFile[]) =>
                   </tr>
                 </thead>
                 <tbody>
-                  {sortFiles(serverFiles).map((file, i) => (
-                    <tr class:list={["group hover:bg-zinc-900/40 transition-colors", i < serverFiles.length - 1 && "border-b border-zinc-800/30"]}>
+                  {sortFiles(serverV8Files).map((file, i) => (
+                    <tr class:list={["group hover:bg-zinc-900/40 transition-colors", i < serverV8Files.length - 1 && "border-b border-zinc-800/30"]}>
+                      <td class="px-5 py-3.5">
+                        <div class="flex items-center gap-2.5">
+                          <Fragment set:html={osIcon(file.os)} />
+                          <span class="text-zinc-300">{osLabel(file.os)}</span>
+                        </div>
+                      </td>
+                      <td class="px-5 py-3.5">
+                        <span class="font-mono text-xs text-zinc-500 bg-zinc-800/50 px-2 py-0.5 rounded">{archLabel(file.arch)}</span>
+                      </td>
+                      <td class="px-5 py-3.5 text-zinc-500">{formatSize(file.size)}</td>
+                      <td class="px-5 py-3.5">
+                        <div class="flex items-center gap-2">
+                          <code class="text-[11px] text-zinc-600 font-mono truncate max-w-[120px] md:max-w-[200px]">{file.sha256}</code>
+                          <button
+                            class="checksum-copy shrink-0 p-1 rounded text-zinc-700 hover:text-zinc-400 hover:bg-zinc-800 transition-colors"
+                            data-checksum={file.sha256}
+                            aria-label="Copy checksum"
+                          >
+                            <svg class="copy-icon w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                            <svg class="check-icon w-3.5 h-3.5 hidden text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                          </button>
+                        </div>
+                      </td>
+                      <td class="px-5 py-3.5 text-right">
+                        <a
+                          href={`/downloads/${file.name}`}
+                          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-800/60 text-zinc-300 hover:bg-zinc-700/60 hover:text-zinc-100 border border-zinc-700/40 transition-all duration-150"
+                          download
+                        >
+                          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                          Download
+                        </a>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+        )}
+
+        <!-- Server Downloads: QuickJS -->
+        <section class="mb-20">
+          <div class="flex items-center gap-3 mb-6">
+            <div class="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center">
+              <svg class="w-4 h-4 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+            </div>
+            <div>
+              <h2 class="text-xl font-semibold text-zinc-100">Server (QuickJS)</h2>
+              <p class="text-xs text-zinc-600">Interpreted JavaScript via QuickJS — runs on all platforms including Windows. No native dependencies.</p>
+            </div>
+          </div>
+
+          <div class="rounded-xl border border-zinc-800/60 overflow-hidden">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-zinc-800/60 bg-zinc-900/30">
+                    <th class="text-left font-medium text-zinc-500 px-5 py-3">Platform</th>
+                    <th class="text-left font-medium text-zinc-500 px-5 py-3">Arch</th>
+                    <th class="text-left font-medium text-zinc-500 px-5 py-3">Size</th>
+                    <th class="text-left font-medium text-zinc-500 px-5 py-3">SHA-256</th>
+                    <th class="text-right font-medium text-zinc-500 px-5 py-3"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortFiles(serverQJSFiles).map((file, i) => (
+                    <tr class:list={["group hover:bg-zinc-900/40 transition-colors", i < serverQJSFiles.length - 1 && "border-b border-zinc-800/30"]}>
                       <td class="px-5 py-3.5">
                         <div class="flex items-center gap-2.5">
                           <Fragment set:html={osIcon(file.os)} />

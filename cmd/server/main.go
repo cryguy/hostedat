@@ -22,7 +22,7 @@ import (
 	"github.com/cryguy/hostedat/internal/storage"
 	"github.com/cryguy/hostedat/internal/workeradapter"
 	"github.com/cryguy/hostedat/web"
-	"github.com/cryguy/worker"
+	"github.com/cryguy/worker/v2"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/minio/minio-go/v7"

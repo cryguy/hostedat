@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cryguy/worker"
+	"github.com/cryguy/worker/v2"
 	"github.com/minio/minio-go/v7"
 )
 

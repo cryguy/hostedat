@@ -12,22 +12,37 @@ import CodeBlock from '../../components/CodeBlock.astro';
 
   <h2>Quick start</h2>
   <p>Download the server binary for your platform from the <a href="/downloads">downloads page</a>, create a config file, and run it.</p>
+
+  <h3>Choose your engine</h3>
   <p class="text-sm text-zinc-400">
-    <strong>Note:</strong> The server binary is available for <strong>Linux</strong> and <strong>macOS</strong> only.
-    The worker runtime uses V8, which requires a native build per platform. The <a href="/docs/cli">CLI</a> still supports all platforms including Windows.
+    The server ships with two JavaScript engine options for the <a href="/docs/workers">worker runtime</a>:
+  </p>
+  <ul class="text-sm text-zinc-400">
+    <li><strong class="text-zinc-200">V8 (recommended)</strong> — JIT-compiled JavaScript for best worker performance. Available for Linux and macOS.</li>
+    <li><strong class="text-zinc-200">QuickJS</strong> — Interpreted JavaScript, runs on all platforms including Windows. No native dependencies required.</li>
+  </ul>
+  <p class="text-sm text-zinc-400">
+    Both engines provide the same Workers API and features. If you don't use workers, either engine works identically for static site hosting.
   </p>
 
   <div class="platform-tabs">
     <div class="flex gap-px bg-zinc-800/40 rounded-t-lg border border-b-0 border-zinc-800 overflow-hidden">
       <button class="platform-tab active" data-platform="linux">Linux</button>
       <button class="platform-tab" data-platform="macos">macOS</button>
+      <button class="platform-tab" data-platform="windows">Windows</button>
     </div>
     <div class="platform-panel active" data-platform="linux">
       <CodeBlock
-        code={`# amd64
+        code={`# V8 (recommended) — amd64
+curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-server-v8-linux-amd64 -o hostedat-server
+
+# V8 (recommended) — arm64
+curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-server-v8-linux-arm64 -o hostedat-server
+
+# QuickJS — amd64
 curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-server-linux-amd64 -o hostedat-server
 
-# or arm64
+# QuickJS — arm64
 curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-server-linux-arm64 -o hostedat-server
 
 chmod +x hostedat-server`}
@@ -36,11 +51,26 @@ chmod +x hostedat-server`}
     </div>
     <div class="platform-panel" data-platform="macos">
       <CodeBlock
-        code={`# Universal binary (Apple Silicon + Intel)
+        code={`# V8 (recommended) — Universal binary (Apple Silicon + Intel)
+curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-server-v8-darwin-universal -o hostedat-server
+
+# QuickJS — Universal binary (Apple Silicon + Intel)
 curl -fsSL https://docs.hostedat.ditto.moe/downloads/hostedat-server-darwin-universal -o hostedat-server
 
 chmod +x hostedat-server`}
         lang="bash"
+      />
+    </div>
+    <div class="platform-panel" data-platform="windows">
+      <CodeBlock
+        code={`# QuickJS only (V8 is not available on Windows)
+
+# amd64
+Invoke-WebRequest -Uri https://docs.hostedat.ditto.moe/downloads/hostedat-server-windows-amd64.exe -OutFile hostedat-server.exe
+
+# arm64
+Invoke-WebRequest -Uri https://docs.hostedat.ditto.moe/downloads/hostedat-server-windows-arm64.exe -OutFile hostedat-server.exe`}
+        lang="powershell"
       />
     </div>
   </div>

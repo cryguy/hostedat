@@ -22,7 +22,7 @@ internal/
   models/           GORM models with nanoid PKs
   seaweedfs/        SeaweedFS IAM client (CreateUser, CreateAccessKey, PutUserPolicy, etc.)
   storage/          Local file storage manager (zip extraction, site paths, bytecode paths)
-  worker/           V8/v8go JS runtime, bindings, pool management
+  worker/           Dual-engine JS runtime (V8/QuickJS), bindings, pool management
 web/
   src/              React + Vite frontend
   dist/             Build output (embedded into binary)
@@ -161,13 +161,19 @@ The `RequireSiteOwner(db)` middleware is available but handlers perform inline c
 
 ### Runtime Stack
 
-- **V8** JavaScript engine (via `github.com/tommie/v8go`  ECGO bindings to the V8 engine)
-- V8 isolate pool with per-worker contexts for sandboxed execution
-- Script validation happens at deploy time; execution uses pre-warmed V8 isolates
+Two JavaScript engines are supported (selected at build time via build tags):
+
+- **V8** (recommended, `-tags v8`): JIT-compiled via `github.com/tommie/v8go` CGO bindings. Best performance. Linux and macOS only.
+- **QuickJS** (default): Interpreted via `modernc.org/quickjs` (pure Go). Runs on all platforms including Windows. No CGO required.
+
+Both engines share the same Workers API, pool management, and execution flow.
+
+- Isolate/context pool with per-worker sandboxed execution
+- Script validation happens at deploy time; execution uses pre-warmed runtimes
 
 ### Pool Management
 
-Each deployed worker site gets a pool of pre-warmed V8 isolates:
+Each deployed worker site gets a pool of pre-warmed runtimes:
 
 ```go
 type poolKey struct {
@@ -180,7 +186,7 @@ type poolKey struct {
 - Pool size configurable (default 4 runtimes per site)
 - On request: checkout a runtime from the pool, execute, return
 - Pool invalidation: when a new deployment is pushed, the old pool is marked invalid; a fresh pool is created lazily for the new `deployKey`
-- On server restart: V8 isolates are recreated lazily on first request; source code is re-parsed from disk
+- On server restart: runtimes are recreated lazily on first request; source code is re-parsed from disk
 
 ### Execution Flow
 
