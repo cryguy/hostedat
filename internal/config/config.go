@@ -20,6 +20,14 @@ type Config struct {
 	Cloudflare    CFConfig            `yaml:"cloudflare"`
 	Worker        WorkerConfig        `yaml:"worker"`
 	ObjectStorage ObjectStorageConfig `yaml:"object_storage"`
+	RateLimit     RateLimitConfig     `yaml:"rate_limit"`
+}
+
+type RateLimitConfig struct {
+	Global float64 `yaml:"global"`  // Requests per second per IP (all routes including static sites)
+	API    float64 `yaml:"api"`     // Requests per second per IP (API routes)
+	Auth   float64 `yaml:"auth"`    // Requests per second per IP (auth routes)
+	Deploy float64 `yaml:"deploy"`  // Requests per second per IP (deploy route)
 }
 
 type ObjectStorageConfig struct {
@@ -111,6 +119,20 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Worker.DataDir == "" {
 		cfg.Worker.DataDir = "./data"
+	}
+
+	// Rate limit defaults
+	if cfg.RateLimit.Global == 0 {
+		cfg.RateLimit.Global = 100
+	}
+	if cfg.RateLimit.API == 0 {
+		cfg.RateLimit.API = 20
+	}
+	if cfg.RateLimit.Auth == 0 {
+		cfg.RateLimit.Auth = 5
+	}
+	if cfg.RateLimit.Deploy == 0 {
+		cfg.RateLimit.Deploy = 2
 	}
 
 	// Object storage defaults

@@ -209,8 +209,10 @@ func main() {
 		AllowHeaders: []string{"Authorization", "Content-Type", "X-Hostedat-Version"},
 	}))
 
-	// Global rate limiter: 20 req/s per IP
-	e.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(20))))
+	// Global rate limiter (configurable, default 100 req/s per IP; 0 = disabled)
+	if cfg.RateLimit.Global > 0 {
+		e.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(cfg.RateLimit.Global))))
+	}
 
 	workerDeps := &api.WorkerDeps{
 		MinioClient: s3Client,

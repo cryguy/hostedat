@@ -50,6 +50,14 @@ worker:
   max_script_size_kb: 1024   # Max _worker.js file size
   data_dir: ./data           # D1 database storage directory
 
+# Rate limiting (requests per second per IP). Omit or leave at default.
+# Set to 0 to disable a specific tier. Increase "global" for sites with many small assets.
+rate_limit:
+  global: 100              # All routes including static site serving (default: 100)
+  api: 20                  # API routes — /api/v1/* (default: 20)
+  auth: 5                  # Auth routes — login, register (default: 5)
+  deploy: 2                # Deploy uploads (default: 2)
+
 # S3-compatible object storage (backed by SeaweedFS)
 # Provides S3 API at storage.<domain> and R2-compatible env.BUCKET_NAME in workers
 # Security model: storage.<domain> only accepts SigV4-signed requests by default.

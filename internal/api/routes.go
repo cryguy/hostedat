@@ -15,7 +15,12 @@ import (
 )
 
 func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storage.Manager, serverVersion string, workerEngine *worker.Engine, s3Client *minio.Client, iamClient *seaweedfs.Client, region string) {
-	api := e.Group("/api/v1")
+	// API-wide rate limit (default 20 req/s per IP, separate from global; 0 = disabled)
+	var apiMiddlewares []echo.MiddlewareFunc
+	if cfg.RateLimit.API > 0 {
+		apiMiddlewares = append(apiMiddlewares, middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(cfg.RateLimit.API))))
+	}
+	api := e.Group("/api/v1", apiMiddlewares...)
 
 	// Public version endpoint
 	api.GET("/version", func(c echo.Context) error {
@@ -35,9 +40,13 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	adminHandler := &AdminHandler{DB: db, Storage: store, S3Client: s3Client, IAMClient: iamClient}
 	workerHandler := &WorkerHandler{DB: db, DataDir: cfg.Worker.DataDir}
 
-	// Public auth routes — stricter rate limit (5 req/s per IP)
+	// Public auth routes — stricter rate limit (default 5 req/s per IP; 0 = disabled)
 	// Auth is Bearer-token only (JWT/API key), never cookies, so CSRF is not applicable.
-	authGroup := api.Group("/auth", middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(5))))
+	var authMiddlewares []echo.MiddlewareFunc
+	if cfg.RateLimit.Auth > 0 {
+		authMiddlewares = append(authMiddlewares, middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(cfg.RateLimit.Auth))))
+	}
+	authGroup := api.Group("/auth", authMiddlewares...)
 	authGroup.POST("/register", authHandler.Register)
 	authGroup.POST("/login", authHandler.Login)
 	authGroup.POST("/logout", authHandler.Logout)
@@ -59,9 +68,13 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	sites.PATCH("/:id", siteHandler.Update)
 	sites.DELETE("/:id", siteHandler.Delete)
 
-	// Deployment routes — stricter rate limit for uploads (2 req/s per IP)
-	deployLimiter := middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(2)))
-	sites.POST("/:id/deploy", deployHandler.Deploy, deployLimiter)
+	// Deployment routes — stricter rate limit for uploads (default 2 req/s per IP; 0 = disabled)
+	if cfg.RateLimit.Deploy > 0 {
+		deployLimiter := middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(cfg.RateLimit.Deploy)))
+		sites.POST("/:id/deploy", deployHandler.Deploy, deployLimiter)
+	} else {
+		sites.POST("/:id/deploy", deployHandler.Deploy)
+	}
 	sites.GET("/:id/deployments", deployHandler.List)
 	sites.POST("/:id/deployments/:version/rollback", deployHandler.Rollback)
 
