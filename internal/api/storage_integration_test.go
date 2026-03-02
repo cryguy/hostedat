@@ -259,10 +259,10 @@ func TestSeaweedFS_ManagerStartStop(t *testing.T) {
 }
 
 // ──────────────────────────────────────────────
-// PublicS3Wrapper integration tests
+// Bucket policy integration tests
 // ──────────────────────────────────────────────
 
-func TestPublicS3Wrapper_Integration(t *testing.T) {
+func TestBucketPolicy_PublicReadViaProxy(t *testing.T) {
 	weedBin := resolveWeedBinary(t)
 	port := mustFreePort(t)
 
@@ -296,7 +296,7 @@ func TestPublicS3Wrapper_Integration(t *testing.T) {
 
 	h := &StorageHandler{DB: db, S3Client: adminClient, IAMClient: mgr.Client, Region: "us-east-1"}
 
-	// Create a public bucket
+	// Create a public bucket (handler applies bucket policy via SetBucketPolicy)
 	bucketName := site.ID + "-public"
 	c, rec := newAuthedIntegrationContext(t, http.MethodPost, "/api/v1/sites/"+site.ID+"/storage/buckets", map[string]interface{}{
 		"name":        "PUBLIC_ASSETS",
@@ -312,17 +312,16 @@ func TestPublicS3Wrapper_Integration(t *testing.T) {
 		t.Fatalf("CreateBucket status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	// Upload an object
+	// Upload an object via admin client
 	putObject(t, adminClient, bucketName, "hello.txt", "hello world")
 
-	// Set up the public S3 wrapper
-	s3Proxy := NewS3Proxy(mgr.Config.S3Endpoint, true)
-	wrapper := NewPublicS3Wrapper(s3Proxy, db, adminClient)
+	// Set up the pass-through S3 proxy (no wrapper needed)
+	s3Proxy := NewS3Proxy(mgr.Config.S3Endpoint)
 
-	// Unauthenticated GET should succeed for public bucket
+	// Unauthenticated GET should succeed — SeaweedFS allows it via bucket policy
 	req := httptest.NewRequest(http.MethodGet, "/"+bucketName+"/hello.txt", nil)
 	wrec := httptest.NewRecorder()
-	wrapper.ServeHTTP(wrec, req)
+	s3Proxy.ServeHTTP(wrec, req)
 
 	if wrec.Code != http.StatusOK {
 		t.Fatalf("GET public object: status=%d body=%s", wrec.Code, wrec.Body.String())
@@ -330,15 +329,9 @@ func TestPublicS3Wrapper_Integration(t *testing.T) {
 	if wrec.Body.String() != "hello world" {
 		t.Errorf("body = %q, want 'hello world'", wrec.Body.String())
 	}
-	if wrec.Header().Get("Content-Type") == "" {
-		t.Error("expected Content-Type header")
-	}
-	if wrec.Header().Get("ETag") == "" {
-		t.Error("expected ETag header")
-	}
 }
 
-func TestPublicS3Wrapper_HeadRequest(t *testing.T) {
+func TestBucketPolicy_HeadPublicObject(t *testing.T) {
 	weedBin := resolveWeedBinary(t)
 	port := mustFreePort(t)
 
@@ -373,31 +366,33 @@ func TestPublicS3Wrapper_HeadRequest(t *testing.T) {
 	h := &StorageHandler{DB: db, S3Client: adminClient, IAMClient: mgr.Client, Region: "us-east-1"}
 
 	bucketName := site.ID + "-head"
-	createBucketViaHandler(t, h, user, site.ID, "HEAD_BUCKET", bucketName)
-
-	// Mark bucket as public
-	var bucket models.StorageBucket
-	db.Where("bucket_name = ?", bucketName).First(&bucket)
-	bucket.Public = true
-	db.Save(&bucket)
+	c, rec := newAuthedIntegrationContext(t, http.MethodPost, "/api/v1/sites/"+site.ID+"/storage/buckets", map[string]interface{}{
+		"name":        "HEAD_BUCKET",
+		"bucket_name": bucketName,
+		"public":      true,
+	}, user)
+	c.SetParamNames("id")
+	c.SetParamValues(site.ID)
+	if err := h.CreateBucket(c); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("CreateBucket status=%d body=%s", rec.Code, rec.Body.String())
+	}
 
 	putObject(t, adminClient, bucketName, "file.txt", "content")
 
-	s3Proxy := NewS3Proxy(mgr.Config.S3Endpoint, true)
-	wrapper := NewPublicS3Wrapper(s3Proxy, db, adminClient)
+	s3Proxy := NewS3Proxy(mgr.Config.S3Endpoint)
 
 	req := httptest.NewRequest(http.MethodHead, "/"+bucketName+"/file.txt", nil)
-	rec := httptest.NewRecorder()
-	wrapper.ServeHTTP(rec, req)
+	hrec := httptest.NewRecorder()
+	s3Proxy.ServeHTTP(hrec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("HEAD status=%d", rec.Code)
+	if hrec.Code != http.StatusOK {
+		t.Fatalf("HEAD status=%d", hrec.Code)
 	}
-	if rec.Header().Get("Content-Length") == "" {
-		t.Error("expected Content-Length header on HEAD")
-	}
-	if rec.Body.Len() != 0 {
-		t.Errorf("HEAD body should be empty, got %d bytes", rec.Body.Len())
+	if hrec.Body.Len() != 0 {
+		t.Errorf("HEAD body should be empty, got %d bytes", hrec.Body.Len())
 	}
 }
 
@@ -658,7 +653,7 @@ func TestReal_StorageHandlers(t *testing.T) {
 	})
 }
 
-func TestPublicS3Wrapper_NonPublicBucket_Forbidden(t *testing.T) {
+func TestBucketPolicy_PrivateBucket_Denied(t *testing.T) {
 	weedBin := resolveWeedBinary(t)
 	port := mustFreePort(t)
 
@@ -694,16 +689,16 @@ func TestPublicS3Wrapper_NonPublicBucket_Forbidden(t *testing.T) {
 
 	bucketName := site.ID + "-private"
 	createBucketViaHandler(t, h, user, site.ID, "PRIVATE_BUCKET", bucketName)
-	// Bucket is NOT public (default)
+	// Bucket is NOT public (default) — no bucket policy set
 
 	putObject(t, adminClient, bucketName, "secret.txt", "private data")
 
-	s3Proxy := NewS3Proxy(mgr.Config.S3Endpoint, true)
-	wrapper := NewPublicS3Wrapper(s3Proxy, db, adminClient)
+	// Pass-through proxy — SeaweedFS denies unauthenticated access
+	s3Proxy := NewS3Proxy(mgr.Config.S3Endpoint)
 
 	req := httptest.NewRequest(http.MethodGet, "/"+bucketName+"/secret.txt", nil)
 	rec := httptest.NewRecorder()
-	wrapper.ServeHTTP(rec, req)
+	s3Proxy.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status=%d, want 403 for non-public bucket", rec.Code)

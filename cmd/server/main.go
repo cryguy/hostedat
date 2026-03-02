@@ -110,11 +110,7 @@ func main() {
 		} else {
 			iamClient = seaweedfs.NewClient(cfg.ObjectStorage.S3Endpoint)
 		}
-		requireSigV4 := true
-		if cfg.ObjectStorage.Auth.RequireSigV4 != nil {
-			requireSigV4 = *cfg.ObjectStorage.Auth.RequireSigV4
-		}
-		s3Proxy = api.NewS3Proxy(cfg.ObjectStorage.S3Endpoint, requireSigV4)
+		s3Proxy = api.NewS3Proxy(cfg.ObjectStorage.S3Endpoint)
 
 		// Single minio client via the public S3 endpoint (domain_name).
 		// SeaweedFS is started with -s3.domainName so it accepts SigV4
@@ -134,11 +130,6 @@ func main() {
 			log.Printf("Warning: failed to create S3 client: %v", err)
 		} else {
 			s3Client = minioClient
-
-			// Wrap S3 proxy to serve public bucket objects without auth.
-			if s3Proxy != nil {
-				s3Proxy = api.NewPublicS3Wrapper(s3Proxy, db, minioClient)
-			}
 		}
 	}
 

@@ -40,8 +40,8 @@ func (f *fakeBucketClient) PresignedPutObject(_ context.Context, _, _ string, _ 
 	return &url.URL{Scheme: "https", Host: "storage.example.com", Path: "/test"}, nil
 }
 
-func (f *fakeBucketClient) GetObject(_ context.Context, _, _ string, _ minio.GetObjectOptions) (*minio.Object, error) {
-	return nil, nil
+func (f *fakeBucketClient) SetBucketPolicy(_ context.Context, _ string, _ string) error {
+	return nil
 }
 
 type fakeIAMClient struct {

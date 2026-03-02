@@ -184,9 +184,6 @@ object_storage:
 	if cfg.ObjectStorage.Region != "us-east-1" {
 		t.Errorf("Region default = %q", cfg.ObjectStorage.Region)
 	}
-	if cfg.ObjectStorage.Auth.RequireSigV4 == nil || !*cfg.ObjectStorage.Auth.RequireSigV4 {
-		t.Error("RequireSigV4 should default to true")
-	}
 	if runtime.GOOS == "windows" {
 		if cfg.ObjectStorage.BinaryPath != "./weed.exe" {
 			t.Errorf("BinaryPath default = %q", cfg.ObjectStorage.BinaryPath)
@@ -235,24 +232,3 @@ object_storage:
 	}
 }
 
-func TestLoad_ObjectStorage_RequireSigV4CanBeDisabled(t *testing.T) {
-	cfg, err := Load(writeTemp(t, `
-domain: example.com
-jwt_secret: this-is-a-test-secret-that-is-at-least-32-chars-long
-database:
-  dsn: test.db
-object_storage:
-  enabled: true
-  auth:
-    require_sigv4: false
-`))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.ObjectStorage.Auth.RequireSigV4 == nil {
-		t.Fatal("RequireSigV4 should not be nil")
-	}
-	if *cfg.ObjectStorage.Auth.RequireSigV4 {
-		t.Fatal("RequireSigV4 should remain false when explicitly configured")
-	}
-}

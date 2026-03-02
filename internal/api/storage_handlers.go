@@ -35,7 +35,7 @@ type bucketClient interface {
 	MakeBucket(ctx context.Context, bucketName string, opts minio.MakeBucketOptions) error
 	RemoveBucket(ctx context.Context, bucketName string) error
 	PresignedPutObject(ctx context.Context, bucketName, objectName string, expires time.Duration) (*url.URL, error)
-	GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (*minio.Object, error)
+	SetBucketPolicy(ctx context.Context, bucketName string, policy string) error
 }
 
 type iamClient interface {
@@ -118,6 +118,15 @@ func (h *StorageHandler) CreateBucket(c echo.Context) error {
 			return errorJSON(c, http.StatusConflict, "bucket or binding name already exists")
 		}
 		return errorJSON(c, http.StatusInternalServerError, "failed to save bucket")
+	}
+
+	// Set public-read bucket policy if requested.
+	if bucket.Public {
+		if err := setBucketPublicAccess(ctx, h.S3Client, bucket.BucketName, true); err != nil {
+			_ = h.DB.Delete(&bucket).Error
+			_ = h.S3Client.RemoveBucket(ctx, req.BucketName)
+			return errorJSON(c, http.StatusInternalServerError, "failed to set bucket policy: "+err.Error())
+		}
 	}
 
 	if err := h.reconcileUserCredentialPolicies(site.UserID); err != nil {
@@ -218,6 +227,14 @@ func (h *StorageHandler) UpdateBucket(c echo.Context) error {
 
 	if err := h.DB.Save(&bucket).Error; err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to update bucket")
+	}
+
+	// Apply or remove public-read bucket policy in SeaweedFS.
+	if req.Public != nil {
+		ctx := c.Request().Context()
+		if err := setBucketPublicAccess(ctx, h.S3Client, bucket.BucketName, *req.Public); err != nil {
+			return errorJSON(c, http.StatusInternalServerError, "failed to update bucket policy: "+err.Error())
+		}
 	}
 
 	return c.JSON(http.StatusOK, bucket)
@@ -438,6 +455,32 @@ func (h *StorageHandler) reconcileUserCredentialPolicies(userID string) error {
 	}
 
 	return nil
+}
+
+// setBucketPublicAccess applies or removes a public-read bucket policy on
+// SeaweedFS. When public=true it sets a policy allowing anonymous s3:GetObject;
+// when false it clears the policy entirely (empty string removes it).
+func setBucketPublicAccess(ctx context.Context, client bucketClient, bucketName string, public bool) error {
+	if !public {
+		return client.SetBucketPolicy(ctx, bucketName, "")
+	}
+
+	policy := map[string]interface{}{
+		"Version": "2012-10-17",
+		"Statement": []map[string]interface{}{
+			{
+				"Effect":    "Allow",
+				"Principal": "*",
+				"Action":    "s3:GetObject",
+				"Resource":  fmt.Sprintf("arn:aws:s3:::%s/*", bucketName),
+			},
+		},
+	}
+	data, err := json.Marshal(policy)
+	if err != nil {
+		return err
+	}
+	return client.SetBucketPolicy(ctx, bucketName, string(data))
 }
 
 func validateBucketName(siteID, bucketName string) error {

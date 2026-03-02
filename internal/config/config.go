@@ -36,7 +36,6 @@ type ObjectStorageConfig struct {
 type ObjectStorageAuthConfig struct {
 	AccessKeyID     string `yaml:"access_key_id"`
 	SecretAccessKey string `yaml:"secret_access_key"`
-	RequireSigV4    *bool  `yaml:"require_sigv4"`
 }
 
 type WorkerConfig struct {
@@ -135,11 +134,6 @@ func Load(path string) (*Config, error) {
 		if cfg.ObjectStorage.Region == "" {
 			cfg.ObjectStorage.Region = "us-east-1"
 		}
-		if cfg.ObjectStorage.Auth.RequireSigV4 == nil {
-			requireSigV4 := true
-			cfg.ObjectStorage.Auth.RequireSigV4 = &requireSigV4
-		}
-
 		hasAccessKey := strings.TrimSpace(cfg.ObjectStorage.Auth.AccessKeyID) != ""
 		hasSecretKey := strings.TrimSpace(cfg.ObjectStorage.Auth.SecretAccessKey) != ""
 		if hasAccessKey != hasSecretKey {
