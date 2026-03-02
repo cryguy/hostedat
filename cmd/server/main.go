@@ -130,6 +130,9 @@ func main() {
 			log.Printf("Warning: failed to create S3 client: %v", err)
 		} else {
 			s3Client = minioClient
+
+			// Ensure existing public buckets have bucket policies in SeaweedFS.
+			api.MigratePublicBucketPolicies(db, minioClient)
 		}
 	}
 

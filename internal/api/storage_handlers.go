@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -462,7 +463,12 @@ func (h *StorageHandler) reconcileUserCredentialPolicies(userID string) error {
 // when false it clears the policy entirely (empty string removes it).
 func setBucketPublicAccess(ctx context.Context, client bucketClient, bucketName string, public bool) error {
 	if !public {
-		return client.SetBucketPolicy(ctx, bucketName, "")
+		// Ignore errors when removing a policy that doesn't exist.
+		err := client.SetBucketPolicy(ctx, bucketName, "")
+		if err != nil && strings.Contains(err.Error(), "NoSuchBucketPolicy") {
+			return nil
+		}
+		return err
 	}
 
 	policy := map[string]interface{}{
@@ -481,6 +487,26 @@ func setBucketPublicAccess(ctx context.Context, client bucketClient, bucketName 
 		return err
 	}
 	return client.SetBucketPolicy(ctx, bucketName, string(data))
+}
+
+// MigratePublicBucketPolicies ensures all buckets marked public in the DB have
+// a corresponding public-read bucket policy in SeaweedFS. This covers buckets
+// created before the bucket policy implementation.
+func MigratePublicBucketPolicies(db *gorm.DB, client bucketClient) {
+	var buckets []models.StorageBucket
+	if err := db.Where("public = ?", true).Find(&buckets).Error; err != nil {
+		log.Printf("Warning: failed to query public buckets for migration: %v", err)
+		return
+	}
+	ctx := context.Background()
+	for _, b := range buckets {
+		if err := setBucketPublicAccess(ctx, client, b.BucketName, true); err != nil {
+			log.Printf("Warning: failed to set bucket policy for %s: %v", b.BucketName, err)
+		}
+	}
+	if len(buckets) > 0 {
+		log.Printf("Migrated bucket policies for %d public bucket(s)", len(buckets))
+	}
 }
 
 func validateBucketName(siteID, bucketName string) error {
