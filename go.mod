@@ -5,7 +5,7 @@ go 1.25
 require (
 	github.com/caddyserver/certmagic v0.25.1
 	github.com/coder/websocket v1.8.14
-	github.com/cryguy/worker/v2 v2.1.1
+	github.com/cryguy/worker/v2 v2.1.2
 	github.com/glebarez/sqlite v1.11.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/labstack/echo/v4 v4.15.0

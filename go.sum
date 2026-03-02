@@ -7,8 +7,8 @@ github.com/caddyserver/zerossl v0.1.4/go.mod h1:CxA0acn7oEGO6//4rtrRjYgEoa4MFw/X
 github.com/coder/websocket v1.8.14 h1:9L0p0iKiNOibykf283eHkKUHHrpG7f65OE3BhhO7v9g=
 github.com/coder/websocket v1.8.14/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
-github.com/cryguy/worker/v2 v2.1.1 h1:n0BPBRoT3Fi3UbrYK413Wzaz7xuIhEo6s4b6MluKKqI=
-github.com/cryguy/worker/v2 v2.1.1/go.mod h1:oLEmyg7SqruwuMuG3hxb7tRIQuD3HXrXs4VWif8wuA4=
+github.com/cryguy/worker/v2 v2.1.2 h1:V8+V7pRxTIXnQM4yaRNeg5ZX9fX0mgsAkBTSt59cHr4=
+github.com/cryguy/worker/v2 v2.1.2/go.mod h1:oLEmyg7SqruwuMuG3hxb7tRIQuD3HXrXs4VWif8wuA4=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=

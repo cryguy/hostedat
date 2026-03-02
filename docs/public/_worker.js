@@ -8,7 +8,7 @@ export default {
       const filename = path.replace("/downloads/", "");
 
       // Only redirect for known binary patterns.
-      if (/^hostedat(-server)?-(linux|darwin|windows)-(amd64|arm64|universal)(\.exe)?$/.test(filename)) {
+      if (/^hostedat(-server)?(-v8)?-(linux|darwin|windows)-(amd64|arm64|universal)(\.exe)?$/.test(filename)) {
         if (!env.DOWNLOADS) {
           return new Response("Storage not configured", { status: 503 });
         }
