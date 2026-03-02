@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -393,5 +394,126 @@ func TestStaticSiteHandler_LocalhostDevelopment(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("localhost development: status = %d, want 200", rec.Code)
+	}
+}
+
+func TestRequestScheme(t *testing.T) {
+	tests := []struct {
+		name   string
+		setup  func(r *http.Request)
+		expect string
+	}{
+		{
+			name:   "plain HTTP (no header, no TLS)",
+			setup:  func(_ *http.Request) {},
+			expect: "http",
+		},
+		{
+			name:   "X-Forwarded-Proto https",
+			setup:  func(r *http.Request) { r.Header.Set("X-Forwarded-Proto", "https") },
+			expect: "https",
+		},
+		{
+			name:   "X-Forwarded-Proto http",
+			setup:  func(r *http.Request) { r.Header.Set("X-Forwarded-Proto", "http") },
+			expect: "http",
+		},
+		{
+			name:   "TLS connection without header",
+			setup:  func(r *http.Request) { r.TLS = &tls.ConnectionState{} },
+			expect: "https",
+		},
+		{
+			name: "X-Forwarded-Proto takes precedence over TLS",
+			setup: func(r *http.Request) {
+				r.TLS = &tls.ConnectionState{}
+				r.Header.Set("X-Forwarded-Proto", "http")
+			},
+			expect: "http",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			tt.setup(req)
+			got := requestScheme(req)
+			if got != tt.expect {
+				t.Errorf("requestScheme() = %q, want %q", got, tt.expect)
+			}
+		})
+	}
+}
+
+func TestClientIP(t *testing.T) {
+	tests := []struct {
+		name   string
+		setup  func(r *http.Request)
+		expect string
+	}{
+		{
+			name: "X-Real-IP takes priority",
+			setup: func(r *http.Request) {
+				r.Header.Set("X-Real-IP", "1.2.3.4")
+				r.Header.Set("X-Forwarded-For", "5.6.7.8, 9.10.11.12")
+				r.RemoteAddr = "99.99.99.99:12345"
+			},
+			expect: "1.2.3.4",
+		},
+		{
+			name: "X-Forwarded-For single IP",
+			setup: func(r *http.Request) {
+				r.Header.Set("X-Forwarded-For", "10.0.0.1")
+				r.RemoteAddr = "99.99.99.99:12345"
+			},
+			expect: "10.0.0.1",
+		},
+		{
+			name: "X-Forwarded-For multiple IPs takes first",
+			setup: func(r *http.Request) {
+				r.Header.Set("X-Forwarded-For", "10.0.0.1, 10.0.0.2, 10.0.0.3")
+				r.RemoteAddr = "99.99.99.99:12345"
+			},
+			expect: "10.0.0.1",
+		},
+		{
+			name: "RemoteAddr fallback strips port",
+			setup: func(r *http.Request) {
+				r.RemoteAddr = "192.168.1.100:54321"
+			},
+			expect: "192.168.1.100",
+		},
+		{
+			name: "RemoteAddr without port",
+			setup: func(r *http.Request) {
+				r.RemoteAddr = "192.168.1.100"
+			},
+			expect: "192.168.1.100",
+		},
+		{
+			name: "trims whitespace from X-Real-IP",
+			setup: func(r *http.Request) {
+				r.Header.Set("X-Real-IP", "  1.2.3.4  ")
+			},
+			expect: "1.2.3.4",
+		},
+		{
+			name: "trims whitespace from X-Forwarded-For entries",
+			setup: func(r *http.Request) {
+				r.Header.Set("X-Forwarded-For", "  10.0.0.1 , 10.0.0.2")
+			},
+			expect: "10.0.0.1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			tt.setup(req)
+			got := clientIP(req)
+			if got != tt.expect {
+				t.Errorf("clientIP() = %q, want %q", got, tt.expect)
+			}
+		})
 	}
 }

@@ -257,10 +257,15 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 		}
 	}
 
-	scheme := "https"
-	if req.TLS == nil {
-		scheme = "http"
+	// Inject CF-Connecting-IP so workers can always access the real client
+	// IP, matching the Cloudflare Workers convention. Prefer an existing
+	// CF-Connecting-IP (set by Cloudflare), then X-Real-IP (nginx),
+	// then the first address from X-Forwarded-For, then RemoteAddr.
+	if headers["cf-connecting-ip"] == "" {
+		headers["cf-connecting-ip"] = clientIP(req)
 	}
+
+	scheme := requestScheme(req)
 	fullURL := scheme + "://" + req.Host + req.RequestURI
 
 	var body []byte
@@ -353,6 +358,41 @@ func storeWorkerLogs(db *gorm.DB, siteID string, logs []worker.LogEntry) {
 			CreatedAt: l.Time,
 		})
 	}
+}
+
+// clientIP extracts the real client IP from proxy headers or the raw
+// connection. Checked in order: X-Real-IP, X-Forwarded-For (first entry),
+// then RemoteAddr as fallback.
+func clientIP(req *http.Request) string {
+	if ip := req.Header.Get("X-Real-IP"); ip != "" {
+		return strings.TrimSpace(ip)
+	}
+	if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
+		// X-Forwarded-For: client, proxy1, proxy2 — take the first.
+		if idx := strings.IndexByte(xff, ','); idx != -1 {
+			return strings.TrimSpace(xff[:idx])
+		}
+		return strings.TrimSpace(xff)
+	}
+	// RemoteAddr is "ip:port"; strip the port.
+	addr := req.RemoteAddr
+	if idx := strings.LastIndex(addr, ":"); idx != -1 {
+		return addr[:idx]
+	}
+	return addr
+}
+
+// requestScheme returns the original client scheme, preferring the
+// X-Forwarded-Proto header set by reverse proxies (Cloudflare, nginx, etc.)
+// over req.TLS which only reflects the backend hop.
+func requestScheme(req *http.Request) string {
+	if proto := req.Header.Get("X-Forwarded-Proto"); proto != "" {
+		return strings.ToLower(proto)
+	}
+	if req.TLS != nil {
+		return "https"
+	}
+	return "http"
 }
 
 func serveFile(c echo.Context, filePath string) error {
