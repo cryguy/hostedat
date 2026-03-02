@@ -130,9 +130,6 @@ func main() {
 			log.Printf("Warning: failed to create S3 client: %v", err)
 		} else {
 			s3Client = minioClient
-
-			// Ensure existing public buckets have bucket policies in SeaweedFS.
-			api.MigratePublicBucketPolicies(db, minioClient)
 		}
 	}
 
@@ -250,6 +247,8 @@ func main() {
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 
 	// Start with TLS if Cloudflare token is configured, otherwise plain HTTP
+	var shutdownServer func(ctx context.Context) error
+
 	if cfg.Cloudflare.APIToken != "" {
 		log.Printf("Starting hostedat %s (%s) with TLS on %s for domain %s", version, commit, cfg.Listen, cfg.Domain)
 
@@ -275,13 +274,7 @@ func main() {
 			}
 		}()
 
-		<-quit
-		log.Println("Shutting down server...")
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := server.Shutdown(ctx); err != nil {
-			log.Fatalf("Server forced to shutdown: %v", err)
-		}
+		shutdownServer = server.Shutdown
 	} else {
 		log.Printf("Starting hostedat %s (%s) (no TLS) on %s for domain %s", version, commit, cfg.Listen, cfg.Domain)
 
@@ -291,13 +284,20 @@ func main() {
 			}
 		}()
 
-		<-quit
-		log.Println("Shutting down server...")
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := e.Shutdown(ctx); err != nil {
-			log.Fatalf("Server forced to shutdown: %v", err)
-		}
+		shutdownServer = e.Shutdown
+	}
+
+	// Migrate public bucket policies now that the S3 reverse proxy is reachable.
+	if s3Client != nil {
+		go api.MigratePublicBucketPolicies(db, s3Client)
+	}
+
+	<-quit
+	log.Println("Shutting down server...")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := shutdownServer(ctx); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
 	log.Println("Server exited cleanly")
