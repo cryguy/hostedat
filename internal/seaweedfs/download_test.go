@@ -50,7 +50,7 @@ func TestDownloadURL(t *testing.T) {
 			version: "4.13",
 			goos:    "windows",
 			goarch:  "amd64",
-			want:    "https://github.com/seaweedfs/seaweedfs/releases/download/4.13/windows_amd64.exe.zip",
+			want:    "https://github.com/seaweedfs/seaweedfs/releases/download/4.13/windows_amd64.zip",
 		},
 		{
 			name:    "unsupported platform",

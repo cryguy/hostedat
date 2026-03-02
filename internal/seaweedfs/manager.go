@@ -74,6 +74,10 @@ func (m *Manager) Start() error {
 	masterPort := s3Port + 1
 	volumePort := s3Port + 2
 	filerPort := s3Port + 3
+
+	// Kill any stale SeaweedFS process left behind by a previous crash.
+	m.cleanupStalePID(s3Port)
+
 	if err := ensurePortsAvailable(s3Port, masterPort, volumePort, filerPort); err != nil {
 		return err
 	}
@@ -110,6 +114,7 @@ func (m *Manager) Start() error {
 	if err := m.cmd.Start(); err != nil {
 		return fmt.Errorf("starting SeaweedFS: %w", err)
 	}
+	m.writePID()
 
 	m.FilerEndpoint = fmt.Sprintf("http://127.0.0.1:%d", filerPort)
 
@@ -208,6 +213,8 @@ func (m *Manager) writeS3Config(path string) (string, error) {
 
 // Stop gracefully shuts down the SeaweedFS subprocess.
 func (m *Manager) Stop() error {
+	defer m.removePID()
+
 	if m.cmd == nil || m.cmd.Process == nil {
 		return nil
 	}
@@ -233,6 +240,69 @@ func (m *Manager) Stop() error {
 		return err
 	case <-time.After(10 * time.Second):
 		return m.cmd.Process.Kill()
+	}
+}
+
+func (m *Manager) pidFilePath() string {
+	return filepath.Join(m.Config.DataDir, "weed.pid")
+}
+
+func (m *Manager) writePID() {
+	_ = os.WriteFile(m.pidFilePath(), []byte(fmt.Sprintf("%d", m.cmd.Process.Pid)), 0600)
+}
+
+func (m *Manager) removePID() {
+	_ = os.Remove(m.pidFilePath())
+}
+
+// cleanupStalePID kills a SeaweedFS process left behind by a previous crash.
+// It only kills if both a PID file exists AND the S3 port is still occupied,
+// avoiding false positives from reused PIDs.
+func (m *Manager) cleanupStalePID(s3Port int) {
+	pidPath := m.pidFilePath()
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		return // No PID file — clean state.
+	}
+	defer func() { _ = os.Remove(pidPath) }()
+
+	var pid int
+	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil || pid <= 0 {
+		return
+	}
+
+	// Only kill if the S3 port is actually occupied — if the port is free,
+	// the old process already exited and we just clean up the stale PID file.
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", s3Port))
+	if err == nil {
+		_ = ln.Close()
+		return
+	}
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+
+	log.Printf("Killing stale SeaweedFS process (pid %d) from previous run", pid)
+	if runtime.GOOS == "windows" {
+		_ = proc.Kill()
+	} else {
+		_ = proc.Signal(os.Interrupt)
+		time.Sleep(2 * time.Second)
+		_ = proc.Kill()
+	}
+	// Best-effort wait — fails for non-child processes, which is fine.
+	_, _ = proc.Wait()
+
+	// Wait briefly for the port to be released.
+	for i := 0; i < 10; i++ {
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", s3Port))
+		if err == nil {
+			_ = ln.Close()
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 
