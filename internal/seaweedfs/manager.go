@@ -89,8 +89,8 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("ensuring weed binary: %w", err)
 	}
 
-	m.cmd = exec.Command(weedBinary, "server", "-s3",
-		"-dir="+m.Config.DataDir,
+	args := []string{"server", "-s3",
+		"-dir=" + m.Config.DataDir,
 		fmt.Sprintf("-s3.port=%d", s3Port),
 		fmt.Sprintf("-master.port=%d", masterPort),
 		fmt.Sprintf("-volume.port=%d", volumePort),
@@ -99,8 +99,12 @@ func (m *Manager) Start() error {
 		"-s3.port.iceberg=0",
 		"-volume.max=0",
 		"-ip=127.0.0.1",
-		"-s3.config="+s3ConfigPath,
-	)
+		"-s3.config=" + s3ConfigPath,
+	}
+	if m.Config.DomainName != "" {
+		args = append(args, "-s3.domainName="+m.Config.DomainName)
+	}
+	m.cmd = exec.Command(weedBinary, args...)
 	m.cmd.Stdout = os.Stdout
 	m.cmd.Stderr = os.Stderr
 	if err := m.cmd.Start(); err != nil {

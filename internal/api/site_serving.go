@@ -22,10 +22,9 @@ import (
 // WorkerDeps bundles worker-related dependencies needed by the HTTP serving
 // chain to build complete worker environments.
 type WorkerDeps struct {
-	MinioClient   *minio.Client
-	PresignClient *minio.Client
-	PublicS3URL   string
-	D1DataDir     string
+	MinioClient *minio.Client
+	PublicS3URL string
+	D1DataDir   string
 }
 
 // internalFiles are files that should never be served directly to visitors.
@@ -332,7 +331,6 @@ func buildWorkerEnv(db *gorm.DB, store *storage.Manager, cache *storage.SiteRule
 	opts := workeradapter.BuildEnvOptions{DB: db, Store: store, Cache: cache}
 	if deps != nil {
 		opts.MinioClient = deps.MinioClient
-		opts.PresignClient = deps.PresignClient
 		opts.PublicS3URL = deps.PublicS3URL
 		opts.D1DataDir = deps.D1DataDir
 	}

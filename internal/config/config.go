@@ -28,6 +28,7 @@ type ObjectStorageConfig struct {
 	DataDir    string                  `yaml:"data_dir"`
 	BinaryPath string                  `yaml:"binary_path"`
 	S3Endpoint string                  `yaml:"s3_endpoint"`
+	DomainName string                  `yaml:"domain_name"`
 	Region     string                  `yaml:"region"`
 	Auth       ObjectStorageAuthConfig `yaml:"auth"`
 }
@@ -127,6 +128,9 @@ func Load(path string) (*Config, error) {
 			} else {
 				cfg.ObjectStorage.BinaryPath = "weed"
 			}
+		}
+		if cfg.ObjectStorage.DomainName == "" {
+			cfg.ObjectStorage.DomainName = "storage." + cfg.Domain
 		}
 		if cfg.ObjectStorage.Region == "" {
 			cfg.ObjectStorage.Region = "us-east-1"

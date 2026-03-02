@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storage.Manager, serverVersion string, workerEngine *worker.Engine, s3Client *minio.Client, presignClient *minio.Client, iamClient *seaweedfs.Client, region string) {
+func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storage.Manager, serverVersion string, workerEngine *worker.Engine, s3Client *minio.Client, iamClient *seaweedfs.Client, region string) {
 	api := e.Group("/api/v1")
 
 	// Public version endpoint
@@ -91,7 +91,7 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 
 	// Storage routes (object storage buckets per site, S3 credentials per user)
 	if s3Client != nil && iamClient != nil {
-		storageHandler := &StorageHandler{DB: db, S3Client: s3Client, PresignClient: presignClient, IAMClient: iamClient, Region: region, PublicS3URL: "https://storage." + cfg.Domain}
+		storageHandler := &StorageHandler{DB: db, S3Client: s3Client, IAMClient: iamClient, Region: region, PublicS3URL: "https://" + cfg.ObjectStorage.DomainName}
 		sites.POST("/:id/storage/buckets", storageHandler.CreateBucket)
 		sites.GET("/:id/storage/buckets", storageHandler.ListBuckets)
 		sites.PATCH("/:id/storage/buckets/:bucketId", storageHandler.UpdateBucket)

@@ -10,10 +10,9 @@ import (
 
 // BuildEnvOptions holds the dependencies needed to build a worker Env from the database.
 type BuildEnvOptions struct {
-	DB            *gorm.DB
-	MinioClient   *minio.Client
-	PresignClient *minio.Client
-	PublicS3URL   string
+	DB          *gorm.DB
+	MinioClient *minio.Client
+	PublicS3URL string
 	D1DataDir     string
 	Dispatcher    worker.WorkerDispatcher
 	Store         *storage.Manager
@@ -68,10 +67,9 @@ func BuildEnvFromDB(opts BuildEnvOptions, siteID string, assets worker.AssetsFet
 		env.Storage = make(map[string]worker.R2Store, len(storageBuckets))
 		for _, b := range storageBuckets {
 			env.Storage[b.Name] = &MinioR2Store{
-				Client:        opts.MinioClient,
-				PresignClient: opts.PresignClient,
-				BucketName:    b.BucketName,
-				PublicS3URL:   opts.PublicS3URL,
+				Client:      opts.MinioClient,
+				BucketName:  b.BucketName,
+				PublicS3URL: opts.PublicS3URL,
 			}
 		}
 	}

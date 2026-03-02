@@ -87,7 +87,6 @@ func main() {
 
 	// Object storage (SeaweedFS)
 	var s3Client *minio.Client
-	var presignClient *minio.Client
 	var iamClient *seaweedfs.Client
 	var s3Proxy http.Handler
 	if cfg.ObjectStorage.Enabled {
@@ -117,18 +116,17 @@ func main() {
 		}
 		s3Proxy = api.NewS3Proxy(cfg.ObjectStorage.S3Endpoint, requireSigV4)
 
-		// Create minio-go client for S3 bucket ops and worker bindings.
-		s3Host := strings.TrimPrefix(cfg.ObjectStorage.S3Endpoint, "http://")
-		s3Host = strings.TrimPrefix(s3Host, "https://")
-		useSSL := strings.HasPrefix(cfg.ObjectStorage.S3Endpoint, "https://")
-
+		// Single minio client via the public S3 endpoint (domain_name).
+		// SeaweedFS is started with -s3.domainName so it accepts SigV4
+		// signatures for this host, making presigned URLs work without
+		// a separate presign client.
 		var creds *credentials.Credentials
 		if s3AccessKey != "" && s3SecretKey != "" {
 			creds = credentials.NewStaticV4(s3AccessKey, s3SecretKey, "")
 		}
 
-		minioClient, err := minio.New(s3Host, &minio.Options{
-			Secure: useSSL,
+		minioClient, err := minio.New(cfg.ObjectStorage.DomainName, &minio.Options{
+			Secure: true,
 			Region: cfg.ObjectStorage.Region,
 			Creds:  creds,
 		})
@@ -136,21 +134,6 @@ func main() {
 			log.Printf("Warning: failed to create S3 client: %v", err)
 		} else {
 			s3Client = minioClient
-
-			// Create a presign-only minio client configured with the public
-			// S3 endpoint so presigned URLs are signed with the correct Host.
-			publicS3Host := "storage." + cfg.Domain
-			presignCreds := creds
-			pc, err := minio.New(publicS3Host, &minio.Options{
-				Secure: true,
-				Region: cfg.ObjectStorage.Region,
-				Creds:  presignCreds,
-			})
-			if err != nil {
-				log.Printf("Warning: failed to create presign S3 client: %v", err)
-			} else {
-				presignClient = pc
-			}
 
 			// Wrap S3 proxy to serve public bucket objects without auth.
 			if s3Proxy != nil {
@@ -164,13 +147,12 @@ func main() {
 	// Build env factory for cron and service bindings.
 	envFactory := func(siteID string) *worker.Env {
 		return workeradapter.BuildEnvFromDB(workeradapter.BuildEnvOptions{
-			DB:            db,
-			MinioClient:   s3Client,
-			PresignClient: presignClient,
-			PublicS3URL:   "https://storage." + cfg.Domain,
-			D1DataDir:     cfg.Worker.DataDir,
-			Store:         store,
-			Cache:         rulesCache,
+			DB:          db,
+			MinioClient: s3Client,
+			PublicS3URL: "https://" + cfg.ObjectStorage.DomainName,
+			D1DataDir:   cfg.Worker.DataDir,
+			Store:       store,
+			Cache:       rulesCache,
 		}, siteID, nil)
 	}
 
@@ -237,16 +219,15 @@ func main() {
 	e.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(20))))
 
 	workerDeps := &api.WorkerDeps{
-		MinioClient:   s3Client,
-		PresignClient: presignClient,
-		PublicS3URL:   "https://storage." + cfg.Domain,
-		D1DataDir:     cfg.Worker.DataDir,
+		MinioClient: s3Client,
+		PublicS3URL: "https://" + cfg.ObjectStorage.DomainName,
+		D1DataDir:   cfg.Worker.DataDir,
 	}
 
 	// Subdomain router must come before API routes
 	e.Use(api.SubdomainRouter(db, store, rulesCache, cfg.Domain, workerEngine, s3Proxy, workerDeps))
 
-	api.RegisterRoutes(e, db, cfg, store, version, workerEngine, s3Client, presignClient, iamClient, cfg.ObjectStorage.Region)
+	api.RegisterRoutes(e, db, cfg, store, version, workerEngine, s3Client, iamClient, cfg.ObjectStorage.Region)
 
 	// Serve embedded frontend (SPA fallback)
 	distFS, err := fs.Sub(web.DistFS, "dist")

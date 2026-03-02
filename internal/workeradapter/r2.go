@@ -20,10 +20,9 @@ const maxObjectSize = 128 * 1024 * 1024 // 128 MB
 
 // MinioR2Store implements worker.R2Store using minio-go.
 type MinioR2Store struct {
-	Client        *minio.Client
-	PresignClient *minio.Client // optional client configured with public S3 host for presigning
-	BucketName    string
-	PublicS3URL   string // public-facing S3 URL for direct object URLs
+	Client      *minio.Client
+	BucketName  string
+	PublicS3URL string // public-facing S3 URL for direct object URLs
 }
 
 // Get retrieves an object's data and metadata.
@@ -168,18 +167,11 @@ func (s *MinioR2Store) List(opts worker.R2ListOptions) (*worker.R2ListResult, er
 
 // PresignedGetURL generates a pre-signed URL for downloading an object.
 func (s *MinioR2Store) PresignedGetURL(key string, expiry time.Duration) (string, error) {
-	signClient := s.PresignClient
-	if signClient == nil {
-		if s.PublicS3URL != "" {
-			return "", fmt.Errorf("presign client not configured for public S3 host")
-		}
-		signClient = s.Client
-	}
-	if signClient == nil {
+	if s.Client == nil {
 		return "", fmt.Errorf("storage client not configured")
 	}
 
-	presigned, err := signClient.PresignedGetObject(
+	presigned, err := s.Client.PresignedGetObject(
 		context.Background(),
 		s.BucketName,
 		key,

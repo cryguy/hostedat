@@ -48,12 +48,11 @@ type iamClient interface {
 
 // StorageHandler manages object storage buckets and S3 credentials.
 type StorageHandler struct {
-	DB            *gorm.DB
-	S3Client      bucketClient
-	PresignClient bucketClient // minio client configured with public S3 endpoint for presigned URL generation
-	IAMClient     iamClient
-	Region        string
-	PublicS3URL   string // public-facing S3 URL for presigned URLs (e.g. https://storage.example.com)
+	DB        *gorm.DB
+	S3Client  bucketClient
+	IAMClient iamClient
+	Region    string
+	PublicS3URL string // public-facing S3 URL (e.g. https://storage.example.com)
 }
 
 // CreateBucket creates a storage bucket bound to a site.
@@ -261,13 +260,7 @@ func (h *StorageHandler) UploadURL(c echo.Context) error {
 		req.ExpiresIn = 604800
 	}
 
-	// Use the presign client (configured with the public endpoint) so the
-	// SigV4 signature matches the Host header the client will send.
-	presignClient := h.PresignClient
-	if presignClient == nil {
-		presignClient = h.S3Client
-	}
-	presigned, err := presignClient.PresignedPutObject(ctx, bucket.BucketName, req.Key, time.Duration(req.ExpiresIn)*time.Second)
+	presigned, err := h.S3Client.PresignedPutObject(ctx, bucket.BucketName, req.Key, time.Duration(req.ExpiresIn)*time.Second)
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to generate upload URL: "+err.Error())
 	}
