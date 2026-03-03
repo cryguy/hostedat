@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/cryguy/hostedat/internal/audit"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/workeradapter"
 	"github.com/cryguy/worker/v2"
@@ -69,6 +70,8 @@ func (h *WorkerHandler) SetEnvVar(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "failed to update env var")
 	}
 
+	audit.Record(h.DB, c, "worker.env.set", "site", siteID, audit.Ptr(req.Name))
+
 	return c.JSON(http.StatusOK, envVar)
 }
 
@@ -123,6 +126,8 @@ func (h *WorkerHandler) DeleteEnvVar(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "failed to delete env var")
 	}
 
+	audit.Record(h.DB, c, "worker.env.delete", "site", siteID, audit.Ptr(envVar.Name))
+
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -159,6 +164,8 @@ func (h *WorkerHandler) CreateKVNamespace(c echo.Context) error {
 	if err := h.DB.Create(&namespace).Error; err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to create namespace")
 	}
+
+	audit.Record(h.DB, c, "worker.kv.create", "site", siteID, audit.Ptr(req.Name))
 
 	return c.JSON(http.StatusCreated, namespace)
 }
@@ -212,6 +219,8 @@ func (h *WorkerHandler) DeleteKVNamespace(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "failed to delete namespace")
 	}
 
+	audit.Record(h.DB, c, "worker.kv.delete", "site", siteID, audit.Ptr(namespace.Name))
+
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -260,6 +269,8 @@ func (h *WorkerHandler) CreateCronSchedule(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "failed to create cron schedule")
 	}
 
+	audit.Record(h.DB, c, "worker.cron.create", "site", siteID, audit.Ptr(req.Cron))
+
 	return c.JSON(http.StatusCreated, schedule)
 }
 
@@ -306,6 +317,8 @@ func (h *WorkerHandler) DeleteCronSchedule(c echo.Context) error {
 	if err := h.DB.Delete(&schedule).Error; err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to delete cron schedule")
 	}
+
+	audit.Record(h.DB, c, "worker.cron.delete", "site", siteID, audit.Ptr(schedule.Cron))
 
 	return c.NoContent(http.StatusNoContent)
 }
@@ -367,6 +380,8 @@ func (h *WorkerHandler) CreateD1Database(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "failed to create database")
 	}
 
+	audit.Record(h.DB, c, "worker.d1.create", "site", siteID, audit.Ptr(req.Name))
+
 	return c.JSON(http.StatusCreated, database)
 }
 
@@ -425,6 +440,8 @@ func (h *WorkerHandler) DeleteD1Database(c echo.Context) error {
 	dbPath := workeradapter.GetD1Path(dataDir, database.DatabaseID)
 	_ = workeradapter.DeleteFile(dbPath)
 
+	audit.Record(h.DB, c, "worker.d1.delete", "site", siteID, audit.Ptr(database.Name))
+
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -461,6 +478,8 @@ func (h *WorkerHandler) CreateDurableObjectNamespace(c echo.Context) error {
 	if err := h.DB.Create(&namespace).Error; err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to create namespace")
 	}
+
+	audit.Record(h.DB, c, "worker.do.create", "site", siteID, audit.Ptr(req.Name))
 
 	return c.JSON(http.StatusCreated, namespace)
 }
@@ -519,6 +538,8 @@ func (h *WorkerHandler) DeleteDurableObjectNamespace(c echo.Context) error {
 	if err := h.DB.Delete(&namespace).Error; err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to delete namespace")
 	}
+
+	audit.Record(h.DB, c, "worker.do.delete", "site", siteID, audit.Ptr(namespace.Name))
 
 	return c.NoContent(http.StatusNoContent)
 }

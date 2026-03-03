@@ -10,6 +10,7 @@ import (
 
 	gonanoid "github.com/matoous/go-nanoid/v2"
 
+	"github.com/cryguy/hostedat/internal/audit"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/seaweedfs"
 	"github.com/cryguy/hostedat/internal/storage"
@@ -92,6 +93,8 @@ func (h *SiteHandler) Create(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "failed to create site")
 	}
 
+	audit.Record(h.DB, c, "site.create", "site", site.ID, audit.Ptr(site.SubdomainSlug))
+
 	return c.JSON(http.StatusCreated, site)
 }
 
@@ -158,6 +161,8 @@ func (h *SiteHandler) Update(c echo.Context) error {
 	if err := h.DB.Save(&site).Error; err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to update site")
 	}
+
+	audit.Record(h.DB, c, "site.update", "site", site.ID, nil)
 
 	return c.JSON(http.StatusOK, site)
 }
@@ -259,6 +264,8 @@ func (h *SiteHandler) Delete(c echo.Context) error {
 	if h.IAMClient != nil && len(s3Creds) > 0 {
 		reconcileIAMPoliciesForUser(h.DB, h.IAMClient, site.UserID)
 	}
+
+	audit.Record(h.DB, c, "site.delete", "site", siteID, audit.Ptr(site.SubdomainSlug))
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "site deleted"})
 }

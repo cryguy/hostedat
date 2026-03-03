@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/cryguy/hostedat/internal/audit"
 	"github.com/cryguy/hostedat/internal/auth"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/labstack/echo/v4"
@@ -44,6 +45,8 @@ func (h *APIKeyHandler) Create(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "failed to create API key")
 	}
 
+	audit.Record(h.DB, c, "apikey.create", "apikey", key.ID, audit.Ptr(key.Name))
+
 	return c.JSON(http.StatusCreated, map[string]interface{}{
 		"id":         key.ID,
 		"name":       key.Name,
@@ -79,6 +82,8 @@ func (h *APIKeyHandler) Delete(c echo.Context) error {
 	if err := h.DB.Delete(&key).Error; err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to delete API key")
 	}
+
+	audit.Record(h.DB, c, "apikey.delete", "apikey", keyID, audit.Ptr(key.Name))
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "API key deleted"})
 }

@@ -330,6 +330,19 @@ func (sc *S3Credential) BeforeCreate(_ *gorm.DB) error {
 	return nil
 }
 
+// AuditLog records user actions for accountability and incident investigation.
+type AuditLog struct {
+	ID           int64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	ActorID      string    `gorm:"index;size:20;not null" json:"actor_id"`
+	ActorEmail   string    `gorm:"size:255;not null" json:"actor_email"`
+	Action       string    `gorm:"index;size:50;not null" json:"action"`
+	ResourceType string    `gorm:"index:idx_audit_resource;size:30;not null" json:"resource_type"`
+	ResourceID   string    `gorm:"index:idx_audit_resource;size:20" json:"resource_id"`
+	IPAddress    string    `gorm:"size:45" json:"ip_address"`
+	Details      *string   `gorm:"type:text" json:"details,omitempty"`
+	CreatedAt    time.Time `gorm:"index" json:"created_at"`
+}
+
 // CacheEntry stores a cached HTTP response for the Cache API.
 type CacheEntry struct {
 	ID        uint   `gorm:"primaryKey"`

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/cryguy/hostedat/internal/audit"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
 	"github.com/cryguy/worker/v2"
@@ -166,6 +167,8 @@ func (h *DeployHandler) Deploy(c echo.Context) error {
 		h.WorkerEngine.InvalidatePool(siteID, *oldDeployID)
 	}
 
+	audit.Record(h.DB, c, "deploy.create", "site", siteID, audit.Ptr(fmt.Sprintf("v%d", deployment.Version)))
+
 	return c.JSON(http.StatusCreated, deployment)
 }
 
@@ -213,6 +216,8 @@ func (h *DeployHandler) Rollback(c echo.Context) error {
 	if h.WorkerEngine != nil && oldDeployID != nil {
 		h.WorkerEngine.InvalidatePool(siteID, *oldDeployID)
 	}
+
+	audit.Record(h.DB, c, "deploy.rollback", "site", siteID, audit.Ptr(fmt.Sprintf("v%d", version)))
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message":        "rolled back",

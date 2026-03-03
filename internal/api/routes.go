@@ -96,6 +96,10 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	sites.DELETE("/:id/worker/crons/:cronId", workerHandler.DeleteCronSchedule)
 	sites.GET("/:id/worker/logs", workerHandler.GetLogs)
 
+	// Audit log routes
+	auditHandler := &AuditHandler{DB: db}
+	protected.GET("/audit-logs", auditHandler.List)
+
 	// API key routes
 	keys := protected.Group("/keys")
 	keys.POST("", apiKeyHandler.Create)

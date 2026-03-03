@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cryguy/hostedat/internal/audit"
 	"github.com/cryguy/hostedat/internal/auth"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/labstack/echo/v4"
@@ -148,6 +149,8 @@ func (h *AuthHandler) Register(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "failed to generate token")
 	}
 
+	audit.RecordWithActor(h.DB, c, user.ID, user.Email, "auth.register", "user", user.ID, nil)
+
 	return c.JSON(http.StatusCreated, authResponse{Token: token, User: user})
 }
 
@@ -176,6 +179,8 @@ func (h *AuthHandler) Login(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "failed to generate token")
 	}
 
+	audit.RecordWithActor(h.DB, c, user.ID, user.Email, "auth.login", "user", user.ID, nil)
+
 	return c.JSON(http.StatusOK, authResponse{Token: token, User: user})
 }
 
@@ -188,6 +193,7 @@ func (h *AuthHandler) Logout(c echo.Context) error {
 		claims, err := auth.ValidateToken(token, h.JWTSecret)
 		if err == nil {
 			_ = RevokeToken(h.DB, token, claims.ExpiresAt.Time)
+			audit.RecordWithActor(h.DB, c, claims.UserID, claims.Email, "auth.logout", "user", claims.UserID, nil)
 		}
 	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "logged out"})

@@ -21,6 +21,11 @@ type Config struct {
 	Worker        WorkerConfig        `yaml:"worker"`
 	ObjectStorage ObjectStorageConfig `yaml:"object_storage"`
 	RateLimit     RateLimitConfig     `yaml:"rate_limit"`
+	AuditLog      AuditLogConfig      `yaml:"audit_log"`
+}
+
+type AuditLogConfig struct {
+	RetentionDays int `yaml:"retention_days"`
 }
 
 type RateLimitConfig struct {
@@ -133,6 +138,11 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.RateLimit.Deploy == 0 {
 		cfg.RateLimit.Deploy = 2
+	}
+
+	// Audit log defaults
+	if cfg.AuditLog.RetentionDays == 0 {
+		cfg.AuditLog.RetentionDays = 90
 	}
 
 	// Object storage defaults

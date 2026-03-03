@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cryguy/hostedat/internal/api"
+	"github.com/cryguy/hostedat/internal/audit"
 	"github.com/cryguy/hostedat/internal/certs"
 	"github.com/cryguy/hostedat/internal/config"
 	"github.com/cryguy/hostedat/internal/models"
@@ -154,6 +155,10 @@ func main() {
 	// Start log retention runner
 	logRetention := workeradapter.NewLogRetentionRunner(db, cfg.Worker.MaxLogRetention)
 	defer logRetention.Stop()
+
+	// Start audit log retention runner
+	auditRetention := audit.NewRetentionRunner(db, cfg.AuditLog.RetentionDays)
+	defer auditRetention.Stop()
 
 	e := echo.New()
 	e.HideBanner = true

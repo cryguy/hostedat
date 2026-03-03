@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cryguy/hostedat/internal/audit"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/seaweedfs"
 	"github.com/labstack/echo/v4"
@@ -136,6 +137,8 @@ func (h *StorageHandler) CreateBucket(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "failed to reconcile credential policy: "+err.Error())
 	}
 
+	audit.Record(h.DB, c, "storage.bucket.create", "site", siteID, audit.Ptr(req.BucketName))
+
 	return c.JSON(http.StatusCreated, bucket)
 }
 
@@ -193,6 +196,8 @@ func (h *StorageHandler) DeleteBucket(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "failed to reconcile credential policy: "+err.Error())
 	}
 
+	audit.Record(h.DB, c, "storage.bucket.delete", "site", siteID, audit.Ptr(bucket.BucketName))
+
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -237,6 +242,8 @@ func (h *StorageHandler) UpdateBucket(c echo.Context) error {
 			return errorJSON(c, http.StatusInternalServerError, "failed to update bucket policy: "+err.Error())
 		}
 	}
+
+	audit.Record(h.DB, c, "storage.bucket.update", "site", siteID, audit.Ptr(bucket.BucketName))
 
 	return c.JSON(http.StatusOK, bucket)
 }
@@ -344,6 +351,8 @@ func (h *StorageHandler) CreateS3Credential(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "failed to save credential")
 	}
 
+	audit.Record(h.DB, c, "storage.s3cred.create", "s3credential", cred.ID, audit.Ptr(req.Name))
+
 	// Return with secret (one-time only).
 	return c.JSON(http.StatusCreated, map[string]interface{}{
 		"id":                cred.ID,
@@ -388,6 +397,8 @@ func (h *StorageHandler) DeleteS3Credential(c echo.Context) error {
 	if err := h.DB.Delete(&cred).Error; err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to delete credential")
 	}
+
+	audit.Record(h.DB, c, "storage.s3cred.delete", "s3credential", credID, audit.Ptr(cred.Name))
 
 	return c.NoContent(http.StatusNoContent)
 }

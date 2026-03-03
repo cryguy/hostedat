@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/cryguy/hostedat/internal/audit"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/seaweedfs"
 	"github.com/cryguy/hostedat/internal/storage"
@@ -73,6 +74,8 @@ func (h *AdminHandler) UpdateUserRole(c echo.Context) error {
 	if err := h.DB.Save(&target).Error; err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to update role")
 	}
+
+	audit.Record(h.DB, c, "admin.user.role", "user", targetID, audit.Ptr(req.Role))
 
 	return c.JSON(http.StatusOK, target)
 }
@@ -165,6 +168,8 @@ func (h *AdminHandler) DeleteUser(c echo.Context) error {
 		revokeIAMCredentials(h.IAMClient, s3Creds)
 	}
 
+	audit.Record(h.DB, c, "admin.user.delete", "user", targetID, audit.Ptr(target.Email))
+
 	return c.JSON(http.StatusOK, map[string]string{"message": "user deleted"})
 }
 
@@ -200,6 +205,8 @@ func (h *AdminHandler) UpdateSettings(c echo.Context) error {
 		}
 	}
 
+	audit.Record(h.DB, c, "admin.settings.update", "settings", "", nil)
+
 	return h.GetSettings(c)
 }
 
@@ -234,6 +241,8 @@ func (h *AdminHandler) CreateInvite(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "failed to create invite")
 	}
 
+	audit.Record(h.DB, c, "admin.invite.create", "invite", invite.ID, nil)
+
 	return c.JSON(http.StatusCreated, invite)
 }
 
@@ -257,6 +266,8 @@ func (h *AdminHandler) RevokeInvite(c echo.Context) error {
 	if err := h.DB.Save(&invite).Error; err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "failed to revoke invite")
 	}
+
+	audit.Record(h.DB, c, "admin.invite.revoke", "invite", inviteID, nil)
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "invite revoked"})
 }
