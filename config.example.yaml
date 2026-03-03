@@ -58,6 +58,18 @@ rate_limit:
   auth: 5                  # Auth routes — login, register (default: 5)
   deploy: 2                # Deploy uploads (default: 2)
 
+# Request analytics (per-site traffic stats, top paths, referrers).
+# Uses a separate SQLite database so it doesn't bloat the main DB.
+analytics:
+  enabled: false
+  # dsn: ./data/analytics.db       # Default: same dir as main database
+  raw_retention_days: 30            # Days to keep per-request rows
+  rollup_retention_days: 365        # Days to keep hourly/daily rollups
+
+# Audit logging for user actions (login, deploy, settings changes, etc.)
+audit_log:
+  retention_days: 90                # Days to keep audit log entries
+
 # S3-compatible object storage (backed by SeaweedFS)
 # Provides S3 API at storage.<domain> and R2-compatible env.BUCKET_NAME in workers
 # Security model: storage.<domain> only accepts SigV4-signed requests by default.

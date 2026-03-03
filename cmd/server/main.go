@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cryguy/hostedat/internal/analytics"
 	"github.com/cryguy/hostedat/internal/api"
 	"github.com/cryguy/hostedat/internal/audit"
 	"github.com/cryguy/hostedat/internal/certs"
@@ -29,6 +30,7 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"golang.org/x/time/rate"
+	"gorm.io/gorm"
 )
 
 var (
@@ -68,6 +70,38 @@ func main() {
 	}
 
 	store := storage.NewManager(cfg.StoragePath)
+
+	// Analytics (opt-in via config)
+	var analyticsCollector *analytics.Collector
+	var analyticsDB *gorm.DB
+	if cfg.Analytics.Enabled {
+		analyticsDir := filepath.Dir(cfg.Analytics.DSN)
+		if err := os.MkdirAll(analyticsDir, 0755); err != nil {
+			log.Fatalf("Failed to create analytics data directory: %v", err)
+		}
+		aDB, err := analytics.InitDB(cfg.Analytics.DSN)
+		if err != nil {
+			log.Fatalf("Failed to initialize analytics database: %v", err)
+		}
+		analyticsDB = aDB
+		defer func() {
+			if sqlDB, err := analyticsDB.DB(); err == nil {
+				_ = sqlDB.Close()
+			}
+		}()
+
+		analyticsCollector = analytics.NewCollector(analyticsDB)
+		defer analyticsCollector.Stop()
+
+		rollupRunner := analytics.NewRollupRunner(analyticsDB)
+		defer rollupRunner.Stop()
+
+		retentionRunner := analytics.NewRetentionRunner(analyticsDB, cfg.Analytics.RawRetentionDays, cfg.Analytics.RollupRetentionDays)
+		defer retentionRunner.Stop()
+
+		log.Printf("Analytics enabled (DSN: %s, raw retention: %dd, rollup retention: %dd)",
+			cfg.Analytics.DSN, cfg.Analytics.RawRetentionDays, cfg.Analytics.RollupRetentionDays)
+	}
 
 	// Create worker engine
 	workerEngine := worker.NewEngine(worker.EngineConfig{
@@ -223,9 +257,9 @@ func main() {
 	}
 
 	// Subdomain router must come before API routes
-	e.Use(api.SubdomainRouter(db, store, rulesCache, cfg.Domain, workerEngine, s3Proxy, workerDeps))
+	e.Use(api.SubdomainRouter(db, store, rulesCache, cfg.Domain, workerEngine, s3Proxy, workerDeps, analyticsCollector))
 
-	api.RegisterRoutes(e, db, cfg, store, version, workerEngine, s3Client, iamClient, cfg.ObjectStorage.Region)
+	api.RegisterRoutes(e, db, cfg, store, version, workerEngine, s3Client, iamClient, cfg.ObjectStorage.Region, analyticsDB)
 
 	// Serve embedded frontend (SPA fallback)
 	distFS, err := fs.Sub(web.DistFS, "dist")

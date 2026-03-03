@@ -25,7 +25,7 @@ func TestSubdomainRouter_StorageSubdomain_ProxyEnabled(t *testing.T) {
 	})
 
 	e := echo.New()
-	e.Use(SubdomainRouter(db, storage.NewManager(t.TempDir()), storage.NewSiteRulesCache(), "test.local", nil, proxy, nil))
+	e.Use(SubdomainRouter(db, storage.NewManager(t.TempDir()), storage.NewSiteRulesCache(), "test.local", nil, proxy, nil, nil))
 	nextCalls := 0
 	e.Any("/*", func(c echo.Context) error {
 		nextCalls++
@@ -55,7 +55,7 @@ func TestSubdomainRouter_StorageSubdomain_ProxyDisabled_NotFound(t *testing.T) {
 	}
 
 	e := echo.New()
-	e.Use(SubdomainRouter(db, storage.NewManager(t.TempDir()), storage.NewSiteRulesCache(), "test.local", nil, nil, nil))
+	e.Use(SubdomainRouter(db, storage.NewManager(t.TempDir()), storage.NewSiteRulesCache(), "test.local", nil, nil, nil, nil))
 	e.Any("/*", func(c echo.Context) error {
 		return c.String(http.StatusOK, "next")
 	})
@@ -81,7 +81,7 @@ func TestSubdomainRouter_StorageSubdomain_DoesNotHitSiteServing(t *testing.T) {
 	})
 
 	e := echo.New()
-	e.Use(SubdomainRouter(db, storage.NewManager(t.TempDir()), storage.NewSiteRulesCache(), "test.local", nil, proxy, nil))
+	e.Use(SubdomainRouter(db, storage.NewManager(t.TempDir()), storage.NewSiteRulesCache(), "test.local", nil, proxy, nil, nil))
 	e.Any("/*", func(c echo.Context) error {
 		return c.String(http.StatusOK, "next")
 	})

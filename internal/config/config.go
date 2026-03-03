@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -21,11 +22,19 @@ type Config struct {
 	Worker        WorkerConfig        `yaml:"worker"`
 	ObjectStorage ObjectStorageConfig `yaml:"object_storage"`
 	RateLimit     RateLimitConfig     `yaml:"rate_limit"`
+	Analytics     AnalyticsConfig     `yaml:"analytics"`
 	AuditLog      AuditLogConfig      `yaml:"audit_log"`
 }
 
 type AuditLogConfig struct {
 	RetentionDays int `yaml:"retention_days"`
+}
+
+type AnalyticsConfig struct {
+	Enabled             bool   `yaml:"enabled"`
+	DSN                 string `yaml:"dsn"`
+	RawRetentionDays    int    `yaml:"raw_retention_days"`
+	RollupRetentionDays int    `yaml:"rollup_retention_days"`
 }
 
 type RateLimitConfig struct {
@@ -138,6 +147,19 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.RateLimit.Deploy == 0 {
 		cfg.RateLimit.Deploy = 2
+	}
+
+	// Analytics defaults
+	if cfg.Analytics.Enabled {
+		if cfg.Analytics.RawRetentionDays == 0 {
+			cfg.Analytics.RawRetentionDays = 30
+		}
+		if cfg.Analytics.RollupRetentionDays == 0 {
+			cfg.Analytics.RollupRetentionDays = 365
+		}
+		if cfg.Analytics.DSN == "" {
+			cfg.Analytics.DSN = filepath.Join(filepath.Dir(cfg.Database.DSN), "analytics.db")
+		}
 	}
 
 	// Audit log defaults

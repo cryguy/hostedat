@@ -8,8 +8,10 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
+	"github.com/cryguy/hostedat/internal/analytics"
 	"github.com/cryguy/hostedat/internal/models"
 	"github.com/cryguy/hostedat/internal/storage"
 	"github.com/cryguy/hostedat/internal/workeradapter"
@@ -85,7 +87,8 @@ func isAllowedRedirectTarget(target, domain string) bool {
 
 // SubdomainRouter inspects the Host header and routes subdomain requests
 // to the static site handler. Bare-domain requests pass through to the API.
-func SubdomainRouter(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, domain string, workerEngine *worker.Engine, s3Proxy http.Handler, workerDeps *WorkerDeps) echo.MiddlewareFunc {
+// When collector is non-nil, each served request is recorded for analytics.
+func SubdomainRouter(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, domain string, workerEngine *worker.Engine, s3Proxy http.Handler, workerDeps *WorkerDeps, collector *analytics.Collector) echo.MiddlewareFunc {
 	handler := staticSiteHandler(db, store, cache, domain, workerEngine, workerDeps)
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -116,7 +119,7 @@ func SubdomainRouter(db *gorm.DB, store *storage.Manager, cache *storage.SiteRul
 						return echo.ErrNotFound
 					}
 					c.Set("subdomain", subdomain)
-					return handler(c)
+					return recordAndServe(c, handler, collector)
 				}
 			}
 
@@ -133,13 +136,41 @@ func SubdomainRouter(db *gorm.DB, store *storage.Manager, cache *storage.SiteRul
 						return echo.ErrNotFound
 					}
 					c.Set("subdomain", subdomain)
-					return handler(c)
+					return recordAndServe(c, handler, collector)
 				}
 			}
 
 			return next(c)
 		}
 	}
+}
+
+// recordAndServe wraps handler execution with analytics recording.
+// If collector is nil, it just calls the handler directly.
+func recordAndServe(c echo.Context, handler echo.HandlerFunc, collector *analytics.Collector) error {
+	if collector == nil {
+		return handler(c)
+	}
+	start := time.Now()
+	err := handler(c)
+	siteID, _ := c.Get("analytics_site_id").(string)
+	serveType, _ := c.Get("serve_type").(string)
+	if siteID != "" {
+		collector.Record(analytics.Event{
+			SiteID:     siteID,
+			Timestamp:  start,
+			Method:     c.Request().Method,
+			Path:       c.Request().URL.Path,
+			Status:     c.Response().Status,
+			BytesSent:  c.Response().Size,
+			DurationMs: time.Since(start).Milliseconds(),
+			ClientIP:   clientIP(c.Request()),
+			UserAgent:  c.Request().Header.Get("User-Agent"),
+			Referer:    c.Request().Header.Get("Referer"),
+			ServeType:  serveType,
+		})
+	}
+	return err
 }
 
 func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteRulesCache, domain string, workerEngine *worker.Engine, workerDeps *WorkerDeps) echo.HandlerFunc {
@@ -160,10 +191,12 @@ func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteR
 		}
 
 		deployID := *site.ActiveDeployID
+		c.Set("analytics_site_id", site.ID)
 
 		// Block access to internal files (_worker.js, _headers, _redirects, etc.)
 		reqPath := c.Request().URL.Path
 		if internalFiles[reqPath] {
+			c.Set("serve_type", "404")
 			return errorJSON(c, http.StatusNotFound, "not found")
 		}
 
@@ -195,6 +228,7 @@ func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteR
 			if rule, target, matched := storage.MatchRedirect(rules.Redirects, reqPath); matched {
 				if rule.StatusCode == 301 || rule.StatusCode == 302 {
 					if isAllowedRedirectTarget(target, domain) {
+						c.Set("serve_type", "redirect")
 						return c.Redirect(rule.StatusCode, target)
 					}
 				}
@@ -203,6 +237,7 @@ func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteR
 
 		// 3. Try static file
 		if filePath, found := store.ResolveFile(deployPath, reqPath); found {
+			c.Set("serve_type", "static")
 			return serveFile(c, filePath)
 		}
 
@@ -211,6 +246,7 @@ func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteR
 			if rule, target, matched := storage.MatchRedirect(rules.Redirects, reqPath); matched {
 				if rule.StatusCode == 200 {
 					if filePath, found := store.ResolveFile(deployPath, target); found {
+						c.Set("serve_type", "rewrite")
 						return serveFile(c, filePath)
 					}
 				}
@@ -220,16 +256,19 @@ func staticSiteHandler(db *gorm.DB, store *storage.Manager, cache *storage.SiteR
 		// 5. SPA mode fallback
 		if site.SPAMode {
 			if filePath, found := store.ResolveFile(deployPath, "/index.html"); found {
+				c.Set("serve_type", "spa")
 				return serveFile(c, filePath)
 			}
 		}
 
 		// 6. Custom 404.html
 		if filePath, found := store.ResolveFile(deployPath, "/404.html"); found {
+			c.Set("serve_type", "404")
 			c.Response().WriteHeader(http.StatusNotFound)
 			return serveFile(c, filePath)
 		}
 
+		c.Set("serve_type", "404")
 		return errorJSON(c, http.StatusNotFound, "not found")
 	}
 }
@@ -274,9 +313,11 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 		var err error
 		body, err = io.ReadAll(io.LimitReader(req.Body, maxBody+1))
 		if err != nil {
+			c.Set("serve_type", "error")
 			return errorJSON(c, http.StatusBadRequest, "failed to read request body")
 		}
 		if int64(len(body)) > maxBody {
+			c.Set("serve_type", "error")
 			return errorJSON(c, http.StatusRequestEntityTooLarge, "request body too large")
 		}
 	}
@@ -301,6 +342,7 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 
 	if result.Error != nil {
 		log.Printf("worker error for site %s: %v", site.ID, result.Error)
+		c.Set("serve_type", "error")
 		return errorJSON(c, http.StatusInternalServerError, "worker execution failed")
 	}
 
@@ -308,6 +350,7 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 	resp := result.Response
 	if resp == nil {
 		log.Printf("worker error for site %s: fetch returned nil response without error", site.ID)
+		c.Set("serve_type", "error")
 		return errorJSON(c, http.StatusInternalServerError, "worker returned empty response")
 	}
 
@@ -316,12 +359,15 @@ func handleWorkerRequest(c echo.Context, db *gorm.DB, store *storage.Manager, ca
 		conn, err := websocket.Accept(c.Response(), c.Request(), nil)
 		if err != nil {
 			log.Printf("worker ws upgrade error for site %s: %v", site.ID, err)
+			c.Set("serve_type", "error")
 			return errorJSON(c, http.StatusInternalServerError, "websocket upgrade failed")
 		}
+		c.Set("serve_type", "worker")
 		result.WebSocket.Bridge(c.Request().Context(), conn)
 		return nil
 	}
 
+	c.Set("serve_type", "worker")
 	for k, v := range resp.Headers {
 		c.Response().Header().Set(k, v)
 	}

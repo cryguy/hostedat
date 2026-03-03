@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storage.Manager, serverVersion string, workerEngine *worker.Engine, s3Client *minio.Client, iamClient *seaweedfs.Client, region string) {
+func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storage.Manager, serverVersion string, workerEngine *worker.Engine, s3Client *minio.Client, iamClient *seaweedfs.Client, region string, analyticsDB *gorm.DB) {
 	// API-wide rate limit (default 20 req/s per IP, separate from global; 0 = disabled)
 	var apiMiddlewares []echo.MiddlewareFunc
 	if cfg.RateLimit.API > 0 {
@@ -95,6 +95,15 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 	sites.GET("/:id/worker/crons", workerHandler.ListCronSchedules)
 	sites.DELETE("/:id/worker/crons/:cronId", workerHandler.DeleteCronSchedule)
 	sites.GET("/:id/worker/logs", workerHandler.GetLogs)
+
+	// Analytics routes (only registered when analytics is enabled)
+	if analyticsDB != nil {
+		ah := &AnalyticsHandler{DB: db, AnalyticsDB: analyticsDB}
+		sites.GET("/:id/analytics/summary", ah.GetSummary)
+		sites.GET("/:id/analytics/timeseries", ah.GetTimeseries)
+		sites.GET("/:id/analytics/pages", ah.GetPages)
+		sites.GET("/:id/analytics/referrers", ah.GetReferrers)
+	}
 
 	// Audit log routes
 	auditHandler := &AuditHandler{DB: db}
