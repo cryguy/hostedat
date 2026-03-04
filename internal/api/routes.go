@@ -47,6 +47,7 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, store *storag
 		authMiddlewares = append(authMiddlewares, middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(cfg.RateLimit.Auth))))
 	}
 	authGroup := api.Group("/auth", authMiddlewares...)
+	authGroup.GET("/registration", authHandler.RegistrationInfo)
 	authGroup.POST("/register", authHandler.Register)
 	authGroup.POST("/login", authHandler.Login)
 	authGroup.POST("/logout", authHandler.Logout)

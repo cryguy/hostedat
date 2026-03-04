@@ -82,6 +82,10 @@ export const auth = {
 	setToken,
 	clearToken,
 
+	registrationInfo() {
+		return request<{ registration_enabled: boolean; invite_required: boolean }>('/auth/registration');
+	},
+
 	login(email: string, password: string) {
 		return request<AuthResponse>('/auth/login', {
 			method: 'POST',

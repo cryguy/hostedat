@@ -36,6 +36,17 @@ type authResponse struct {
 	User  models.User `json:"user"`
 }
 
+// RegistrationInfo returns public registration settings (no auth required).
+// GET /api/v1/auth/registration
+func (h *AuthHandler) RegistrationInfo(c echo.Context) error {
+	regEnabled, _ := models.GetSetting(h.DB, "registration_enabled")
+	inviteRequired, _ := models.GetSetting(h.DB, "invite_required")
+	return c.JSON(http.StatusOK, map[string]bool{
+		"registration_enabled": regEnabled != "false",
+		"invite_required":      inviteRequired == "true",
+	})
+}
+
 func (h *AuthHandler) Register(c echo.Context) error {
 	var req registerRequest
 	if err := c.Bind(&req); err != nil {
