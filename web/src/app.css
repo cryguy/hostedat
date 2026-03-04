@@ -1,0 +1,56 @@
+@import 'tailwindcss';
+
+@theme inline {
+	--color-base: var(--base);
+	--color-surface: var(--surface);
+	--color-elevated: var(--elevated);
+	--color-border: var(--border-color);
+	--color-text: var(--text);
+	--color-text-muted: var(--text-muted);
+	--color-primary: var(--primary);
+	--color-primary-hover: var(--primary-hover);
+	--color-success: var(--success);
+	--color-warning: var(--warning);
+	--color-error: var(--error);
+	--color-info: var(--info);
+}
+
+:root {
+	--base: #fafafa;
+	--surface: #ffffff;
+	--elevated: #f4f4f5;
+	--border-color: #e4e4e7;
+	--text: #09090b;
+	--text-muted: #71717a;
+	--primary: #22c55e;
+	--primary-hover: #16a34a;
+	--success: #22c55e;
+	--warning: #f59e0b;
+	--error: #ef4444;
+	--info: #3b82f6;
+}
+
+.dark {
+	--base: #09090b;
+	--surface: #18181b;
+	--elevated: #27272a;
+	--border-color: #3f3f46;
+	--text: #fafafa;
+	--text-muted: #a1a1aa;
+	--primary: #22c55e;
+	--primary-hover: #16a34a;
+	--success: #22c55e;
+	--warning: #f59e0b;
+	--error: #ef4444;
+	--info: #3b82f6;
+}
+
+body {
+	font-family: 'Inter', system-ui, -apple-system, sans-serif;
+	background-color: var(--base);
+	color: var(--text);
+}
+
+code, .font-mono {
+	font-family: 'JetBrains Mono', ui-monospace, monospace;
+}

@@ -13,6 +13,10 @@ deploy.env
 
 dist/
 
+# SvelteKit
+.svelte-kit/
+web/FRONTEND_REWRITE_PLAN.md
+
 # IDE
 .idea/
 .vscode/
