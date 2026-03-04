@@ -238,7 +238,7 @@ export const auditLogs = {
 
 export const admin = {
 	listUsers: (page = 1) =>
-		request<PaginatedResponse<User>>(`/admin/users?page=${page}`),
+		request<{ users: User[]; total: number; page: number }>(`/admin/users?page=${page}`),
 	updateUserRole: (id: string, role: string) =>
 		request<User>(`/admin/users/${id}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
 	deleteUser: (id: string) =>

@@ -9,6 +9,7 @@
 	import Skeleton from '$components/ui/Skeleton.svelte';
 	import Button from '$components/ui/Button.svelte';
 	import { Globe, Plus } from 'lucide-svelte';
+	import { showError } from '$lib/utils/errors';
 
 	let sitesList = $state<Site[]>([]);
 	let loading = $state(true);
@@ -17,8 +18,8 @@
 	async function load() {
 		try {
 			sitesList = await sitesApi.list();
-		} catch {
-			// toast will be added later
+		} catch (e) {
+			showError(e);
 		} finally {
 			loading = false;
 		}

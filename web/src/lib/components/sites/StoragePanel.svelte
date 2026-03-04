@@ -6,16 +6,20 @@
 	import Badge from '$components/ui/Badge.svelte';
 	import { Plus, Trash2, Loader2 } from 'lucide-svelte';
 	import { onMount } from 'svelte';
+	import { showError } from '$lib/utils/errors';
 
 	interface Props { siteId: string; }
 	let { siteId }: Props = $props();
 
 	let buckets = $state<StorageBucket[]>([]);
 	let name = $state('');
-	let bucketName = $state('');
+	let bucketSuffix = $state('');
 	let isPublic = $state(false);
 	let adding = $state(false);
 	let deletingId = $state<string | null>(null);
+
+	const bucketPrefix = `${siteId}-`;
+	const fullBucketName = $derived(`${bucketPrefix}${bucketSuffix}`);
 
 	async function load() {
 		buckets = await storage.listBuckets(siteId);
@@ -24,24 +28,26 @@
 	onMount(load);
 
 	async function handleAdd() {
-		if (!name || !bucketName) return;
+		if (!name || !bucketSuffix) return;
 		adding = true;
 		try {
-			await storage.createBucket(siteId, { name, bucket_name: bucketName, public: isPublic });
-			name = ''; bucketName = ''; isPublic = false;
+			await storage.createBucket(siteId, { name, bucket_name: fullBucketName, public: isPublic });
+			name = ''; bucketSuffix = ''; isPublic = false;
 			load();
-		} catch { /* */ } finally { adding = false; }
+		} catch (e) { showError(e); } finally { adding = false; }
 	}
 
 	async function handleDelete(id: string) {
 		deletingId = id;
 		try { await storage.deleteBucket(siteId, id); load(); }
-		catch { /* */ } finally { deletingId = null; }
+		catch (e) { showError(e); } finally { deletingId = null; }
 	}
 
 	async function togglePublic(bucket: StorageBucket) {
-		await storage.updateBucket(siteId, bucket.id, { public: !bucket.public });
-		load();
+		try {
+			await storage.updateBucket(siteId, bucket.id, { public: !bucket.public });
+			load();
+		} catch (e) { showError(e); }
 	}
 </script>
 
@@ -83,14 +89,22 @@
 			</div>
 			<div class="flex-1 space-y-1">
 				<label for="bucket-name" class="text-xs font-medium text-text">Bucket name</label>
-				<Input id="bucket-name" bind:value={bucketName} placeholder="my-bucket" class="font-mono text-xs" />
+				<div class="flex items-center rounded-lg border border-border bg-surface focus-within:ring-2 focus-within:ring-primary/40 focus-within:border-primary transition-colors">
+					<span class="px-2.5 text-xs font-mono text-text-muted select-none shrink-0">{bucketPrefix}</span>
+					<input
+						id="bucket-name"
+						bind:value={bucketSuffix}
+						placeholder="my-bucket"
+						class="h-9 w-full bg-transparent pr-3 text-xs font-mono text-text placeholder:text-text-muted focus:outline-none"
+					/>
+				</div>
 			</div>
 		</div>
 		<div class="flex items-center justify-between">
 			<label class="flex items-center gap-1.5 text-xs text-text-muted">
 				<input type="checkbox" bind:checked={isPublic} class="accent-primary" /> Public access
 			</label>
-			<Button size="sm" onclick={handleAdd} disabled={adding || !name || !bucketName}>
+			<Button size="sm" onclick={handleAdd} disabled={adding || !name || !bucketSuffix}>
 				{#if adding}<Loader2 class="size-3.5 animate-spin" />{:else}<Plus class="size-3.5" /> Create bucket{/if}
 			</Button>
 		</div>

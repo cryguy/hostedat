@@ -5,6 +5,7 @@
 	import Button from '$components/ui/Button.svelte';
 	import { timeAgo } from '$lib/utils/time';
 	import { Loader2 } from 'lucide-svelte';
+	import { showError } from '$lib/utils/errors';
 
 	interface Props {
 		siteId: string;
@@ -25,8 +26,8 @@
 		try {
 			await deploymentsApi.rollback(siteId, version);
 			onRollback();
-		} catch {
-			// error handling
+		} catch (e) {
+			showError(e);
 		} finally {
 			rollingBack = null;
 		}

@@ -6,6 +6,7 @@
 	import TopTable from './TopTable.svelte';
 	import Skeleton from '$components/ui/Skeleton.svelte';
 	import { onMount } from 'svelte';
+	import { showError } from '$lib/utils/errors';
 
 	interface Props { siteId: string; }
 	let { siteId }: Props = $props();
@@ -37,8 +38,8 @@
 			timeseries = t;
 			pages = p;
 			referrers = r;
-		} catch {
-			/* silent — empty state will show */
+		} catch (e) {
+			showError(e);
 		} finally {
 			loading = false;
 		}

@@ -8,6 +8,7 @@
 	import { ChevronLeft, ChevronRight, Filter, X } from 'lucide-svelte';
 	import { timeAgo } from '$lib/utils/time';
 	import { onMount } from 'svelte';
+	import { showError } from '$lib/utils/errors';
 
 	let items = $state<AuditLog[]>([]);
 	let total = $state(0);
@@ -44,8 +45,8 @@
 			const res = await auditLogs.list(params);
 			items = res.items;
 			total = res.total;
-		} catch {
-			/* silent */
+		} catch (e) {
+			showError(e);
 		} finally {
 			loading = false;
 		}

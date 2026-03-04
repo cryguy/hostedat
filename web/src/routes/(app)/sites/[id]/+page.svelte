@@ -16,6 +16,7 @@
 	import AnalyticsPanel from '$components/analytics/AnalyticsPanel.svelte';
 	import { ExternalLink, Upload, History, BarChart3, Code, HardDrive, Settings } from 'lucide-svelte';
 	import { getInstanceDomain } from '$lib/utils/config';
+	import { showError } from '$lib/utils/errors';
 
 	const id = $page.params.id;
 	const domain = getInstanceDomain();
@@ -43,7 +44,7 @@
 			deps = d.deployments;
 			depsTotal = d.total;
 			depsPage = pg;
-		} catch { /* */ }
+		} catch (e) { showError(e); }
 	}
 
 	async function load() {

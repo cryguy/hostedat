@@ -4,10 +4,10 @@
 	interface Props {
 		title: string;
 		description?: string;
-		action?: Snippet;
+		children?: Snippet;
 	}
 
-	let { title, description, action }: Props = $props();
+	let { title, description, children }: Props = $props();
 </script>
 
 <div class="flex items-center justify-between pb-4 border-b border-border mb-6">
@@ -17,7 +17,7 @@
 			<p class="text-sm text-text-muted mt-0.5">{description}</p>
 		{/if}
 	</div>
-	{#if action}
-		{@render action()}
+	{#if children}
+		{@render children()}
 	{/if}
 </div>

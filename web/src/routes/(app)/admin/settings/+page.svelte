@@ -6,6 +6,7 @@
 	import Skeleton from '$components/ui/Skeleton.svelte';
 	import { Loader2 } from 'lucide-svelte';
 	import { onMount } from 'svelte';
+	import { showError } from '$lib/utils/errors';
 
 	let settings = $state<InstanceSettings | null>(null);
 	let loading = $state(true);
@@ -15,7 +16,7 @@
 	async function load() {
 		loading = true;
 		try { settings = await admin.getSettings(); }
-		catch { /* */ }
+		catch (e) { showError(e); }
 		finally { loading = false; }
 	}
 

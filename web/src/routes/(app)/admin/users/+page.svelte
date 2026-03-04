@@ -8,6 +8,7 @@
 	import { ChevronLeft, ChevronRight, Loader2, Trash2 } from 'lucide-svelte';
 	import { timeAgo } from '$lib/utils/time';
 	import { onMount } from 'svelte';
+	import { showError } from '$lib/utils/errors';
 
 	let users = $state<User[]>([]);
 	let total = $state(0);
@@ -23,9 +24,9 @@
 		loading = true;
 		try {
 			const res = await admin.listUsers(page);
-			users = res.items;
+			users = res.users;
 			total = res.total;
-		} catch { /* */ }
+		} catch (e) { showError(e); }
 		finally { loading = false; }
 	}
 
@@ -34,7 +35,7 @@
 	async function changeRole(user: User, role: string) {
 		updatingId = user.id;
 		try { await admin.updateUserRole(user.id, role); load(); }
-		catch { /* */ }
+		catch (e) { showError(e); }
 		finally { updatingId = null; }
 	}
 
@@ -42,7 +43,7 @@
 		if (!confirm('Are you sure you want to delete this user?')) return;
 		deletingId = id;
 		try { await admin.deleteUser(id); load(); }
-		catch { /* */ }
+		catch (e) { showError(e); }
 		finally { deletingId = null; }
 	}
 

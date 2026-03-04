@@ -10,6 +10,7 @@
 	import { Plus, Trash2, Loader2, Copy, Check } from 'lucide-svelte';
 	import { timeAgo } from '$lib/utils/time';
 	import { onMount } from 'svelte';
+	import { showError } from '$lib/utils/errors';
 
 	let invites = $state<Invite[]>([]);
 	let loading = $state(true);
@@ -22,7 +23,7 @@
 	async function load() {
 		loading = true;
 		try { invites = await admin.listInvites(); }
-		catch { /* */ }
+		catch (e) { showError(e); }
 		finally { loading = false; }
 	}
 
@@ -37,14 +38,14 @@
 			maxUses = '';
 			showCreate = false;
 			load();
-		} catch { /* */ }
+		} catch (e) { showError(e); }
 		finally { creating = false; }
 	}
 
 	async function handleRevoke(id: string) {
 		deletingId = id;
 		try { await admin.revokeInvite(id); load(); }
-		catch { /* */ }
+		catch (e) { showError(e); }
 		finally { deletingId = null; }
 	}
 

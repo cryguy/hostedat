@@ -219,7 +219,7 @@ func main() {
 			}
 			if host == cfg.Domain || host == "localhost" || host == "127.0.0.1" {
 				c.Response().Header().Set("Content-Security-Policy",
-					"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'")
+					"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com")
 			}
 			return next(c)
 		}

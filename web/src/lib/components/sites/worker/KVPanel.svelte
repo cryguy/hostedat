@@ -4,6 +4,7 @@
 	import Button from '$components/ui/Button.svelte';
 	import Input from '$components/ui/Input.svelte';
 	import { Plus, Trash2, Loader2 } from 'lucide-svelte';
+	import { showError } from '$lib/utils/errors';
 
 	interface Props { siteId: string; items: KVNamespace[]; onRefresh: () => void; }
 	let { siteId, items, onRefresh }: Props = $props();
@@ -16,13 +17,13 @@
 		if (!name) return;
 		adding = true;
 		try { await workers.createKV(siteId, name); name = ''; onRefresh(); }
-		catch { /* */ } finally { adding = false; }
+		catch (e) { showError(e); } finally { adding = false; }
 	}
 
 	async function handleDelete(id: string) {
 		deletingId = id;
 		try { await workers.deleteKV(siteId, id); onRefresh(); }
-		catch { /* */ } finally { deletingId = null; }
+		catch (e) { showError(e); } finally { deletingId = null; }
 	}
 </script>
 
