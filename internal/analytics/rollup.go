@@ -40,6 +40,10 @@ func (r *RollupRunner) Stop() {
 func (r *RollupRunner) run() {
 	defer r.wg.Done()
 
+	// Run an immediate catchup rollup on startup so recently-recorded
+	// events are visible without waiting for the next hour tick.
+	r.rollupRecent()
+
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 
@@ -48,11 +52,18 @@ func (r *RollupRunner) run() {
 		case <-r.done:
 			return
 		case <-ticker.C:
-			// Rollup the previous hour (current hour minus 1, with 2min grace).
-			bucket := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
-			if err := r.RollupHour(bucket); err != nil {
-				log.Printf("analytics: rollup error for %s: %v", bucket.Format(time.RFC3339), err)
-			}
+			r.rollupRecent()
+		}
+	}
+}
+
+// rollupRecent rolls up the current and previous hour buckets.
+// Running both ensures no data is missed around hour boundaries.
+func (r *RollupRunner) rollupRecent() {
+	now := time.Now().UTC().Truncate(time.Hour)
+	for _, bucket := range []time.Time{now.Add(-time.Hour), now} {
+		if err := r.RollupHour(bucket); err != nil {
+			log.Printf("analytics: rollup error for %s: %v", bucket.Format(time.RFC3339), err)
 		}
 	}
 }
