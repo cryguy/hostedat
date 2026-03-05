@@ -35,9 +35,9 @@
 				analytics.referrers(siteId, period)
 			]);
 			summary = s;
-			timeseries = t;
-			pages = p;
-			referrers = r;
+			timeseries = t ?? [];
+			pages = p ?? [];
+			referrers = r ?? [];
 		} catch (e) {
 			showError(e);
 		} finally {

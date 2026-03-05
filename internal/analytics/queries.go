@@ -75,7 +75,7 @@ func GetSummary(db *gorm.DB, siteID string, pf PeriodFilter) (SummaryResult, err
 // GetTimeseries returns per-bucket data points for charting.
 // Uses DATE(bucket) grouping for day buckets, raw bucket for hour buckets.
 func GetTimeseries(db *gorm.DB, siteID string, pf PeriodFilter) ([]TimeseriesPoint, error) {
-	var points []TimeseriesPoint
+	points := make([]TimeseriesPoint, 0)
 
 	if pf.Bucket == "day" {
 		err := db.Model(&HourlyStat{}).
