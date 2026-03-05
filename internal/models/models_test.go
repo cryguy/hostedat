@@ -564,7 +564,11 @@ func TestInitDB_FailsWhenLegacyStorageBindingsContainDuplicates(t *testing.T) {
 		_ = sqlDB.Close()
 	}
 
-	_, err = InitDB(config.DBConfig{Driver: "sqlite", DSN: dbPath})
+	db2, err := InitDB(config.DBConfig{Driver: "sqlite", DSN: dbPath})
+	if db2 != nil {
+		sqlDB2, _ := db2.DB()
+		t.Cleanup(func() { sqlDB2.Close() })
+	}
 	if err == nil {
 		t.Fatal("expected InitDB to fail when duplicate (site_id, name) exists")
 	}

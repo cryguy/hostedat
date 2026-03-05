@@ -41,6 +41,8 @@ func TestInitDB_SQLite_AppendsDSNParams(t *testing.T) {
 	if db == nil {
 		t.Fatal("expected non-nil db")
 	}
+	sqlDB, _ := db.DB()
+	t.Cleanup(func() { sqlDB.Close() })
 
 	// Verify busy_timeout is set (this confirms DSN params were applied)
 	var busyTimeout int
@@ -129,7 +131,11 @@ func TestEnsureNoDuplicateStorageBindingNames_WithDuplicates(t *testing.T) {
 	}
 
 	// InitDB should detect duplicates and fail
-	_, err = InitDB(config.DBConfig{Driver: "sqlite", DSN: dbPath})
+	db2, err := InitDB(config.DBConfig{Driver: "sqlite", DSN: dbPath})
+	if db2 != nil {
+		sqlDB2, _ := db2.DB()
+		t.Cleanup(func() { sqlDB2.Close() })
+	}
 	if err == nil {
 		t.Fatal("expected error for duplicate storage binding names")
 	}
@@ -146,6 +152,8 @@ func TestEnsureNoDuplicateStorageBindingNames_NoTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	sqlDB, _ := db.DB()
+	t.Cleanup(func() { sqlDB.Close() })
 
 	// No storage_buckets table exists yet
 	if err := ensureNoDuplicateStorageBindingNames(db); err != nil {
@@ -213,7 +221,11 @@ func TestInitDB_ClosesDBOnMigrationError(t *testing.T) {
 	}
 
 	// InitDB should fail and clean up
-	_, err = InitDB(config.DBConfig{Driver: "sqlite", DSN: dbPath})
+	db2, err := InitDB(config.DBConfig{Driver: "sqlite", DSN: dbPath})
+	if db2 != nil {
+		sqlDB2, _ := db2.DB()
+		t.Cleanup(func() { sqlDB2.Close() })
+	}
 	if err == nil {
 		t.Fatal("expected error")
 	}
